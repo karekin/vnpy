@@ -3,6 +3,14 @@
 *.pyo
 *.pyd
 *.egg-info/
+__pycache__/
+.pytest_cache/
+
+# Python virtualenv
+.venv/
+.venv*/
+venv/
+env/
 
 # Jupyter
 .ipynb_checkpoints
@@ -37,6 +45,8 @@ _templates
 # Misc
 .DS_Store
 *.mo
+*.log
+.run_rpc_server.log
 
 # Alpha
 lab/
