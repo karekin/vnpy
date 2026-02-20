@@ -1,5 +1,5 @@
-import { Workstation } from "@/components/workstation";
+import { CbQuantDashboard } from "@/components/cb-quant-dashboard";
 
 export default function Home() {
-  return <Workstation />;
+  return <CbQuantDashboard />;
 }

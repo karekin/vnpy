@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
-import { Rajdhani, Noto_Sans_SC } from "next/font/google";
+import { Space_Grotesk, Noto_Sans_SC } from "next/font/google";
 import "./globals.css";
 
-const displayFont = Rajdhani({
+const displayFont = Space_Grotesk({
   variable: "--font-display",
   subsets: ["latin"],
   weight: ["400", "500", "600", "700"],
@@ -15,8 +15,8 @@ const textFont = Noto_Sans_SC({
 });
 
 export const metadata: Metadata = {
-  title: "VeighNa Web Workstation",
-  description: "Next.js frontend workstation for vn.py style trading operations.",
+  title: "Convertible Bond Quant Lab",
+  description: "A-share and convertible bond quant workflow dashboard built with Next.js.",
 };
 
 export default function RootLayout({
