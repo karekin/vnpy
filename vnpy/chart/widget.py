@@ -18,11 +18,34 @@ pg.setConfigOptions(antialias=True)
 
 
 class ChartWidget(pg.PlotWidget):
-    """"""
+    """
+    `ChartWidget` 是 vn.py K 线图主控件，负责子图布局、绘图项管理和交互联动。
+    
+    职责：
+    1. 管理坐标轴、绘图项和数据管理器之间的关系。
+    2. 提供缩放、平移、刷新等交互能力。
+    3. 支持叠加主图与副图指标。
+    
+    协作：
+    1. 与 `BarManager`、`ChartItem`、`DatetimeAxis` 协同。
+    2. 由 `ChartWidget` 创建并管理生命周期。
+    """
     MIN_BAR_COUNT = 100
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
-        """"""
+        """
+        初始化实例，完成依赖绑定与基础状态准备。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `parent` (`QtWidgets.QWidget | None`)，默认值 `None`：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         super().__init__(parent)
 
         self._manager: BarManager = BarManager()
@@ -40,7 +63,19 @@ class ChartWidget(pg.PlotWidget):
         self._init_ui()
 
     def _init_ui(self) -> None:
-        """"""
+        """
+        执行 `_init_ui` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         self.setWindowTitle("ChartWidget of VeighNa")
 
         self._layout: pg.GraphicsLayout = pg.GraphicsLayout()
@@ -51,10 +86,35 @@ class ChartWidget(pg.PlotWidget):
         self.setCentralItem(self._layout)
 
     def _get_new_x_axis(self) -> DatetimeAxis:
+        """
+        执行 `_get_new_x_axis` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `DatetimeAxis`：返回该方法计算或查询得到的结果。
+        """
         return DatetimeAxis(self._manager, orientation="bottom")
 
     def add_cursor(self) -> None:
-        """"""
+        """
+        新增 `cursor` 相关对象或配置项。
+        
+        用途说明：
+        1. 对内部状态进行更新，并维护相关数据一致性。
+        2. 如涉及联动依赖，应在本方法内完成必要同步。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         if not self._cursor:
             self._cursor = ChartCursor(
                 self, self._manager, self._plots, self._item_plot_map)
@@ -67,7 +127,20 @@ class ChartWidget(pg.PlotWidget):
         hide_x_axis: bool = False
     ) -> None:
         """
-        Add plot area.
+        新增 `plot` 相关对象或配置项。
+        
+        用途说明：
+        1. 对内部状态进行更新，并维护相关数据一致性。
+        2. 如涉及联动依赖，应在本方法内完成必要同步。
+        
+        参数：
+        1. `plot_name` (`str`)：输入参数，用于控制该方法的处理行为。
+        2. `minimum_height` (`int`)，默认值 `80`：输入参数，用于控制该方法的处理行为。
+        3. `maximum_height` (`int | None`)，默认值 `None`：输入参数，用于控制该方法的处理行为。
+        4. `hide_x_axis` (`bool`)，默认值 `False`：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         # Create plot object
         plot: pg.PlotItem = pg.PlotItem(axisItems={"bottom": self._get_new_x_axis()})
@@ -118,7 +191,19 @@ class ChartWidget(pg.PlotWidget):
         plot_name: str
     ) -> None:
         """
-        Add chart item.
+        新增 `item` 相关对象或配置项。
+        
+        用途说明：
+        1. 对内部状态进行更新，并维护相关数据一致性。
+        2. 如涉及联动依赖，应在本方法内完成必要同步。
+        
+        参数：
+        1. `item_class` (`type[ChartItem]`)：输入参数，用于控制该方法的处理行为。
+        2. `item_name` (`str`)：输入参数，用于控制该方法的处理行为。
+        3. `plot_name` (`str`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         item: ChartItem = item_class(self._manager)
         self._items[item_name] = item
@@ -130,19 +215,49 @@ class ChartWidget(pg.PlotWidget):
 
     def get_plot(self, plot_name: str) -> pg.PlotItem:
         """
-        Get specific plot with its name.
+        获取 `plot` 相关对象或计算结果。
+        
+        用途说明：
+        1. 从当前对象缓存或下游组件中读取目标数据。
+        2. 默认应保持无副作用，便于上层安全重复调用。
+        
+        参数：
+        1. `plot_name` (`str`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `pg.PlotItem`：返回该方法计算或查询得到的结果。
         """
         return self._plots.get(plot_name, None)
 
     def get_all_plots(self) -> list[pg.PlotItem]:
         """
-        Get all plot objects.
+        批量获取 `plots` 相关数据集合。
+        
+        用途说明：
+        1. 从当前对象缓存或下游组件中读取目标数据。
+        2. 默认应保持无副作用，便于上层安全重复调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `list[pg.PlotItem]`：返回按约定组织的数据列表。
         """
         return list(self._plots.values())
 
     def clear_all(self) -> None:
         """
-        Clear all data.
+        执行 `clear_all` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         self._manager.clear_all()
 
@@ -154,7 +269,17 @@ class ChartWidget(pg.PlotWidget):
 
     def update_history(self, history: list[BarData]) -> None:
         """
-        Update a list of bar data.
+        更新 `history` 相关状态与缓存。
+        
+        用途说明：
+        1. 对内部状态进行更新，并维护相关数据一致性。
+        2. 如涉及联动依赖，应在本方法内完成必要同步。
+        
+        参数：
+        1. `history` (`list[BarData]`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         self._manager.update_history(history)
 
@@ -167,7 +292,17 @@ class ChartWidget(pg.PlotWidget):
 
     def update_bar(self, bar: BarData) -> None:
         """
-        Update single bar data.
+        更新 `bar` 相关状态与缓存。
+        
+        用途说明：
+        1. 对内部状态进行更新，并维护相关数据一致性。
+        2. 如涉及联动依赖，应在本方法内完成必要同步。
+        
+        参数：
+        1. `bar` (`BarData`)：K 线数据对象。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         self._manager.update_bar(bar)
 
@@ -181,7 +316,17 @@ class ChartWidget(pg.PlotWidget):
 
     def _update_plot_limits(self) -> None:
         """
-        Update the limit of plots.
+        执行 `_update_plot_limits` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         for item, plot in self._item_plot_map.items():
             min_value, max_value = item.get_y_range()
@@ -195,7 +340,17 @@ class ChartWidget(pg.PlotWidget):
 
     def _update_x_range(self) -> None:
         """
-        Update the x-axis range of plots.
+        执行 `_update_x_range` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         max_ix: int = self._right_ix
         min_ix: int = self._right_ix - self._bar_count
@@ -205,7 +360,17 @@ class ChartWidget(pg.PlotWidget):
 
     def _update_y_range(self) -> None:
         """
-        Update the y-axis range of plots.
+        执行 `_update_y_range` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         if not self._first_plot:
             return
@@ -223,7 +388,17 @@ class ChartWidget(pg.PlotWidget):
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:
         """
-        Reimplement this method of parent to update current max_ix value.
+        执行 `paintEvent` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `event` (`QtGui.QPaintEvent`)：事件对象，通常通过 `event.data` 携带业务数据。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         if not self._first_plot:
             return
@@ -236,7 +411,17 @@ class ChartWidget(pg.PlotWidget):
 
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
         """
-        Reimplement this method of parent to move chart horizontally and zoom in/out.
+        执行 `keyPressEvent` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `event` (`QtGui.QKeyEvent`)：事件对象，通常通过 `event.data` 携带业务数据。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         Key = QtCore.Qt.Key
 
@@ -251,7 +436,17 @@ class ChartWidget(pg.PlotWidget):
 
     def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
         """
-        Reimplement this method of parent to zoom in/out.
+        执行 `wheelEvent` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `event` (`QtGui.QWheelEvent`)：事件对象，通常通过 `event.data` 携带业务数据。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         delta: QtCore.QPoint = event.angleDelta()
 
@@ -262,7 +457,17 @@ class ChartWidget(pg.PlotWidget):
 
     def _on_key_left(self) -> None:
         """
-        Move chart to left.
+        执行 `_on_key_left` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         self._right_ix -= 1
         self._right_ix = max(self._right_ix, self._bar_count)
@@ -275,7 +480,17 @@ class ChartWidget(pg.PlotWidget):
 
     def _on_key_right(self) -> None:
         """
-        Move chart to right.
+        执行 `_on_key_right` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         self._right_ix += 1
         self._right_ix = min(self._right_ix, self._manager.get_count())
@@ -288,7 +503,17 @@ class ChartWidget(pg.PlotWidget):
 
     def _on_key_down(self) -> None:
         """
-        Zoom out the chart.
+        执行 `_on_key_down` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         self._bar_count = int(self._bar_count * 1.2)
         self._bar_count = min(int(self._bar_count), self._manager.get_count())
@@ -300,7 +525,17 @@ class ChartWidget(pg.PlotWidget):
 
     def _on_key_up(self) -> None:
         """
-        Zoom in the chart.
+        执行 `_on_key_up` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         self._bar_count = int(self._bar_count / 1.2)
         self._bar_count = max(int(self._bar_count), self.MIN_BAR_COUNT)
@@ -312,7 +547,17 @@ class ChartWidget(pg.PlotWidget):
 
     def move_to_right(self) -> None:
         """
-        Move chart to the most right.
+        执行 `move_to_right` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         self._right_ix = self._manager.get_count()
         self._update_x_range()
@@ -322,7 +567,18 @@ class ChartWidget(pg.PlotWidget):
 
 
 class ChartCursor(QtCore.QObject):
-    """"""
+    """
+    `ChartCursor` 是图表十字光标组件，用于在图上读取指定位置的价格与时间信息。
+    
+    职责：
+    1. 响应鼠标移动绘制十字线。
+    2. 在对应索引位置展示 OHLC、成交量等数据。
+    3. 提升人工复盘和定位信号的效率。
+    
+    协作：
+    1. 与 `BarManager`、`ChartItem`、`DatetimeAxis` 协同。
+    2. 由 `ChartWidget` 创建并管理生命周期。
+    """
 
     def __init__(
         self,
@@ -331,7 +587,22 @@ class ChartCursor(QtCore.QObject):
         plots: dict[str, pg.GraphicsObject],
         item_plot_map: dict[ChartItem, pg.GraphicsObject]
     ) -> None:
-        """"""
+        """
+        初始化实例，完成依赖绑定与基础状态准备。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `widget` (`ChartWidget`)：输入参数，用于控制该方法的处理行为。
+        2. `manager` (`BarManager`)：输入参数，用于控制该方法的处理行为。
+        3. `plots` (`dict[str, pg.GraphicsObject]`)：输入参数，用于控制该方法的处理行为。
+        4. `item_plot_map` (`dict[ChartItem, pg.GraphicsObject]`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         super().__init__()
 
         self._widget: ChartWidget = widget
@@ -347,14 +618,36 @@ class ChartCursor(QtCore.QObject):
         self._connect_signal()
 
     def _init_ui(self) -> None:
-        """"""
+        """
+        执行 `_init_ui` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         self._init_line()
         self._init_label()
         self._init_info()
 
     def _init_line(self) -> None:
         """
-        Create line objects.
+        执行 `_init_line` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         self._v_lines: dict[str, pg.InfiniteLine] = {}
         self._h_lines: dict[str, pg.InfiniteLine] = {}
@@ -378,7 +671,17 @@ class ChartCursor(QtCore.QObject):
 
     def _init_label(self) -> None:
         """
-        Create label objects on axis.
+        执行 `_init_label` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         self._y_labels: dict[str, pg.TextItem] = {}
         for plot_name, plot in self._plots.items():
@@ -399,6 +702,17 @@ class ChartCursor(QtCore.QObject):
 
     def _init_info(self) -> None:
         """
+        执行 `_init_info` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         self._infos: dict[str, pg.TextItem] = {}
         for plot_name, plot in self._plots.items():
@@ -416,13 +730,33 @@ class ChartCursor(QtCore.QObject):
 
     def _connect_signal(self) -> None:
         """
-        Connect mouse move signal to update function.
+        执行 `_connect_signal` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         self._widget.scene().sigMouseMoved.connect(self._mouse_moved)
 
     def _mouse_moved(self, evt: tuple) -> None:
         """
-        Callback function when mouse is moved.
+        执行 `_mouse_moved` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `evt` (`tuple`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         if not self._manager.get_count():
             return
@@ -446,7 +780,19 @@ class ChartCursor(QtCore.QObject):
         self.update_info()
 
     def _update_line(self) -> None:
-        """"""
+        """
+        执行 `_update_line` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         for v_line in self._v_lines.values():
             v_line.setPos(self._x)
             v_line.show()
@@ -459,7 +805,19 @@ class ChartCursor(QtCore.QObject):
                 h_line.hide()
 
     def _update_label(self) -> None:
-        """"""
+        """
+        执行 `_update_label` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         bottom_plot: pg.PlotItem = list(self._plots.values())[-1]
         axis_width = bottom_plot.getAxis("right").width()
         axis_height = bottom_plot.getAxis("bottom").height()
@@ -486,7 +844,19 @@ class ChartCursor(QtCore.QObject):
             self._x_label.setAnchor((0, 0))
 
     def update_info(self) -> None:
-        """"""
+        """
+        更新 `info` 相关状态与缓存。
+        
+        用途说明：
+        1. 对内部状态进行更新，并维护相关数据一致性。
+        2. 如涉及联动依赖，应在本方法内完成必要同步。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         buf: dict = {}
 
         for item, plot in self._item_plot_map.items():
@@ -510,7 +880,17 @@ class ChartCursor(QtCore.QObject):
 
     def move_right(self) -> None:
         """
-        Move cursor index to right by 1.
+        执行 `move_right` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         if self._x == self._manager.get_count() - 1:
             return
@@ -520,7 +900,17 @@ class ChartCursor(QtCore.QObject):
 
     def move_left(self) -> None:
         """
-        Move cursor index to left by 1.
+        执行 `move_left` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         if self._x == 0:
             return
@@ -530,7 +920,17 @@ class ChartCursor(QtCore.QObject):
 
     def _update_after_move(self) -> None:
         """
-        Update cursor after moved by left/right.
+        执行 `_update_after_move` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         bar: BarData | None = self._manager.get_bar(self._x)
         if bar is None:
@@ -543,7 +943,17 @@ class ChartCursor(QtCore.QObject):
 
     def clear_all(self) -> None:
         """
-        Clear all data.
+        执行 `clear_all` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         self._x = 0
         self._y = 0

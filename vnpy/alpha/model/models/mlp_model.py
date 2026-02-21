@@ -21,15 +21,16 @@ from vnpy.alpha import (
 
 class MlpModel(AlphaModel):
     """
-    Multi-Layer Perceptron Model
-
-    Alpha factor prediction model implemented using multi-layer perceptron, with main features including:
-    1. Building and training multi-layer perceptron neural networks
-    2. Predicting Alpha factor values
-    3. Model evaluation and feature importance analysis
-    4. Support for early stopping and overfitting prevention
-    5. Support for MSE loss function
-    6. Optional Adam or SGD optimizer
+    `MlpModel` 是多层感知机因子模型实现，适用于深度学习风格的截面预测任务。
+    
+    职责：
+    1. 组织训练循环、损失计算与验证流程。
+    2. 管理网络结构、优化器和训练超参数。
+    3. 输出模型预测结果供策略评估使用。
+    
+    协作：
+    1. 继承 `AlphaModel`。
+    2. 调用 `MlpNetwork` 执行前向计算。
     """
 
     def __init__(
@@ -47,32 +48,27 @@ class MlpModel(AlphaModel):
         seed: int | None = None
     ) -> None:
         """
-        Initialize MLP model
-
-        Parameters
-        ----------
-        input_size : int, default 360
-            Input feature dimension
-        hidden_sizes : tuple[int], default (256,)
-            Number of neurons in hidden layers
-        lr : float, default 0.001
-            Learning rate
-        n_epochs : int, default 300
-            Maximum training steps
-        batch_size : int, default 2000
-            Number of samples per batch
-        early_stop_rounds : int, default 50
-            Early stopping rounds, training stops if validation loss doesn't improve within these rounds
-        eval_steps : int, default 20
-            Evaluate model every this many steps
-        optimizer : Literal["sgd", "adam"], default "adam"
-            Optimizer type, options are "sgd" or "adam"
-        weight_decay : float, default 0.0
-            L2 regularization coefficient
-        seed : Optional[int], optional
-            Random seed for reproducibility
-        device : str, default "cpu"
-            Training device
+        初始化实例，完成依赖绑定与基础状态准备。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `input_size` (`int`)：输入参数，用于控制该方法的处理行为。
+        2. `hidden_sizes` (`tuple[int]`)，默认值 `(256,)`：输入参数，用于控制该方法的处理行为。
+        3. `lr` (`float`)，默认值 `0.001`：输入参数，用于控制该方法的处理行为。
+        4. `n_epochs` (`int`)，默认值 `300`：输入参数，用于控制该方法的处理行为。
+        5. `batch_size` (`int`)，默认值 `2000`：输入参数，用于控制该方法的处理行为。
+        6. `early_stop_rounds` (`int`)，默认值 `50`：输入参数，用于控制该方法的处理行为。
+        7. `eval_steps` (`int`)，默认值 `20`：输入参数，用于控制该方法的处理行为。
+        8. `optimizer` (`Literal['sgd', 'adam']`)，默认值 `'adam'`：输入参数，用于控制该方法的处理行为。
+        9. `weight_decay` (`float`)，默认值 `0.0`：输入参数，用于控制该方法的处理行为。
+        10. `device` (`str`)，默认值 `'cpu'`：输入参数，用于控制该方法的处理行为。
+        11. `seed` (`int | None`)，默认值 `None`：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         # Save model hyperparameters
         self.input_size: int = input_size
@@ -140,20 +136,18 @@ class MlpModel(AlphaModel):
         evaluation_results: dict | None = None,
     ) -> None:
         """
-        Train the multi-layer perceptron model
-
-        Trains the MLP model using the given dataset, with main steps including:
-        1. Preparing training and validation data
-        2. Iteratively training for multiple steps
-        3. Evaluating model performance at fixed intervals
-        4. Implementing early stopping to prevent overfitting
-
-        Parameters
-        ----------
-        dataset : AlphaDataset
-            Dataset object containing training data
-        evaluation_results : dict
-            Dictionary for storing evaluation metrics during training
+        执行 `fit` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `dataset` (`AlphaDataset`)：输入参数，用于控制该方法的处理行为。
+        2. `evaluation_results` (`dict | None`)，默认值 `None`：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         # Initialize a new dictionary if evaluation_results is None
         if evaluation_results is None:
@@ -227,19 +221,18 @@ class MlpModel(AlphaModel):
         train_samples: int
     ) -> float:
         """
-        Execute one training step
-
-        Parameters
-        ----------
-        train_valid_data : dict
-            Training and validation data
-        train_samples : int
-            Number of training samples
-
-        Returns
-        -------
-        float
-            Current batch loss value
+        执行 `_train_step` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `train_valid_data` (`dict[str, dict[Segment, torch.Tensor]]`)：输入参数，用于控制该方法的处理行为。
+        2. `train_samples` (`int`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `float`：返回该方法计算或查询得到的结果。
         """
         batch_loss = AverageMeter()
         self.model.train()
@@ -271,27 +264,22 @@ class MlpModel(AlphaModel):
         best_valid_score: float
     ) -> tuple[int, float, dict[str, torch.Tensor] | None]:
         """
-        Evaluate current model performance
-
-        Parameters
-        ----------
-        train_valid_data : dict
-            Training and validation data
-        evaluation_results : dict
-            Evaluation results record
-        step : int
-            Current training step
-        train_loss : float
-            Current training loss
-        early_stop_count : int
-            Count of steps without improvement
-        best_valid_score : float
-            Best validation loss
-
-        Returns
-        -------
-        tuple[int, float, dict] | None
-            Returns updated early stop count, best validation loss, and best model parameters
+        执行 `_evaluate_step` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `train_valid_data` (`dict[str, dict[Segment, torch.Tensor]]`)：输入参数，用于控制该方法的处理行为。
+        2. `evaluation_results` (`dict[Segment, list[float]]`)：输入参数，用于控制该方法的处理行为。
+        3. `step` (`int`)：输入参数，用于控制该方法的处理行为。
+        4. `train_loss` (`float`)：输入参数，用于控制该方法的处理行为。
+        5. `early_stop_count` (`int`)：输入参数，用于控制该方法的处理行为。
+        6. `best_valid_score` (`float`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `tuple[int, float, dict[str, torch.Tensor] | None]`：返回多个值组成的结果元组。
         """
         early_stop_count += 1
         train_loss /= self.eval_steps
@@ -328,19 +316,18 @@ class MlpModel(AlphaModel):
 
     def _loss_fn(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """
-        Calculate loss value
-
-        Parameters
-        ----------
-        pred : torch.Tensor
-            Model predictions
-        target : torch.Tensor
-            Target true values
-
-        Returns
-        -------
-        torch.Tensor
-            Calculated loss value
+        执行 `_loss_fn` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `pred` (`torch.Tensor`)：输入参数，用于控制该方法的处理行为。
+        2. `target` (`torch.Tensor`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `torch.Tensor`：返回该方法计算或查询得到的结果。
         """
         pred, target = pred.reshape(-1), target.reshape(-1)
         loss: torch.Tensor = nn.MSELoss()(pred, target)
@@ -348,21 +335,18 @@ class MlpModel(AlphaModel):
 
     def _predict_batch(self, data: torch.Tensor, return_cpu: bool = True) -> np.ndarray | torch.Tensor:
         """
-        Neural network prediction function
-
-        Parameters
-        ----------
-        data : torch.Tensor
-            Input data
-        return_cpu : bool, default True
-            Whether to return CPU tensor
-        step : Optional[int], optional
-            Current training step
-
-        Returns
-        -------
-        np.ndarray | torch.Tensor
-            Model prediction results
+        执行 `_predict_batch` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `data` (`torch.Tensor`)：待处理的原始或结构化数据。
+        2. `return_cpu` (`bool`)，默认值 `True`：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `np.ndarray | torch.Tensor`：返回该方法计算或查询得到的结果。
         """
         data = data.to(self.device)
 
@@ -383,19 +367,18 @@ class MlpModel(AlphaModel):
 
     def predict(self, dataset: AlphaDataset, segment: Segment) -> np.ndarray:
         """
-        Model prediction interface
-
-        Parameters
-        ----------
-        dataset : AlphaDataset
-            Prediction dataset
-        segment : Segment
-            Dataset segment
-
-        Returns
-        -------
-        np.ndarray
-            Prediction result array
+        执行 `predict` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `dataset` (`AlphaDataset`)：输入参数，用于控制该方法的处理行为。
+        2. `segment` (`Segment`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `np.ndarray`：返回该方法计算或查询得到的结果。
         """
         if not self.fitted:
             raise ValueError("Model has not been trained yet!")
@@ -409,30 +392,35 @@ class MlpModel(AlphaModel):
 
     def _check_tensor_nan(self, tensor: torch.Tensor, name: str) -> None:
         """
-        Check if tensor contains NaN values
-
-        Parameters
-        ----------
-        tensor : torch.Tensor
-            Tensor to check
-        name : str
-            Tensor name
-
-        Returns
-        -------
-        None
+        执行 `_check_tensor_nan` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `tensor` (`torch.Tensor`)：输入参数，用于控制该方法的处理行为。
+        2. `name` (`str`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         if torch.isnan(tensor).any():
             print(f"NaN values detected: {name}")
 
     def detail(self) -> pd.DataFrame | None:
         """
-        Output MLP model detail information
-
-        Returns
-        -------
-        pd.DataFrame
-            Feature importance dataframe
+        执行 `detail` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `pd.DataFrame | None`：返回该方法计算或查询得到的结果。
         """
         if not self.fitted:
             logger.info("模型尚未训练，无法显示详细信息")
@@ -457,12 +445,17 @@ class MlpModel(AlphaModel):
 
     def _calculate_feature_importance(self) -> pd.DataFrame:
         """
-        Calculate feature importance
-
-        Returns
-        -------
-        pd.DataFrame
-            Feature importance dataframe
+        执行 `_calculate_feature_importance` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `pd.DataFrame`：返回该方法计算或查询得到的结果。
         """
         self.model.eval()
         importance_dict = {}
@@ -492,37 +485,47 @@ class MlpModel(AlphaModel):
 
 class AverageMeter:
     """
-    Class for calculating and storing average and current values
-
-    Attributes
-    ----------
-    val : float
-        Current value
-    avg : float
-        Average value
-    sum : float
-        Sum
-    count : int
-        Count
+    `AverageMeter` 是训练统计工具类，用于累计并输出均值指标（如 loss、准确率）。
+    
+    职责：
+    1. 记录累积和、样本数与当前均值。
+    2. 简化训练日志打印逻辑。
+    3. 提升训练过程可观测性。
+    
+    协作：
+    1. 被 `MlpModel` 训练/验证阶段使用。
+    2. 与日志输出模块协同。
     """
 
     def __init__(self) -> None:
         """
-        Initialize AverageMeter
-
-        Returns
-        -------
-        None
+        初始化实例，完成依赖绑定与基础状态准备。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         self.reset()
 
     def reset(self) -> None:
         """
-        Reset all statistics
-
-        Returns
-        -------
-        None
+        执行 `reset` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         self.val: float = 0
         self.avg: float = 0
@@ -531,18 +534,18 @@ class AverageMeter:
 
     def update(self, val: float, n: int = 1) -> None:
         """
-        Update statistics
-
-        Parameters
-        ----------
-        val : float
-            Current value
-        n : int, default 1
-            Current batch size
-
-        Returns
-        -------
-        None
+        执行 `update` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `val` (`float`)：输入参数，用于控制该方法的处理行为。
+        2. `n` (`int`)，默认值 `1`：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         self.val = val
         self.sum += val * n
@@ -552,15 +555,16 @@ class AverageMeter:
 
 class MlpNetwork(nn.Module):
     """
-    Deep Neural Network Model Structure
-
-    Used to build multi-layer perceptron network structure, supporting multiple hidden layers
-    and different activation functions.
-
-    Attributes
-    ----------
-    network : nn.ModuleList
-        List of neural network layers
+    `MlpNetwork` 是多层感知机网络结构定义类，封装神经网络前向传播。
+    
+    职责：
+    1. 定义线性层、激活函数和正则化结构。
+    2. 接收特征输入并输出预测分数。
+    3. 作为 `MlpModel` 的核心可训练组件。
+    
+    协作：
+    1. 被 `MlpModel` 实例化并训练。
+    2. 依赖 PyTorch `nn.Module` 生态。
     """
 
     def __init__(
@@ -571,21 +575,20 @@ class MlpNetwork(nn.Module):
         activation: str = "LeakyReLU"
     ) -> None:
         """
-        Constructor
-
-        Parameters
-        ----------
-        input_size : int
-            Input feature dimension, i.e., number of features per sample
-        output_size : int, default 1
-            Output dimension, used for predicting target values
-        hidden_sizes : tuple[int], default (256,)
-            Tuple of hidden layer neuron counts, e.g., (256, 128) represents two hidden layers
-            with 256 and 128 neurons respectively
-        activation : str, default "LeakyReLU"
-            Activation function type, options:
-            - "LeakyReLU": Leaky ReLU function
-            - "SiLU": Sigmoid Linear Unit function
+        初始化实例，完成依赖绑定与基础状态准备。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `input_size` (`int`)：输入参数，用于控制该方法的处理行为。
+        2. `output_size` (`int`)，默认值 `1`：输入参数，用于控制该方法的处理行为。
+        3. `hidden_sizes` (`tuple[int]`)，默认值 `(256,)`：输入参数，用于控制该方法的处理行为。
+        4. `activation` (`str`)，默认值 `'LeakyReLU'`：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         super().__init__()
 
@@ -619,22 +622,17 @@ class MlpNetwork(nn.Module):
 
     def _get_activation(self, name: str) -> nn.Module:
         """
-        Get specified activation function layer
-
-        Parameters
-        ----------
-        name : str
-            Activation function name
-
-        Returns
-        -------
-        nn.Module
-            Activation function layer instance
-
-        Raises
-        ------
-        ValueError
-            When an unsupported activation function type is specified
+        执行 `_get_activation` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `name` (`str`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `nn.Module`：返回该方法计算或查询得到的结果。
         """
         if name == "LeakyReLU":
             return nn.LeakyReLU(negative_slope=0.1)
@@ -645,14 +643,17 @@ class MlpNetwork(nn.Module):
 
     def _initialize_weights(self) -> None:
         """
-        Initialize network weight parameters
-
-        Uses Kaiming initialization method for all linear layers, which is particularly
-        suitable for deep networks using LeakyReLU activation functions.
-
-        Returns
-        -------
-        None
+        执行 `_initialize_weights` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         for module in self.modules():
             if isinstance(module, nn.Linear):
@@ -665,17 +666,17 @@ class MlpNetwork(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Forward propagation calculation
-
-        Parameters
-        ----------
-        x : torch.Tensor
-            Input feature tensor, shape (batch_size, input_size)
-
-        Returns
-        -------
-        torch.Tensor
-            Model output tensor, shape (batch_size, output_size)
+        执行 `forward` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `x` (`torch.Tensor`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `torch.Tensor`：返回该方法计算或查询得到的结果。
         """
         # Pass through all layers in the network sequentially
         for layer in self.network:

@@ -4,7 +4,18 @@ from vnpy.alpha import AlphaDataset
 
 
 class Alpha158(AlphaDataset):
-    """158 basic factors from Qlib"""
+    """
+    `Alpha158` 是 Alpha158 因子数据集实现，提供扩展因子维度的研究输入。
+    
+    职责：
+    1. 组织 Alpha158 因子特征与标签。
+    2. 统一时间对齐与样本过滤逻辑。
+    3. 为模型横向比较提供一致数据接口。
+    
+    协作：
+    1. 继承 `AlphaDataset`。
+    2. 与 `AlphaModel` 训练/验证流程联动。
+    """
 
     def __init__(
         self,
@@ -13,7 +24,22 @@ class Alpha158(AlphaDataset):
         valid_period: tuple[str, str],
         test_period: tuple[str, str]
     ) -> None:
-        """Constructor"""
+        """
+        初始化实例，完成依赖绑定与基础状态准备。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `df` (`pl.DataFrame`)：输入参数，用于控制该方法的处理行为。
+        2. `train_period` (`tuple[str, str]`)：输入参数，用于控制该方法的处理行为。
+        3. `valid_period` (`tuple[str, str]`)：输入参数，用于控制该方法的处理行为。
+        4. `test_period` (`tuple[str, str]`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         super().__init__(
             df=df,
             train_period=train_period,

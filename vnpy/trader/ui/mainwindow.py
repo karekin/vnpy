@@ -38,11 +38,33 @@ WidgetType = TypeVar("WidgetType", bound="QtWidgets.QWidget")
 
 class MainWindow(QtWidgets.QMainWindow):
     """
-    Main window of the trading platform.
+    `MainWindow` 是 vn.py 桌面终端主窗口，负责菜单、停靠面板与应用入口整合。
+    
+    职责：
+    1. 加载并管理各监控面板与交易面板。
+    2. 承载网关连接、日志查看、合约查询等主流程入口。
+    3. 统一管理应用插件 UI 的挂载与布局恢复。
+    
+    协作：
+    1. 与 `MainEngine` 协作执行交易命令。
+    2. 与 `BaseApp` 提供的 widget 信息联动动态加载界面。
     """
 
     def __init__(self, main_engine: MainEngine, event_engine: EventEngine) -> None:
-        """"""
+        """
+        初始化实例，完成依赖绑定与基础状态准备。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `main_engine` (`MainEngine`)：输入参数，用于控制该方法的处理行为。
+        2. `event_engine` (`EventEngine`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         super().__init__()
 
         self.main_engine: MainEngine = main_engine
@@ -56,7 +78,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.init_ui()
 
     def init_ui(self) -> None:
-        """"""
+        """
+        执行 `init_ui` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         self.setWindowTitle(self.window_title)
         self.init_dock()
         self.init_toolbar()
@@ -64,7 +98,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.load_window_setting("custom")
 
     def init_dock(self) -> None:
-        """"""
+        """
+        执行 `init_dock` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         self.trading_widget, trading_dock = self.create_dock(
             TradingWidget, _("交易"), QtCore.Qt.DockWidgetArea.LeftDockWidgetArea
         )
@@ -98,7 +144,19 @@ class MainWindow(QtWidgets.QMainWindow):
         position_widget.itemDoubleClicked.connect(self.trading_widget.update_with_cell)
 
     def init_menu(self) -> None:
-        """"""
+        """
+        执行 `init_menu` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         bar: QtWidgets.QMenuBar = self.menuBar()
         bar.setNativeMenuBar(False)     # for mac and linux
 
@@ -182,7 +240,19 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
     def init_toolbar(self) -> None:
-        """"""
+        """
+        执行 `init_toolbar` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         self.toolbar: QtWidgets.QToolBar = QtWidgets.QToolBar(self)
         self.toolbar.setObjectName(_("工具栏"))
         self.toolbar.setFloatable(False)
@@ -208,7 +278,23 @@ class MainWindow(QtWidgets.QMainWindow):
         func: Callable,
         toolbar: bool = False
     ) -> None:
-        """"""
+        """
+        新增 `action` 相关对象或配置项。
+        
+        用途说明：
+        1. 对内部状态进行更新，并维护相关数据一致性。
+        2. 如涉及联动依赖，应在本方法内完成必要同步。
+        
+        参数：
+        1. `menu` (`QtWidgets.QMenu`)：输入参数，用于控制该方法的处理行为。
+        2. `action_name` (`str`)：输入参数，用于控制该方法的处理行为。
+        3. `icon_name` (`str`)：输入参数，用于控制该方法的处理行为。
+        4. `func` (`Callable`)：输入参数，用于控制该方法的处理行为。
+        5. `toolbar` (`bool`)，默认值 `False`：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         icon: QtGui.QIcon = QtGui.QIcon(icon_name)
 
         action: QtGui.QAction = QtGui.QAction(action_name, self)
@@ -227,7 +313,19 @@ class MainWindow(QtWidgets.QMainWindow):
         area: QtCore.Qt.DockWidgetArea
     ) -> tuple[WidgetType, QtWidgets.QDockWidget]:
         """
-        Initialize a dock widget.
+        执行 `create_dock` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `widget_class` (`type[WidgetType]`)：输入参数，用于控制该方法的处理行为。
+        2. `name` (`str`)：输入参数，用于控制该方法的处理行为。
+        3. `area` (`QtCore.Qt.DockWidgetArea`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `tuple[WidgetType, QtWidgets.QDockWidget]`：返回多个值组成的结果元组。
         """
         widget: WidgetType = widget_class(self.main_engine, self.event_engine)      # type: ignore
         if isinstance(widget, BaseMonitor):
@@ -242,14 +340,34 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def connect_gateway(self, gateway_name: str) -> None:
         """
-        Open connect dialog for gateway connection.
+        执行 `connect_gateway` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `gateway_name` (`str`)：网关名称，用于定位目标网关实例。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         dialog: ConnectDialog = ConnectDialog(self.main_engine, gateway_name)
         dialog.exec()
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         """
-        Call main engine close function before exit.
+        执行 `closeEvent` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `event` (`QtGui.QCloseEvent`)：事件对象，通常通过 `event.data` 携带业务数据。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         reply = QtWidgets.QMessageBox.question(
             self,
@@ -276,7 +394,18 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def open_widget(self, widget_class: type[QtWidgets.QWidget], name: str) -> None:
         """
-        Open contract manager.
+        执行 `open_widget` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `widget_class` (`type[QtWidgets.QWidget]`)：输入参数，用于控制该方法的处理行为。
+        2. `name` (`str`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         widget: QtWidgets.QWidget | None = self.widgets.get(name, None)
         if not widget:
@@ -290,7 +419,17 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def save_window_setting(self, name: str) -> None:
         """
-        Save current window size and state by trader path and setting name.
+        保存 `window_setting` 相关内容。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `name` (`str`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         settings: QtCore.QSettings = QtCore.QSettings(self.window_title, name)
         settings.setValue("state", self.saveState())
@@ -298,7 +437,17 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def load_window_setting(self, name: str) -> None:
         """
-        Load previous window size and state by trader path and setting name.
+        加载 `window_setting` 相关资源。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `name` (`str`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         settings: QtCore.QSettings = QtCore.QSettings(self.window_title, name)
         state = settings.value("state")
@@ -310,24 +459,66 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def restore_window_setting(self) -> None:
         """
-        Restore window to default setting.
+        执行 `restore_window_setting` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         self.load_window_setting("default")
         self.showMaximized()
 
     def send_test_email(self) -> None:
         """
-        Sending a test email.
+        发送 `test_email` 请求并处理返回结果。
+        
+        用途说明：
+        1. 与外部系统或底层组件交互，完成动作请求。
+        2. 处理成功与异常分支，确保状态可追踪。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         self.main_engine.send_email("VeighNa Trader", "testing", None)
 
     def open_forum(self) -> None:
         """
+        执行 `open_forum` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         webbrowser.open("https://www.vnpy.com/forum/")
 
     def edit_global_setting(self) -> None:
         """
+        执行 `edit_global_setting` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         dialog: GlobalDialog = GlobalDialog()
         dialog.exec()

@@ -1,4 +1,9 @@
-"""Time Series Operators"""
+"""
+时间序列算子集合。
+
+所有计算均在单个 `vt_symbol` 的时间轴上滚动进行，
+用于构建动量、波动、趋势、相关性等时序因子。
+"""
 
 from typing import cast
 
@@ -10,7 +15,11 @@ from .utility import DataProxy
 
 
 def ts_delay(feature: DataProxy, window: int) -> DataProxy:
-    """Get the value from a fixed time in the past"""
+    """
+    获取滞后值（向后平移 `window` 个周期）。
+
+    常用于构造收益率、差分特征，或避免未来数据泄露。
+    """
     df: pl.DataFrame = feature.df.select(
         pl.col("datetime"),
         pl.col("vt_symbol"),
@@ -20,7 +29,11 @@ def ts_delay(feature: DataProxy, window: int) -> DataProxy:
 
 
 def ts_min(feature: DataProxy, window: int) -> DataProxy:
-    """Calculate the minimum value over a rolling window"""
+    """
+    计算滚动窗口最小值。
+
+    可用于刻画短期下沿、回撤低点或区间支撑位。
+    """
     df: pl.DataFrame = feature.df.select(
         pl.col("datetime"),
         pl.col("vt_symbol"),
@@ -30,7 +43,11 @@ def ts_min(feature: DataProxy, window: int) -> DataProxy:
 
 
 def ts_max(feature: DataProxy, window: int) -> DataProxy:
-    """Calculate the maximum value over a rolling window"""
+    """
+    计算滚动窗口最大值。
+
+    可用于刻画短期上沿、突破高点或区间压力位。
+    """
     df: pl.DataFrame = feature.df.select(
         pl.col("datetime"),
         pl.col("vt_symbol"),
@@ -40,7 +57,11 @@ def ts_max(feature: DataProxy, window: int) -> DataProxy:
 
 
 def ts_argmax(feature: DataProxy, window: int) -> DataProxy:
-    """Return the index of the maximum value over a rolling window"""
+    """
+    返回窗口内最大值位置（1-based）。
+
+    结果可理解为“距离阶段高点的位置索引”，常用于趋势状态特征。
+    """
     df: pl.DataFrame = feature.df.select(
         pl.col("datetime"),
         pl.col("vt_symbol"),
@@ -50,7 +71,11 @@ def ts_argmax(feature: DataProxy, window: int) -> DataProxy:
 
 
 def ts_argmin(feature: DataProxy, window: int) -> DataProxy:
-    """Return the index of the minimum value over a rolling window"""
+    """
+    返回窗口内最小值位置（1-based）。
+
+    结果可理解为“距离阶段低点的位置索引”。
+    """
     df: pl.DataFrame = feature.df.select(
         pl.col("datetime"),
         pl.col("vt_symbol"),
@@ -60,7 +85,11 @@ def ts_argmin(feature: DataProxy, window: int) -> DataProxy:
 
 
 def ts_rank(feature: DataProxy, window: int) -> DataProxy:
-    """Calculate the percentile rank of the current value within the window"""
+    """
+    计算当前值在滚动窗口内的分位排名（0~1）。
+
+    常用于把原始值映射为相对强弱，降低量纲影响。
+    """
     df: pl.DataFrame = feature.df.select(
         pl.col("datetime"),
         pl.col("vt_symbol"),
@@ -70,7 +99,11 @@ def ts_rank(feature: DataProxy, window: int) -> DataProxy:
 
 
 def ts_sum(feature: DataProxy, window: int) -> DataProxy:
-    """Calculate the sum over a rolling window"""
+    """
+    计算滚动窗口求和。
+
+    可用于累计成交量、累计收益等聚合特征。
+    """
     df: pl.DataFrame = feature.df.select(
         pl.col("datetime"),
         pl.col("vt_symbol"),
@@ -80,7 +113,11 @@ def ts_sum(feature: DataProxy, window: int) -> DataProxy:
 
 
 def ts_mean(feature: DataProxy, window: int) -> DataProxy:
-    """Calculate the mean over a rolling window"""
+    """
+    计算滚动均值（忽略 NaN）。
+
+    常用于平滑噪声并构造均值回归类因子。
+    """
     df: pl.DataFrame = feature.df.select(
         pl.col("datetime"),
         pl.col("vt_symbol"),
@@ -90,7 +127,11 @@ def ts_mean(feature: DataProxy, window: int) -> DataProxy:
 
 
 def ts_std(feature: DataProxy, window: int) -> DataProxy:
-    """Calculate the standard deviation over a rolling window"""
+    """
+    计算滚动标准差（总体标准差口径，`ddof=0`）。
+
+    常用于波动率估计和风险约束特征。
+    """
     df: pl.DataFrame = feature.df.select(
         pl.col("datetime"),
         pl.col("vt_symbol"),
@@ -100,7 +141,11 @@ def ts_std(feature: DataProxy, window: int) -> DataProxy:
 
 
 def ts_slope(feature: DataProxy, window: int) -> DataProxy:
-    """Calculate the slope of linear regression over a rolling window (optimized)"""
+    """
+    计算滚动线性回归斜率（优化实现）。
+
+    斜率反映窗口内序列的线性趋势方向与强度。
+    """
     # 预计算 x 相关的常数 (x = 0, 1, 2, ..., window-1)
     n = window
     sum_x = n * (n - 1) / 2  # 等差数列求和
@@ -128,7 +173,11 @@ def ts_slope(feature: DataProxy, window: int) -> DataProxy:
 
 
 def ts_quantile(feature: DataProxy, window: int, quantile: float) -> DataProxy:
-    """Calculate the quantile value over a rolling window"""
+    """
+    计算滚动分位值。
+
+    可用于动态阈值构造，例如分位突破或分位回归策略。
+    """
     df: pl.DataFrame = feature.df.select(
         pl.col("datetime"),
         pl.col("vt_symbol"),
@@ -138,7 +187,11 @@ def ts_quantile(feature: DataProxy, window: int, quantile: float) -> DataProxy:
 
 
 def ts_rsquare(feature: DataProxy, window: int) -> DataProxy:
-    """Calculate the R-squared value of linear regression over a rolling window (optimized)"""
+    """
+    计算滚动线性回归的 R²（优化实现）。
+
+    R² 越高表示当前窗口越接近线性趋势，可用于筛选“趋势可解释性”更强的样本。
+    """
     # 预计算 x 相关的常数 (x = 0, 1, 2, ..., window-1)
     n = window
     sum_x2 = (n - 1) * n * (2 * n - 1) / 6  # 平方和公式
@@ -184,7 +237,11 @@ def ts_rsquare(feature: DataProxy, window: int) -> DataProxy:
 
 
 def ts_resi(feature: DataProxy, window: int) -> DataProxy:
-    """Calculate the residual of linear regression over a rolling window (optimized)"""
+    """
+    计算滚动线性回归残差（优化实现）。
+
+    残差表示当前值相对拟合趋势线的偏离，常用于异常偏离或回归修正信号。
+    """
     # 预计算 x 相关的常数 (x = 0, 1, 2, ..., window-1)
     n = window
     sum_x = n * (n - 1) / 2  # 等差数列求和
@@ -224,7 +281,11 @@ def ts_resi(feature: DataProxy, window: int) -> DataProxy:
 
 
 def ts_corr(feature1: DataProxy, feature2: DataProxy, window: int) -> DataProxy:
-    """Calculate the correlation between two features over a rolling window"""
+    """
+    计算两路特征的滚动相关系数。
+
+    用于刻画因子间联动强度、共振关系或去冗余分析。
+    """
     df_merged: pl.DataFrame = feature1.df.join(feature2.df, on=["datetime", "vt_symbol"])
 
     df: pl.DataFrame = df_merged.select(
@@ -241,7 +302,11 @@ def ts_corr(feature1: DataProxy, feature2: DataProxy, window: int) -> DataProxy:
 
 
 def ts_less(feature1: DataProxy, feature2: DataProxy | float) -> DataProxy:
-    """Return the minimum value between two features"""
+    """
+    逐样本取两路输入较小值。
+
+    常用于时序特征截断上界。
+    """
     if isinstance(feature2, DataProxy):
         df_merged: pl.DataFrame = feature1.df.join(feature2.df, on=["datetime", "vt_symbol"])
     else:
@@ -257,7 +322,11 @@ def ts_less(feature1: DataProxy, feature2: DataProxy | float) -> DataProxy:
 
 
 def ts_greater(feature1: DataProxy, feature2: DataProxy | float) -> DataProxy:
-    """Return the maximum value between two features"""
+    """
+    逐样本取两路输入较大值。
+
+    常用于时序特征设置下界。
+    """
     if isinstance(feature2, DataProxy):
         df_merged: pl.DataFrame = feature1.df.join(feature2.df, on=["datetime", "vt_symbol"])
 
@@ -274,7 +343,11 @@ def ts_greater(feature1: DataProxy, feature2: DataProxy | float) -> DataProxy:
 
 
 def ts_log(feature: DataProxy) -> DataProxy:
-    """Calculate the natural logarithm of the feature"""
+    """
+    对时序特征做自然对数变换。
+
+    常用于压缩长尾分布，提升模型稳定性。
+    """
     df: pl.DataFrame = feature.df.select(
         pl.col("datetime"),
         pl.col("vt_symbol"),
@@ -284,7 +357,11 @@ def ts_log(feature: DataProxy) -> DataProxy:
 
 
 def ts_abs(feature: DataProxy) -> DataProxy:
-    """Calculate the absolute value of the feature"""
+    """
+    取时序特征绝对值。
+
+    适用于仅关心波动幅度、忽略方向的场景。
+    """
     df: pl.DataFrame = feature.df.select(
         pl.col("datetime"),
         pl.col("vt_symbol"),
@@ -294,19 +371,31 @@ def ts_abs(feature: DataProxy) -> DataProxy:
 
 
 def ts_delta(feature: DataProxy, window: int) -> DataProxy:
-    """Calculate difference between current value and value from window periods ago"""
+    """
+    计算差分：当前值减去 `window` 周期前的值。
+
+    是最常用的动量/变化率基础构件。
+    """
     return feature - ts_delay(feature, window)
 
 
 def ts_cov(feature1: DataProxy, feature2: DataProxy, window: int) -> DataProxy:
-    """Calculate covariance between two features over a rolling window"""
+    """
+    计算两路特征的滚动协方差。
+
+    通过 `corr * std1 * std2` 组合得到，反映共同波动方向与幅度。
+    """
     return ts_corr(feature1, feature2, window) * ts_std(feature1, window) * ts_std(feature2, window)
 
 
 def ts_decay_linear(feature: DataProxy, window: int) -> DataProxy:
-    """Calculate linear decay weighted average"""
+    """
+    计算滚动线性衰减加权平均。
+
+    常用于“近期更重要”的平滑特征构造。
+    """
     def decay_func(s: pl.Series) -> float:
-        """Calculate linear decay weighted average for a series"""
+        """对单个窗口序列计算线性权重均值。"""
         weights = pl.Series(range(window, 0, -1))
         return float((s * weights).sum() / (window * (window + 1) / 2))
 
@@ -319,7 +408,11 @@ def ts_decay_linear(feature: DataProxy, window: int) -> DataProxy:
 
 
 def ts_product(feature: DataProxy, window: int) -> DataProxy:
-    """Calculate the product over a rolling window"""
+    """
+    计算滚动窗口连乘。
+
+    常用于构造复合增长类特征或多期比例累计项。
+    """
     df: pl.DataFrame = feature.df.select(
         pl.col("datetime"),
         pl.col("vt_symbol"),

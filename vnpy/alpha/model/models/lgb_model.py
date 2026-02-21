@@ -10,7 +10,18 @@ from vnpy.alpha.model import AlphaModel
 
 
 class LgbModel(AlphaModel):
-    """LightGBM ensemble learning algorithm"""
+    """
+    `LgbModel` 是基于 LightGBM 的梯度提升树模型实现，适合非线性因子关系建模。
+    
+    职责：
+    1. 完成 LightGBM 训练、预测与特征重要性输出。
+    2. 支持高效率大样本训练。
+    3. 用于挖掘因子与收益之间的非线性关系。
+    
+    协作：
+    1. 继承 `AlphaModel`。
+    2. 与 `AlphaDataset` 联动执行训练和回测评价。
+    """
 
     def __init__(
         self,
@@ -22,20 +33,22 @@ class LgbModel(AlphaModel):
         seed: int | None = None
     ):
         """
-        Parameters
-        ----------
-        learning_rate : float
-            Learning rate
-        num_leaves : int
-            Number of leaf nodes
-        num_boost_round : int
-            Maximum number of training rounds
-        early_stopping_rounds : int
-            Number of rounds for early stopping
-        log_evaluation_period : int
-            Interval rounds for printing training logs
-        seed : int | None
-            Random seed
+        初始化实例，完成依赖绑定与基础状态准备。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `learning_rate` (`float`)，默认值 `0.1`：输入参数，用于控制该方法的处理行为。
+        2. `num_leaves` (`int`)，默认值 `31`：输入参数，用于控制该方法的处理行为。
+        3. `num_boost_round` (`int`)，默认值 `1000`：输入参数，用于控制该方法的处理行为。
+        4. `early_stopping_rounds` (`int`)，默认值 `50`：输入参数，用于控制该方法的处理行为。
+        5. `log_evaluation_period` (`int`)，默认值 `1`：输入参数，用于控制该方法的处理行为。
+        6. `seed` (`int | None`)，默认值 `None`：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         self.params: dict = {
             "objective": "mse",
@@ -52,17 +65,17 @@ class LgbModel(AlphaModel):
 
     def _prepare_data(self, dataset: AlphaDataset) -> list[lgb.Dataset]:
         """
-        Prepare data for training and validation
-
-        Parameters
-        ----------
-        dataset : AlphaDataset
-            The dataset containing features and labels
-
-        Returns
-        -------
-        list[lgb.Dataset]
-            List of LightGBM datasets for training and validation
+        执行 `_prepare_data` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `dataset` (`AlphaDataset`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `list[lgb.Dataset]`：返回按约定组织的数据列表。
         """
         ds: list[lgb.Dataset] = []
 
@@ -83,16 +96,17 @@ class LgbModel(AlphaModel):
 
     def fit(self, dataset: AlphaDataset) -> None:
         """
-        Fit the model using the dataset
-
-        Parameters
-        ----------
-        dataset : AlphaDataset
-            The dataset containing features and labels
-
-        Returns
-        -------
-        None
+        执行 `fit` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `dataset` (`AlphaDataset`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         # Prepare task data
         ds: list[lgb.Dataset] = self._prepare_data(dataset)
@@ -112,24 +126,18 @@ class LgbModel(AlphaModel):
 
     def predict(self, dataset: AlphaDataset, segment: Segment) -> np.ndarray:
         """
-        Make predictions using the trained model
-
-        Parameters
-        ----------
-        dataset : AlphaDataset
-            The dataset containing features
-        segment : Segment
-            The segment to make predictions on
-
-        Returns
-        -------
-        np.ndarray
-            Prediction results
-
-        Raises
-        ------
-        ValueError
-            If the model has not been fitted yet
+        执行 `predict` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `dataset` (`AlphaDataset`)：输入参数，用于控制该方法的处理行为。
+        2. `segment` (`Segment`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `np.ndarray`：返回该方法计算或查询得到的结果。
         """
         # Check if model exists
         if self.model is None:
@@ -148,14 +156,17 @@ class LgbModel(AlphaModel):
 
     def detail(self) -> None:
         """
-        Display model details with feature importance plots
-
-        Generates two plots showing feature importance based on
-        'split' and 'gain' metrics.
-
-        Returns
-        -------
-        None
+        执行 `detail` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         if not self.model:
             return

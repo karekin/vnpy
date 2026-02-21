@@ -47,11 +47,33 @@ COLOR_BLACK = QtGui.QColor("black")
 
 class BaseCell(QtWidgets.QTableWidgetItem):
     """
-    General cell used in tablewidgets.
+    表格基础单元格，封装字段取值、排序值和基础展示逻辑。
+    
+    职责：
+    1. 将原始字段值转换为适合交易界面的展示格式。
+    2. 根据业务语义设置颜色、对齐和排序行为。
+    3. 提升高频刷新场景下的信息可读性。
+    
+    协作：
+    1. 由各类 `Monitor` 在填充表格行时创建与更新。
+    2. 和事件驱动更新机制配合进行增量刷新。
     """
 
     def __init__(self, content: Any, data: Any) -> None:
-        """"""
+        """
+        初始化实例，完成依赖绑定与基础状态准备。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `content` (`Any`)：正文内容。
+        2. `data` (`Any`)：待处理的原始或结构化数据。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         super().__init__()
 
         self._text: str = ""
@@ -63,7 +85,18 @@ class BaseCell(QtWidgets.QTableWidgetItem):
 
     def set_content(self, content: Any, data: Any) -> None:
         """
-        Set text content.
+        设置 `content` 相关配置或运行参数。
+        
+        用途说明：
+        1. 对内部状态进行更新，并维护相关数据一致性。
+        2. 如涉及联动依赖，应在本方法内完成必要同步。
+        
+        参数：
+        1. `content` (`Any`)：正文内容。
+        2. `data` (`Any`)：待处理的原始或结构化数据。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         self._text = str(content)
         self._data = data
@@ -72,13 +105,33 @@ class BaseCell(QtWidgets.QTableWidgetItem):
 
     def get_data(self) -> Any:
         """
-        Get data object.
+        获取 `data` 相关对象或计算结果。
+        
+        用途说明：
+        1. 从当前对象缓存或下游组件中读取目标数据。
+        2. 默认应保持无副作用，便于上层安全重复调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `Any`：返回该方法计算或查询得到的结果。
         """
         return self._data
 
     def __lt__(self, other: "BaseCell") -> bool:        # type: ignore
         """
-        Sort by text content.
+        执行 `__lt__` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `other` (`'BaseCell'`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `bool`：表示操作是否成功或条件是否成立。
         """
         result: bool = self._text < other._text
         return result
@@ -86,16 +139,49 @@ class BaseCell(QtWidgets.QTableWidgetItem):
 
 class EnumCell(BaseCell):
     """
-    Cell used for showing enum data.
+    枚举值单元格，把枚举对象显示为可读文本。
+    
+    职责：
+    1. 将原始字段值转换为适合交易界面的展示格式。
+    2. 根据业务语义设置颜色、对齐和排序行为。
+    3. 提升高频刷新场景下的信息可读性。
+    
+    协作：
+    1. 由各类 `Monitor` 在填充表格行时创建与更新。
+    2. 和事件驱动更新机制配合进行增量刷新。
     """
 
     def __init__(self, content: Enum, data: Any) -> None:
-        """"""
+        """
+        初始化实例，完成依赖绑定与基础状态准备。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `content` (`Enum`)：正文内容。
+        2. `data` (`Any`)：待处理的原始或结构化数据。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         super().__init__(content, data)
 
     def set_content(self, content: Any, data: Any) -> None:
         """
-        Set text using enum.constant.value.
+        设置 `content` 相关配置或运行参数。
+        
+        用途说明：
+        1. 对内部状态进行更新，并维护相关数据一致性。
+        2. 如涉及联动依赖，应在本方法内完成必要同步。
+        
+        参数：
+        1. `content` (`Any`)：正文内容。
+        2. `data` (`Any`)：待处理的原始或结构化数据。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         if content:
             super().set_content(content.value, data)
@@ -103,16 +189,49 @@ class EnumCell(BaseCell):
 
 class DirectionCell(EnumCell):
     """
-    Cell used for showing direction data.
+    方向单元格，按多空方向设置文本颜色与显示样式。
+    
+    职责：
+    1. 将原始字段值转换为适合交易界面的展示格式。
+    2. 根据业务语义设置颜色、对齐和排序行为。
+    3. 提升高频刷新场景下的信息可读性。
+    
+    协作：
+    1. 由各类 `Monitor` 在填充表格行时创建与更新。
+    2. 和事件驱动更新机制配合进行增量刷新。
     """
 
     def __init__(self, content: Enum, data: Any) -> None:
-        """"""
+        """
+        初始化实例，完成依赖绑定与基础状态准备。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `content` (`Enum`)：正文内容。
+        2. `data` (`Any`)：待处理的原始或结构化数据。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         super().__init__(content, data)
 
     def set_content(self, content: Any, data: Any) -> None:
         """
-        Cell color is set according to direction.
+        设置 `content` 相关配置或运行参数。
+        
+        用途说明：
+        1. 对内部状态进行更新，并维护相关数据一致性。
+        2. 如涉及联动依赖，应在本方法内完成必要同步。
+        
+        参数：
+        1. `content` (`Any`)：正文内容。
+        2. `data` (`Any`)：待处理的原始或结构化数据。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         super().set_content(content, data)
 
@@ -124,11 +243,33 @@ class DirectionCell(EnumCell):
 
 class BidCell(BaseCell):
     """
-    Cell used for showing bid price and volume.
+    买价单元格，突出买盘报价信息。
+    
+    职责：
+    1. 将原始字段值转换为适合交易界面的展示格式。
+    2. 根据业务语义设置颜色、对齐和排序行为。
+    3. 提升高频刷新场景下的信息可读性。
+    
+    协作：
+    1. 由各类 `Monitor` 在填充表格行时创建与更新。
+    2. 和事件驱动更新机制配合进行增量刷新。
     """
 
     def __init__(self, content: Any, data: Any) -> None:
-        """"""
+        """
+        初始化实例，完成依赖绑定与基础状态准备。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `content` (`Any`)：正文内容。
+        2. `data` (`Any`)：待处理的原始或结构化数据。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         super().__init__(content, data)
 
         self.setForeground(COLOR_BID)
@@ -136,11 +277,33 @@ class BidCell(BaseCell):
 
 class AskCell(BaseCell):
     """
-    Cell used for showing ask price and volume.
+    卖价单元格，突出卖盘报价信息。
+    
+    职责：
+    1. 将原始字段值转换为适合交易界面的展示格式。
+    2. 根据业务语义设置颜色、对齐和排序行为。
+    3. 提升高频刷新场景下的信息可读性。
+    
+    协作：
+    1. 由各类 `Monitor` 在填充表格行时创建与更新。
+    2. 和事件驱动更新机制配合进行增量刷新。
     """
 
     def __init__(self, content: Any, data: Any) -> None:
-        """"""
+        """
+        初始化实例，完成依赖绑定与基础状态准备。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `content` (`Any`)：正文内容。
+        2. `data` (`Any`)：待处理的原始或结构化数据。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         super().__init__(content, data)
 
         self.setForeground(COLOR_ASK)
@@ -148,17 +311,49 @@ class AskCell(BaseCell):
 
 class PnlCell(BaseCell):
     """
-    Cell used for showing pnl data.
+    盈亏单元格，按正负收益着色显示。
+    
+    职责：
+    1. 将原始字段值转换为适合交易界面的展示格式。
+    2. 根据业务语义设置颜色、对齐和排序行为。
+    3. 提升高频刷新场景下的信息可读性。
+    
+    协作：
+    1. 由各类 `Monitor` 在填充表格行时创建与更新。
+    2. 和事件驱动更新机制配合进行增量刷新。
     """
 
     def __init__(self, content: Any, data: Any) -> None:
-        """"""
+        """
+        初始化实例，完成依赖绑定与基础状态准备。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `content` (`Any`)：正文内容。
+        2. `data` (`Any`)：待处理的原始或结构化数据。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         super().__init__(content, data)
 
     def set_content(self, content: Any, data: Any) -> None:
         """
-        Cell color is set based on whether pnl is
-        positive or negative.
+        设置 `content` 相关配置或运行参数。
+        
+        用途说明：
+        1. 对内部状态进行更新，并维护相关数据一致性。
+        2. 如涉及联动依赖，应在本方法内完成必要同步。
+        
+        参数：
+        1. `content` (`Any`)：正文内容。
+        2. `data` (`Any`)：待处理的原始或结构化数据。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         super().set_content(content, data)
 
@@ -170,17 +365,52 @@ class PnlCell(BaseCell):
 
 class TimeCell(BaseCell):
     """
-    Cell used for showing time string from datetime object.
+    时间单元格，格式化时分秒显示。
+    
+    职责：
+    1. 将原始字段值转换为适合交易界面的展示格式。
+    2. 根据业务语义设置颜色、对齐和排序行为。
+    3. 提升高频刷新场景下的信息可读性。
+    
+    协作：
+    1. 由各类 `Monitor` 在填充表格行时创建与更新。
+    2. 和事件驱动更新机制配合进行增量刷新。
     """
 
     local_tz = ZoneInfo(get_localzone_name())
 
     def __init__(self, content: Any, data: Any) -> None:
-        """"""
+        """
+        初始化实例，完成依赖绑定与基础状态准备。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `content` (`Any`)：正文内容。
+        2. `data` (`Any`)：待处理的原始或结构化数据。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         super().__init__(content, data)
 
     def set_content(self, content: datetime | None, data: Any) -> None:
-        """"""
+        """
+        设置 `content` 相关配置或运行参数。
+        
+        用途说明：
+        1. 对内部状态进行更新，并维护相关数据一致性。
+        2. 如涉及联动依赖，应在本方法内完成必要同步。
+        
+        参数：
+        1. `content` (`datetime | None`)：正文内容。
+        2. `data` (`Any`)：待处理的原始或结构化数据。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         if content is None:
             return
 
@@ -199,15 +429,50 @@ class TimeCell(BaseCell):
 
 class DateCell(BaseCell):
     """
-    Cell used for showing date string from datetime object.
+    日期单元格，格式化日期显示。
+    
+    职责：
+    1. 将原始字段值转换为适合交易界面的展示格式。
+    2. 根据业务语义设置颜色、对齐和排序行为。
+    3. 提升高频刷新场景下的信息可读性。
+    
+    协作：
+    1. 由各类 `Monitor` 在填充表格行时创建与更新。
+    2. 和事件驱动更新机制配合进行增量刷新。
     """
 
     def __init__(self, content: Any, data: Any) -> None:
-        """"""
+        """
+        初始化实例，完成依赖绑定与基础状态准备。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `content` (`Any`)：正文内容。
+        2. `data` (`Any`)：待处理的原始或结构化数据。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         super().__init__(content, data)
 
     def set_content(self, content: Any, data: Any) -> None:
-        """"""
+        """
+        设置 `content` 相关配置或运行参数。
+        
+        用途说明：
+        1. 对内部状态进行更新，并维护相关数据一致性。
+        2. 如涉及联动依赖，应在本方法内完成必要同步。
+        
+        参数：
+        1. `content` (`Any`)：正文内容。
+        2. `data` (`Any`)：待处理的原始或结构化数据。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         if content is None:
             return
 
@@ -217,18 +482,49 @@ class DateCell(BaseCell):
 
 class MsgCell(BaseCell):
     """
-    Cell used for showing msg data.
+    消息单元格，用于日志或提示文本展示。
+    
+    职责：
+    1. 将原始字段值转换为适合交易界面的展示格式。
+    2. 根据业务语义设置颜色、对齐和排序行为。
+    3. 提升高频刷新场景下的信息可读性。
+    
+    协作：
+    1. 由各类 `Monitor` 在填充表格行时创建与更新。
+    2. 和事件驱动更新机制配合进行增量刷新。
     """
 
     def __init__(self, content: str, data: Any) -> None:
-        """"""
+        """
+        初始化实例，完成依赖绑定与基础状态准备。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `content` (`str`)：正文内容。
+        2. `data` (`Any`)：待处理的原始或结构化数据。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         super().__init__(content, data)
         self.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
 
 
 class BaseMonitor(QtWidgets.QTableWidget):
     """
-    Monitor data update.
+    监控表格基类，封装事件订阅、表格列定义和行更新机制。
+    
+    职责：
+    1. 订阅对应事件并把数据对象映射为表格行。
+    2. 在高频更新场景下执行增量刷新，避免全表重绘。
+    3. 为人工交易提供实时可视化状态视图。
+    
+    协作：
+    1. 与 `EventEngine` 事件流直接连接。
+    2. 与 `MainEngine/OmsEngine` 提供的数据对象协同。
     """
 
     event_type: str = ""
@@ -239,7 +535,20 @@ class BaseMonitor(QtWidgets.QTableWidget):
     signal: QtCore.Signal = QtCore.Signal(Event)
 
     def __init__(self, main_engine: MainEngine, event_engine: EventEngine) -> None:
-        """"""
+        """
+        初始化实例，完成依赖绑定与基础状态准备。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `main_engine` (`MainEngine`)：输入参数，用于控制该方法的处理行为。
+        2. `event_engine` (`EventEngine`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         super().__init__()
 
         self.main_engine: MainEngine = main_engine
@@ -251,13 +560,35 @@ class BaseMonitor(QtWidgets.QTableWidget):
         self.register_event()
 
     def init_ui(self) -> None:
-        """"""
+        """
+        执行 `init_ui` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         self.init_table()
         self.init_menu()
 
     def init_table(self) -> None:
         """
-        Initialize table.
+        执行 `init_table` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         self.setColumnCount(len(self.headers))
 
@@ -271,7 +602,17 @@ class BaseMonitor(QtWidgets.QTableWidget):
 
     def init_menu(self) -> None:
         """
-        Create right click menu.
+        执行 `init_menu` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         self.menu: QtWidgets.QMenu = QtWidgets.QMenu(self)
 
@@ -285,7 +626,17 @@ class BaseMonitor(QtWidgets.QTableWidget):
 
     def register_event(self) -> None:
         """
-        Register event handler into event engine.
+        执行 `register_event` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         if self.event_type:
             self.signal.connect(self.process_event)
@@ -293,7 +644,17 @@ class BaseMonitor(QtWidgets.QTableWidget):
 
     def process_event(self, event: Event) -> None:
         """
-        Process new data from event and update into table.
+        处理 `event` 相关业务逻辑。
+        
+        用途说明：
+        1. 作为事件驱动入口，消费输入并执行核心处理。
+        2. 按需更新缓存、发布事件或触发后续流程。
+        
+        参数：
+        1. `event` (`Event`)：事件对象，通常通过 `event.data` 携带业务数据。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         # Disable sorting to prevent unwanted error.
         if self.sorting:
@@ -318,7 +679,17 @@ class BaseMonitor(QtWidgets.QTableWidget):
 
     def insert_new_row(self, data: Any) -> None:
         """
-        Insert a new row at the top of table.
+        执行 `insert_new_row` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `data` (`Any`)：待处理的原始或结构化数据。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         self.insertRow(0)
 
@@ -339,7 +710,17 @@ class BaseMonitor(QtWidgets.QTableWidget):
 
     def update_old_row(self, data: Any) -> None:
         """
-        Update an old row in table.
+        更新 `old_row` 相关状态与缓存。
+        
+        用途说明：
+        1. 对内部状态进行更新，并维护相关数据一致性。
+        2. 如涉及联动依赖，应在本方法内完成必要同步。
+        
+        参数：
+        1. `data` (`Any`)：待处理的原始或结构化数据。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         key: str = data.__getattribute__(self.data_key)
         row_cells = self.cells[key]
@@ -350,13 +731,33 @@ class BaseMonitor(QtWidgets.QTableWidget):
 
     def resize_columns(self) -> None:
         """
-        Resize all columns according to contents.
+        执行 `resize_columns` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         self.horizontalHeader().resizeSections(QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
 
     def save_csv(self) -> None:
         """
-        Save table data into a csv file
+        保存 `csv` 相关内容。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         path, __ = QtWidgets.QFileDialog.getSaveFileName(
             self, _("保存数据"), "", "CSV(*.csv)")
@@ -385,17 +786,51 @@ class BaseMonitor(QtWidgets.QTableWidget):
 
     def contextMenuEvent(self, event: QtGui.QContextMenuEvent) -> None:
         """
-        Show menu with right click.
+        执行 `contextMenuEvent` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `event` (`QtGui.QContextMenuEvent`)：事件对象，通常通过 `event.data` 携带业务数据。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         self.menu.popup(QtGui.QCursor.pos())
 
     def save_setting(self) -> None:
-        """"""
+        """
+        保存 `setting` 相关内容。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         settings: QtCore.QSettings = QtCore.QSettings(self.__class__.__name__, "custom")
         settings.setValue("column_state", self.horizontalHeader().saveState())
 
     def load_setting(self) -> None:
-        """"""
+        """
+        加载 `setting` 相关资源。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         settings: QtCore.QSettings = QtCore.QSettings(self.__class__.__name__, "custom")
         column_state = settings.value("column_state")
 
@@ -406,7 +841,16 @@ class BaseMonitor(QtWidgets.QTableWidget):
 
 class TickMonitor(BaseMonitor):
     """
-    Monitor for tick data.
+    行情监控面板，实时展示最新 Tick 数据。
+    
+    职责：
+    1. 订阅对应事件并把数据对象映射为表格行。
+    2. 在高频更新场景下执行增量刷新，避免全表重绘。
+    3. 为人工交易提供实时可视化状态视图。
+    
+    协作：
+    1. 与 `EventEngine` 事件流直接连接。
+    2. 与 `MainEngine/OmsEngine` 提供的数据对象协同。
     """
 
     event_type: str = EVENT_TICK
@@ -433,7 +877,16 @@ class TickMonitor(BaseMonitor):
 
 class LogMonitor(BaseMonitor):
     """
-    Monitor for log data.
+    日志监控面板，展示系统与网关日志流。
+    
+    职责：
+    1. 订阅对应事件并把数据对象映射为表格行。
+    2. 在高频更新场景下执行增量刷新，避免全表重绘。
+    3. 为人工交易提供实时可视化状态视图。
+    
+    协作：
+    1. 与 `EventEngine` 事件流直接连接。
+    2. 与 `MainEngine/OmsEngine` 提供的数据对象协同。
     """
 
     event_type: str = EVENT_LOG
@@ -449,7 +902,16 @@ class LogMonitor(BaseMonitor):
 
 class TradeMonitor(BaseMonitor):
     """
-    Monitor for trade data.
+    成交监控面板，展示每笔成交回报。
+    
+    职责：
+    1. 订阅对应事件并把数据对象映射为表格行。
+    2. 在高频更新场景下执行增量刷新，避免全表重绘。
+    3. 为人工交易提供实时可视化状态视图。
+    
+    协作：
+    1. 与 `EventEngine` 事件流直接连接。
+    2. 与 `MainEngine/OmsEngine` 提供的数据对象协同。
     """
 
     event_type: str = EVENT_TRADE
@@ -472,7 +934,16 @@ class TradeMonitor(BaseMonitor):
 
 class OrderMonitor(BaseMonitor):
     """
-    Monitor for order data.
+    委托监控面板，展示订单状态变化并支持操作。
+    
+    职责：
+    1. 订阅对应事件并把数据对象映射为表格行。
+    2. 在高频更新场景下执行增量刷新，避免全表重绘。
+    3. 为人工交易提供实时可视化状态视图。
+    
+    协作：
+    1. 与 `EventEngine` 事件流直接连接。
+    2. 与 `MainEngine/OmsEngine` 提供的数据对象协同。
     """
 
     event_type: str = EVENT_ORDER
@@ -497,7 +968,17 @@ class OrderMonitor(BaseMonitor):
 
     def init_ui(self) -> None:
         """
-        Connect signal.
+        执行 `init_ui` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         super().init_ui()
 
@@ -506,7 +987,17 @@ class OrderMonitor(BaseMonitor):
 
     def cancel_order(self, cell: BaseCell) -> None:
         """
-        Cancel order if cell double clicked.
+        执行 `order` 撤销或取消操作。
+        
+        用途说明：
+        1. 与外部系统或底层组件交互，完成动作请求。
+        2. 处理成功与异常分支，确保状态可追踪。
+        
+        参数：
+        1. `cell` (`BaseCell`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         order: OrderData = cell.get_data()
         req: CancelRequest = order.create_cancel_request()
@@ -515,7 +1006,16 @@ class OrderMonitor(BaseMonitor):
 
 class PositionMonitor(BaseMonitor):
     """
-    Monitor for position data.
+    持仓监控面板，展示账户持仓明细。
+    
+    职责：
+    1. 订阅对应事件并把数据对象映射为表格行。
+    2. 在高频更新场景下执行增量刷新，避免全表重绘。
+    3. 为人工交易提供实时可视化状态视图。
+    
+    协作：
+    1. 与 `EventEngine` 事件流直接连接。
+    2. 与 `MainEngine/OmsEngine` 提供的数据对象协同。
     """
 
     event_type: str = EVENT_POSITION
@@ -537,7 +1037,16 @@ class PositionMonitor(BaseMonitor):
 
 class AccountMonitor(BaseMonitor):
     """
-    Monitor for account data.
+    账户监控面板，展示资金权益和可用余额。
+    
+    职责：
+    1. 订阅对应事件并把数据对象映射为表格行。
+    2. 在高频更新场景下执行增量刷新，避免全表重绘。
+    3. 为人工交易提供实时可视化状态视图。
+    
+    协作：
+    1. 与 `EventEngine` 事件流直接连接。
+    2. 与 `MainEngine/OmsEngine` 提供的数据对象协同。
     """
 
     event_type: str = EVENT_ACCOUNT
@@ -555,7 +1064,16 @@ class AccountMonitor(BaseMonitor):
 
 class QuoteMonitor(BaseMonitor):
     """
-    Monitor for quote data.
+    报价监控面板，展示双边报价状态。
+    
+    职责：
+    1. 订阅对应事件并把数据对象映射为表格行。
+    2. 在高频更新场景下执行增量刷新，避免全表重绘。
+    3. 为人工交易提供实时可视化状态视图。
+    
+    协作：
+    1. 与 `EventEngine` 事件流直接连接。
+    2. 与 `MainEngine/OmsEngine` 提供的数据对象协同。
     """
 
     event_type: str = EVENT_QUOTE
@@ -580,7 +1098,17 @@ class QuoteMonitor(BaseMonitor):
 
     def init_ui(self) -> None:
         """
-        Connect signal.
+        执行 `init_ui` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         super().init_ui()
 
@@ -589,7 +1117,17 @@ class QuoteMonitor(BaseMonitor):
 
     def cancel_quote(self, cell: BaseCell) -> None:
         """
-        Cancel quote if cell double clicked.
+        执行 `quote` 撤销或取消操作。
+        
+        用途说明：
+        1. 与外部系统或底层组件交互，完成动作请求。
+        2. 处理成功与异常分支，确保状态可追踪。
+        
+        参数：
+        1. `cell` (`BaseCell`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         quote: QuoteData = cell.get_data()
         req: CancelRequest = quote.create_cancel_request()
@@ -598,11 +1136,33 @@ class QuoteMonitor(BaseMonitor):
 
 class ConnectDialog(QtWidgets.QDialog):
     """
-    Start connection of a certain gateway.
+    `ConnectDialog` 是网关连接配置弹窗，用于输入并提交网关登录参数。
+    
+    职责：
+    1. 动态生成配置表单并收集用户输入。
+    2. 调用主引擎触发目标网关连接。
+    3. 对连接参数进行基础校验和持久化。
+    
+    协作：
+    1. 由 `MainWindow` 统一创建与管理。
+    2. 与 `MainEngine` 交互执行真实业务动作。
     """
 
     def __init__(self, main_engine: MainEngine, gateway_name: str) -> None:
-        """"""
+        """
+        初始化实例，完成依赖绑定与基础状态准备。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `main_engine` (`MainEngine`)：输入参数，用于控制该方法的处理行为。
+        2. `gateway_name` (`str`)：网关名称，用于定位目标网关实例。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         super().__init__()
 
         self.main_engine: MainEngine = main_engine
@@ -614,7 +1174,19 @@ class ConnectDialog(QtWidgets.QDialog):
         self.init_ui()
 
     def init_ui(self) -> None:
-        """"""
+        """
+        执行 `init_ui` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         self.setWindowTitle(_("连接{}").format(self.gateway_name))
 
         # Default setting provides field name, field data type and field default value.
@@ -666,7 +1238,17 @@ class ConnectDialog(QtWidgets.QDialog):
 
     def connect_gateway(self) -> None:
         """
-        Get setting value from line edits and connect the gateway.
+        执行 `connect_gateway` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         setting: dict = {}
 
@@ -691,13 +1273,35 @@ class ConnectDialog(QtWidgets.QDialog):
 
 class TradingWidget(QtWidgets.QWidget):
     """
-    General manual trading widget.
+    `TradingWidget` 是手工交易面板，提供合约选择、下单、撤单与报价操作。
+    
+    职责：
+    1. 提供统一的手工交易操作入口。
+    2. 把用户输入转换为标准请求对象并调用主引擎。
+    3. 联动行情和委托状态反馈交易结果。
+    
+    协作：
+    1. 由 `MainWindow` 统一创建与管理。
+    2. 与 `MainEngine` 交互执行真实业务动作。
     """
 
     signal_tick: QtCore.Signal = QtCore.Signal(Event)
 
     def __init__(self, main_engine: MainEngine, event_engine: EventEngine) -> None:
-        """"""
+        """
+        初始化实例，完成依赖绑定与基础状态准备。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `main_engine` (`MainEngine`)：输入参数，用于控制该方法的处理行为。
+        2. `event_engine` (`EventEngine`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         super().__init__()
 
         self.main_engine: MainEngine = main_engine
@@ -710,7 +1314,19 @@ class TradingWidget(QtWidgets.QWidget):
         self.register_event()
 
     def init_ui(self) -> None:
-        """"""
+        """
+        执行 `init_ui` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         self.setFixedWidth(300)
 
         # Trading function area
@@ -845,7 +1461,18 @@ class TradingWidget(QtWidgets.QWidget):
         alignment: int = QtCore.Qt.AlignmentFlag.AlignLeft
     ) -> QtWidgets.QLabel:
         """
-        Create label with certain font color.
+        执行 `create_label` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `color` (`str`)，默认值 `''`：输入参数，用于控制该方法的处理行为。
+        2. `alignment` (`int`)，默认值 `QtCore.Qt.AlignmentFlag.AlignLeft`：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `QtWidgets.QLabel`：返回该方法计算或查询得到的结果。
         """
         label: QtWidgets.QLabel = QtWidgets.QLabel()
         if color:
@@ -854,12 +1481,36 @@ class TradingWidget(QtWidgets.QWidget):
         return label
 
     def register_event(self) -> None:
-        """"""
+        """
+        执行 `register_event` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         self.signal_tick.connect(self.process_tick_event)
         self.event_engine.register(EVENT_TICK, self.signal_tick.emit)
 
     def process_tick_event(self, event: Event) -> None:
-        """"""
+        """
+        处理 `tick_event` 相关业务逻辑。
+        
+        用途说明：
+        1. 作为事件驱动入口，消费输入并执行核心处理。
+        2. 按需更新缓存、发布事件或触发后续流程。
+        
+        参数：
+        1. `event` (`Event`)：事件对象，通常通过 `event.data` 携带业务数据。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         tick: TickData = event.data
         if tick.vt_symbol != self.vt_symbol:
             return
@@ -902,7 +1553,17 @@ class TradingWidget(QtWidgets.QWidget):
 
     def set_vt_symbol(self) -> None:
         """
-        Set the tick depth data to monitor by vt_symbol.
+        设置 `vt_symbol` 相关配置或运行参数。
+        
+        用途说明：
+        1. 对内部状态进行更新，并维护相关数据一致性。
+        2. 如涉及联动依赖，应在本方法内完成必要同步。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         symbol: str = str(self.symbol_line.text())
         if not symbol:
@@ -945,7 +1606,17 @@ class TradingWidget(QtWidgets.QWidget):
 
     def clear_label_text(self) -> None:
         """
-        Clear text on all labels.
+        执行 `clear_label_text` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         self.lp_label.setText("")
         self.return_label.setText("")
@@ -976,7 +1647,17 @@ class TradingWidget(QtWidgets.QWidget):
 
     def send_order(self) -> None:
         """
-        Send new order manually.
+        发送 `order` 请求并处理返回结果。
+        
+        用途说明：
+        1. 与外部系统或底层组件交互，完成动作请求。
+        2. 处理成功与异常分支，确保状态可追踪。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         symbol: str = str(self.symbol_line.text())
         if not symbol:
@@ -1012,7 +1693,17 @@ class TradingWidget(QtWidgets.QWidget):
 
     def cancel_all(self) -> None:
         """
-        Cancel all active orders.
+        执行 `all` 撤销或取消操作。
+        
+        用途说明：
+        1. 与外部系统或底层组件交互，完成动作请求。
+        2. 处理成功与异常分支，确保状态可追踪。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         order_list: list[OrderData] = self.main_engine.get_all_active_orders()
         for order in order_list:
@@ -1020,7 +1711,19 @@ class TradingWidget(QtWidgets.QWidget):
             self.main_engine.cancel_order(req, order.gateway_name)
 
     def update_with_cell(self, cell: BaseCell) -> None:
-        """"""
+        """
+        更新 `with_cell` 相关状态与缓存。
+        
+        用途说明：
+        1. 对内部状态进行更新，并维护相关数据一致性。
+        2. 如涉及联动依赖，应在本方法内完成必要同步。
+        
+        参数：
+        1. `cell` (`BaseCell`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         data = cell.get_data()
 
         self.symbol_line.setText(data.symbol)
@@ -1052,12 +1755,31 @@ class TradingWidget(QtWidgets.QWidget):
 
 class ActiveOrderMonitor(OrderMonitor):
     """
-    Monitor which shows active order only.
+    活动委托监控面板，仅展示仍可撤销/可成交的委托。
+    
+    职责：
+    1. 订阅对应事件并把数据对象映射为表格行。
+    2. 在高频更新场景下执行增量刷新，避免全表重绘。
+    3. 为人工交易提供实时可视化状态视图。
+    
+    协作：
+    1. 与 `EventEngine` 事件流直接连接。
+    2. 与 `MainEngine/OmsEngine` 提供的数据对象协同。
     """
 
     def process_event(self, event: Event) -> None:
         """
-        Hides the row if order is not active.
+        处理 `event` 相关业务逻辑。
+        
+        用途说明：
+        1. 作为事件驱动入口，消费输入并执行核心处理。
+        2. 按需更新缓存、发布事件或触发后续流程。
+        
+        参数：
+        1. `event` (`Event`)：事件对象，通常通过 `event.data` 携带业务数据。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         super().process_event(event)
 
@@ -1073,7 +1795,16 @@ class ActiveOrderMonitor(OrderMonitor):
 
 class ContractManager(QtWidgets.QWidget):
     """
-    Query contract data available to trade in system.
+    `ContractManager` 是合约查询管理面板，用于检索和浏览合约元数据。
+    
+    职责：
+    1. 支持按代码、交易所等条件检索合约。
+    2. 展示合约交易规则和静态属性。
+    3. 为手工交易与策略配置提供查阅入口。
+    
+    协作：
+    1. 由 `MainWindow` 统一创建与管理。
+    2. 与 `MainEngine` 交互执行真实业务动作。
     """
 
     headers: dict[str, str] = {
@@ -1093,6 +1824,20 @@ class ContractManager(QtWidgets.QWidget):
     }
 
     def __init__(self, main_engine: MainEngine, event_engine: EventEngine) -> None:
+        """
+        初始化实例，完成依赖绑定与基础状态准备。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `main_engine` (`MainEngine`)：输入参数，用于控制该方法的处理行为。
+        2. `event_engine` (`EventEngine`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         super().__init__()
 
         self.main_engine: MainEngine = main_engine
@@ -1101,7 +1846,19 @@ class ContractManager(QtWidgets.QWidget):
         self.init_ui()
 
     def init_ui(self) -> None:
-        """"""
+        """
+        执行 `init_ui` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         self.setWindowTitle(_("合约查询"))
         self.resize(1000, 600)
 
@@ -1135,7 +1892,17 @@ class ContractManager(QtWidgets.QWidget):
 
     def show_contracts(self) -> None:
         """
-        Show contracts by symbol
+        执行 `show_contracts` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         flt: str = str(self.filter_line.text())
 
@@ -1171,11 +1938,33 @@ class ContractManager(QtWidgets.QWidget):
 
 class AboutDialog(QtWidgets.QDialog):
     """
-    Information about the trading platform.
+    `AboutDialog` 是关于弹窗，展示版本与项目信息。
+    
+    职责：
+    1. 展示版本、作者和项目链接等说明信息。
+    2. 提供运行环境与版权信息查看入口。
+    3. 作为帮助入口提升可运维性。
+    
+    协作：
+    1. 由 `MainWindow` 统一创建与管理。
+    2. 与 `MainEngine` 交互执行真实业务动作。
     """
 
     def __init__(self, main_engine: MainEngine, event_engine: EventEngine) -> None:
-        """"""
+        """
+        初始化实例，完成依赖绑定与基础状态准备。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `main_engine` (`MainEngine`)：输入参数，用于控制该方法的处理行为。
+        2. `event_engine` (`EventEngine`)：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         super().__init__()
 
         self.main_engine: MainEngine = main_engine
@@ -1184,7 +1973,19 @@ class AboutDialog(QtWidgets.QDialog):
         self.init_ui()
 
     def init_ui(self) -> None:
-        """"""
+        """
+        执行 `init_ui` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         self.setWindowTitle(_("关于VeighNa Trader"))
 
         from ... import __version__ as vnpy_version
@@ -1218,11 +2019,32 @@ class AboutDialog(QtWidgets.QDialog):
 
 class GlobalDialog(QtWidgets.QDialog):
     """
-    Start connection of a certain gateway.
+    `GlobalDialog` 是全局配置弹窗，用于修改系统级参数设置。
+    
+    职责：
+    1. 展示并编辑全局配置项。
+    2. 将修改结果写回配置并通知相关模块。
+    3. 为日志、邮件、界面等公共行为提供统一配置入口。
+    
+    协作：
+    1. 由 `MainWindow` 统一创建与管理。
+    2. 与 `MainEngine` 交互执行真实业务动作。
     """
 
     def __init__(self) -> None:
-        """"""
+        """
+        初始化实例，完成依赖绑定与基础状态准备。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         super().__init__()
 
         self.widgets: dict[str, tuple[QtWidgets.QLineEdit, type]] = {}
@@ -1230,7 +2052,19 @@ class GlobalDialog(QtWidgets.QDialog):
         self.init_ui()
 
     def init_ui(self) -> None:
-        """"""
+        """
+        执行 `init_ui` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         self.setWindowTitle(_("全局配置"))
         self.setMinimumWidth(800)
 
@@ -1264,7 +2098,17 @@ class GlobalDialog(QtWidgets.QDialog):
 
     def update_setting(self) -> None:
         """
-        Get setting value from line edits and update global setting file.
+        更新 `setting` 相关状态与缓存。
+        
+        用途说明：
+        1. 对内部状态进行更新，并维护相关数据一致性。
+        2. 如涉及联动依赖，应在本方法内完成必要同步。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
         """
         settings: dict = {}
         for field_name, tp in self.widgets.items():

@@ -22,7 +22,12 @@ from .locale import _
 
 def extract_vt_symbol(vt_symbol: str) -> tuple[str, Exchange]:
     """
-    :return: (symbol, exchange)
+    拆分统一合约键 `vt_symbol`。
+
+    `vt_symbol` 在 vn.py 中的标准格式是 `symbol.exchange`，
+    例如 `rb2405.SHFE`。本函数把它还原成：
+    1. 原始合约代码 `symbol`
+    2. 交易所枚举 `Exchange`
     """
     symbol, exchange_str = vt_symbol.rsplit(".", 1)
     return symbol, Exchange(exchange_str)
@@ -30,28 +35,36 @@ def extract_vt_symbol(vt_symbol: str) -> tuple[str, Exchange]:
 
 def generate_vt_symbol(symbol: str, exchange: Exchange) -> str:
     """
-    return vt_symbol
+    生成统一合约键 `vt_symbol`。
+
+    该键是系统内跨模块引用合约的主键（行情、委托、持仓都会用到），
+    格式固定为 `symbol.exchange`。
     """
     return f"{symbol}.{exchange.value}"
 
 
 def _get_trader_dir(temp_name: str) -> tuple[Path, Path]:
     """
-    Get path where trader is running in.
+    确定交易终端的工作目录和临时数据目录。
+
+    查找顺序：
+    1. 先看当前启动目录下是否已有 `.vntrader`（便于项目内便携部署）
+    2. 若没有，则退回用户 Home 目录下的 `.vntrader`（默认方案）
+
+    返回 `(TRADER_DIR, TEMP_DIR)`，后续配置文件、缓存、日志都依赖这两个路径。
     """
     cwd: Path = Path.cwd()
     temp_path: Path = cwd.joinpath(temp_name)
 
-    # If .vntrader folder exists in current working directory,
-    # then use it as trader running path.
+    # 优先使用当前目录下已有的 .vntrader，便于随项目一起管理运行数据。
     if temp_path.exists():
         return cwd, temp_path
 
-    # Otherwise use home path of system.
+    # 当前目录不存在时，回退到用户 Home 目录。
     home_path: Path = Path.home()
     temp_path = home_path.joinpath(temp_name)
 
-    # Create .vntrader folder under home path if not exist.
+    # Home 目录下也不存在则自动创建。
     if not temp_path.exists():
         temp_path.mkdir()
 
@@ -64,14 +77,18 @@ sys.path.append(str(TRADER_DIR))
 
 def get_file_path(filename: str) -> Path:
     """
-    Get path for temp file with filename.
+    返回 `.vntrader` 目录下某个文件的绝对路径。
+
+    用于统一定位配置文件、缓存文件等运行时落盘文件。
     """
     return TEMP_DIR.joinpath(filename)
 
 
 def get_folder_path(folder_name: str) -> Path:
     """
-    Get path for temp folder with folder name.
+    返回 `.vntrader` 下指定子目录路径；目录不存在会自动创建。
+
+    常用于存放数据库、回测结果、导出报表等按目录组织的数据。
     """
     folder_path: Path = TEMP_DIR.joinpath(folder_name)
     if not folder_path.exists():
@@ -81,7 +98,9 @@ def get_folder_path(folder_name: str) -> Path:
 
 def get_icon_path(filepath: str, ico_name: str) -> str:
     """
-    Get path for icon file with ico name.
+    按 UI 模块文件路径推导图标文件路径。
+
+    约定图标放在模块同级 `ico/` 子目录，便于应用模块自带资源。
     """
     ui_path: Path = Path(filepath).parent
     icon_path: Path = ui_path.joinpath("ico", ico_name)
@@ -90,7 +109,10 @@ def get_icon_path(filepath: str, ico_name: str) -> str:
 
 def load_json(filename: str) -> dict:
     """
-    Load data from json file in temp path.
+    从 `.vntrader` 目录读取 JSON 文件。
+
+    若文件不存在，会先创建一个空 JSON 文件并返回空字典，
+    这样上层调用无需额外处理“首次启动文件缺失”场景。
     """
     filepath: Path = get_file_path(filename)
 
@@ -105,7 +127,9 @@ def load_json(filename: str) -> dict:
 
 def save_json(filename: str, data: dict) -> None:
     """
-    Save data into json file in temp path.
+    把数据写入 `.vntrader` 下的 JSON 文件。
+
+    采用 UTF-8 + pretty print，方便手动查看和排查配置问题。
     """
     filepath: Path = get_file_path(filename)
     with open(filepath, mode="w+", encoding="UTF-8") as f:
@@ -119,7 +143,9 @@ def save_json(filename: str, data: dict) -> None:
 
 def round_to(value: float, target: float) -> float:
     """
-    Round price to price tick value.
+    按最小变动单位四舍五入。
+
+    典型用于把价格对齐到合约 `pricetick`，避免下单价格精度不合法。
     """
     decimal_value: Decimal = Decimal(str(value))
     decimal_target: Decimal = Decimal(str(target))
@@ -129,7 +155,9 @@ def round_to(value: float, target: float) -> float:
 
 def floor_to(value: float, target: float) -> float:
     """
-    Similar to math.floor function, but to target float number.
+    按最小变动单位向下取整。
+
+    常用于保守定价：保证结果不高于输入值，且符合交易所跳价规则。
     """
     decimal_value: Decimal = Decimal(str(value))
     decimal_target: Decimal = Decimal(str(target))
@@ -139,7 +167,9 @@ def floor_to(value: float, target: float) -> float:
 
 def ceil_to(value: float, target: float) -> float:
     """
-    Similar to math.ceil function, but to target float number.
+    按最小变动单位向上取整。
+
+    常用于积极定价：保证结果不低于输入值，且符合交易所跳价规则。
     """
     decimal_value: Decimal = Decimal(str(value))
     decimal_target: Decimal = Decimal(str(target))
@@ -149,7 +179,10 @@ def ceil_to(value: float, target: float) -> float:
 
 def get_digits(value: float) -> int:
     """
-    Get number of digits after decimal point.
+    计算浮点数需要保留的小数位数。
+
+    支持普通小数和科学计数法（如 `1e-5`），
+    常用于界面格式化和价格精度推导。
     """
     value_str: str = str(value)
 
@@ -165,12 +198,10 @@ def get_digits(value: float) -> int:
 
 class BarGenerator:
     """
-    For:
-    1. generating 1 minute bar data from tick data
-    2. generating x minute bar/x hour bar data from 1 minute data
-    Notice:
-    1. for x minute bar, x must be able to divide 60: 2, 3, 5, 6, 10, 15, 20, 30
-    2. for x hour bar, x can be any number
+    K线合成器。
+    
+    用于把 Tick 或 1分钟K 线聚合成更高周期 K 线（分钟/小时/日），
+    并在周期完成时通过回调把结果推给策略。
     """
 
     def __init__(
@@ -181,7 +212,11 @@ class BarGenerator:
         interval: Interval = Interval.MINUTE,
         daily_end: time | None = None
     ) -> None:
-        """Constructor"""
+        """
+        初始化K线合成参数与回调。
+        
+        `on_bar` 接收1分钟K，`on_window_bar` 接收目标周期K。
+        """
         self.bar: BarData | None = None
         self.on_bar: Callable = on_bar
 
@@ -203,7 +238,9 @@ class BarGenerator:
 
     def update_tick(self, tick: TickData) -> None:
         """
-        Update new tick data into generator.
+        输入最新 Tick 并更新当前分钟K。
+        
+        分钟切换时会先回调上一根1分钟K，再开启新分钟。
         """
         new_minute: bool = False
 
@@ -261,7 +298,7 @@ class BarGenerator:
 
     def update_bar(self, bar: BarData) -> None:
         """
-        Update 1 minute bar into generator
+        把 1分钟K 继续聚合到目标周期窗口（分钟/小时/日）。
         """
         if self.interval == Interval.MINUTE:
             self.update_bar_minute_window(bar)
@@ -271,7 +308,11 @@ class BarGenerator:
             self.update_bar_daily_window(bar)
 
     def update_bar_minute_window(self, bar: BarData) -> None:
-        """"""
+        """
+        把分钟K合成为 N 分钟窗口。
+        
+        窗口满时通过 `on_window_bar` 输出。
+        """
         # If not inited, create window bar object
         if not self.window_bar:
             dt: datetime = bar.datetime.replace(second=0, microsecond=0)
@@ -309,7 +350,9 @@ class BarGenerator:
             self.window_bar = None
 
     def update_bar_hour_window(self, bar: BarData) -> None:
-        """"""
+        """
+        把分钟K合成为小时K，并进一步按 `window` 聚合。
+        """
         # If not inited, create window bar object
         if not self.hour_bar:
             dt: datetime = bar.datetime.replace(minute=0, second=0, microsecond=0)
@@ -388,7 +431,11 @@ class BarGenerator:
             self.on_hour_bar(finished_bar)
 
     def on_hour_bar(self, bar: BarData) -> None:
-        """"""
+        """
+        处理已完成小时K。
+        
+        当 `window>1` 时继续拼接成多小时K。
+        """
         if self.window == 1:
             if self.on_window_bar:
                 self.on_window_bar(bar)
@@ -428,7 +475,11 @@ class BarGenerator:
                 self.window_bar = None
 
     def update_bar_daily_window(self, bar: BarData) -> None:
-        """"""
+        """
+        把分钟K聚合为日K。
+        
+        到达 `daily_end` 指定时间后输出当日K。
+        """
         # If not inited, create daily bar object
         if not self.daily_bar:
             self.daily_bar = BarData(
@@ -473,7 +524,9 @@ class BarGenerator:
 
     def generate(self) -> BarData | None:
         """
-        Generate the bar data and call callback immediately.
+        强制结束当前分钟并立即产出一根1分钟K。
+        
+        常用于收盘或数据流结束时补齐最后一根K。
         """
         bar: BarData | None = self.bar
 
@@ -487,13 +540,16 @@ class BarGenerator:
 
 class ArrayManager:
     """
-    For:
-    1. time series container of bar data
-    2. calculating technical indicator value
+    指标计算缓存器。
+    
+    维护固定窗口的 OHLCV 序列，并封装 TA-Lib 指标接口。
+    策略每来一根新K线调用 `update_bar`，随后可直接计算指标。
     """
 
     def __init__(self, size: int = 100) -> None:
-        """Constructor"""
+        """
+        初始化固定窗口大小和各价格序列缓存数组。
+        """
         self.count: int = 0
         self.size: int = size
         self.inited: bool = False
@@ -508,7 +564,9 @@ class ArrayManager:
 
     def update_bar(self, bar: BarData) -> None:
         """
-        Update new bar data into array manager.
+        写入最新K线并左移窗口。
+        
+        当累计数量达到窗口长度后，`inited` 置为 True。
         """
         self.count += 1
         if not self.inited and self.count >= self.size:
@@ -533,59 +591,73 @@ class ArrayManager:
     @property
     def open(self) -> np.ndarray:
         """
-        Get open price time series.
+        返回当前窗口的开盘价序列。
         """
         return self.open_array
 
     @property
     def high(self) -> np.ndarray:
         """
-        Get high price time series.
+        返回当前窗口的最高价序列。
         """
         return self.high_array
 
     @property
     def low(self) -> np.ndarray:
         """
-        Get low price time series.
+        返回当前窗口的最低价序列。
         """
         return self.low_array
 
     @property
     def close(self) -> np.ndarray:
         """
-        Get close price time series.
+        返回当前窗口的收盘价序列。
         """
         return self.close_array
 
     @property
     def volume(self) -> np.ndarray:
         """
-        Get trading volume time series.
+        返回当前窗口的成交量序列。
         """
         return self.volume_array
 
     @property
     def turnover(self) -> np.ndarray:
         """
-        Get trading turnover time series.
+        返回当前窗口的成交额序列。
         """
         return self.turnover_array
 
     @property
     def open_interest(self) -> np.ndarray:
         """
-        Get trading volume time series.
+        返回当前窗口的持仓量序列。
         """
         return self.open_interest_array
 
     @overload
-    def sma(self, n: int, array: Literal[False] = False) -> float: ...
+    def sma(self, n: int, array: Literal[False] = False) -> float:
+        """
+        `sma` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def sma(self, n: int, array: Literal[True]) -> np.ndarray: ...
+    def sma(self, n: int, array: Literal[True]) -> np.ndarray:
+        """
+        `sma` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def sma(self, n: int, array: bool = False) -> float | np.ndarray:
         """
-        Simple moving average.
+        计算简单移动平均。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.SMA(self.close, n)
         if array:
@@ -595,12 +667,26 @@ class ArrayManager:
         return result_value
 
     @overload
-    def ema(self, n: int, array: Literal[False] = False) -> float: ...
+    def ema(self, n: int, array: Literal[False] = False) -> float:
+        """
+        `ema` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def ema(self, n: int, array: Literal[True]) -> np.ndarray: ...
+    def ema(self, n: int, array: Literal[True]) -> np.ndarray:
+        """
+        `ema` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def ema(self, n: int, array: bool = False) -> float | np.ndarray:
         """
-        Exponential moving average.
+        计算指数移动平均。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.EMA(self.close, n)
         if array:
@@ -610,12 +696,26 @@ class ArrayManager:
         return result_value
 
     @overload
-    def kama(self, n: int, array: Literal[False] = False) -> float: ...
+    def kama(self, n: int, array: Literal[False] = False) -> float:
+        """
+        `kama` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def kama(self, n: int, array: Literal[True]) -> np.ndarray: ...
+    def kama(self, n: int, array: Literal[True]) -> np.ndarray:
+        """
+        `kama` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def kama(self, n: int, array: bool = False) -> float | np.ndarray:
         """
-        KAMA.
+        计算自适应均线。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.KAMA(self.close, n)
         if array:
@@ -625,12 +725,26 @@ class ArrayManager:
         return result_value
 
     @overload
-    def wma(self, n: int, array: Literal[False] = False) -> float: ...
+    def wma(self, n: int, array: Literal[False] = False) -> float:
+        """
+        `wma` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def wma(self, n: int, array: Literal[True]) -> np.ndarray: ...
+    def wma(self, n: int, array: Literal[True]) -> np.ndarray:
+        """
+        `wma` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def wma(self, n: int, array: bool = False) -> float | np.ndarray:
         """
-        WMA.
+        计算加权移动平均。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.WMA(self.close, n)
         if array:
@@ -640,9 +754,21 @@ class ArrayManager:
         return result_value
 
     @overload
-    def apo(self, fast_period: int, slow_period: int, matype: int = 0, array: Literal[False] = False) -> float: ...
+    def apo(self, fast_period: int, slow_period: int, matype: int = 0, array: Literal[False] = False) -> float:
+        """
+        `apo` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def apo(self, fast_period: int, slow_period: int, matype: int = 0, *, array: Literal[True]) -> np.ndarray: ...
+    def apo(self, fast_period: int, slow_period: int, matype: int = 0, *, array: Literal[True]) -> np.ndarray:
+        """
+        `apo` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def apo(
         self,
         fast_period: int,
@@ -651,7 +777,9 @@ class ArrayManager:
         array: bool = False
     ) -> float | np.ndarray:
         """
-        APO.
+        计算绝对价格振荡器。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.APO(self.close, fast_period, slow_period, matype)      # type: ignore
         if array:
@@ -661,12 +789,26 @@ class ArrayManager:
         return result_value
 
     @overload
-    def cmo(self, n: int, array: Literal[False] = False) -> float: ...
+    def cmo(self, n: int, array: Literal[False] = False) -> float:
+        """
+        `cmo` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def cmo(self, n: int, array: Literal[True]) -> np.ndarray: ...
+    def cmo(self, n: int, array: Literal[True]) -> np.ndarray:
+        """
+        `cmo` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def cmo(self, n: int, array: bool = False) -> float | np.ndarray:
         """
-        CMO.
+        计算钱德动量指标。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.CMO(self.close, n)
         if array:
@@ -676,12 +818,26 @@ class ArrayManager:
         return result_value
 
     @overload
-    def mom(self, n: int, array: Literal[False] = False) -> float: ...
+    def mom(self, n: int, array: Literal[False] = False) -> float:
+        """
+        `mom` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def mom(self, n: int, array: Literal[True]) -> np.ndarray: ...
+    def mom(self, n: int, array: Literal[True]) -> np.ndarray:
+        """
+        `mom` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def mom(self, n: int, array: bool = False) -> float | np.ndarray:
         """
-        MOM.
+        计算动量指标。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.MOM(self.close, n)
         if array:
@@ -691,9 +847,21 @@ class ArrayManager:
         return result_value
 
     @overload
-    def ppo(self, fast_period: int, slow_period: int, matype: int = 0, array: Literal[False] = False) -> float: ...
+    def ppo(self, fast_period: int, slow_period: int, matype: int = 0, array: Literal[False] = False) -> float:
+        """
+        `ppo` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def ppo(self, fast_period: int, slow_period: int, matype: int = 0, *, array: Literal[True]) -> np.ndarray: ...
+    def ppo(self, fast_period: int, slow_period: int, matype: int = 0, *, array: Literal[True]) -> np.ndarray:
+        """
+        `ppo` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def ppo(
         self,
         fast_period: int,
@@ -702,7 +870,9 @@ class ArrayManager:
         array: bool = False
     ) -> float | np.ndarray:
         """
-        PPO.
+        计算百分比价格振荡器。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.PPO(self.close, fast_period, slow_period, matype)      # type: ignore
         if array:
@@ -712,12 +882,26 @@ class ArrayManager:
         return result_value
 
     @overload
-    def roc(self, n: int, array: Literal[False] = False) -> float: ...
+    def roc(self, n: int, array: Literal[False] = False) -> float:
+        """
+        `roc` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def roc(self, n: int, array: Literal[True]) -> np.ndarray: ...
+    def roc(self, n: int, array: Literal[True]) -> np.ndarray:
+        """
+        `roc` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def roc(self, n: int, array: bool = False) -> float | np.ndarray:
         """
-        ROC.
+        计算变动率。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.ROC(self.close, n)
         if array:
@@ -727,12 +911,26 @@ class ArrayManager:
         return result_value
 
     @overload
-    def rocr(self, n: int, array: Literal[False] = False) -> float: ...
+    def rocr(self, n: int, array: Literal[False] = False) -> float:
+        """
+        `rocr` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def rocr(self, n: int, array: Literal[True]) -> np.ndarray: ...
+    def rocr(self, n: int, array: Literal[True]) -> np.ndarray:
+        """
+        `rocr` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def rocr(self, n: int, array: bool = False) -> float | np.ndarray:
         """
-        ROCR.
+        计算变动比率。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.ROCR(self.close, n)
         if array:
@@ -742,12 +940,26 @@ class ArrayManager:
         return result_value
 
     @overload
-    def rocp(self, n: int, array: Literal[False] = False) -> float: ...
+    def rocp(self, n: int, array: Literal[False] = False) -> float:
+        """
+        `rocp` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def rocp(self, n: int, array: Literal[True]) -> np.ndarray: ...
+    def rocp(self, n: int, array: Literal[True]) -> np.ndarray:
+        """
+        `rocp` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def rocp(self, n: int, array: bool = False) -> float | np.ndarray:
         """
-        ROCP.
+        计算变动百分比。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.ROCP(self.close, n)
         if array:
@@ -757,12 +969,26 @@ class ArrayManager:
         return result_value
 
     @overload
-    def rocr_100(self, n: int, array: Literal[False] = False) -> float: ...
+    def rocr_100(self, n: int, array: Literal[False] = False) -> float:
+        """
+        `rocr_100` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def rocr_100(self, n: int, array: Literal[True]) -> np.ndarray: ...
+    def rocr_100(self, n: int, array: Literal[True]) -> np.ndarray:
+        """
+        `rocr_100` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def rocr_100(self, n: int, array: bool = False) -> float | np.ndarray:
         """
-        ROCR100.
+        计算百分制变动比率。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.ROCR100(self.close, n)
         if array:
@@ -772,12 +998,26 @@ class ArrayManager:
         return result_value
 
     @overload
-    def trix(self, n: int, array: Literal[False] = False) -> float: ...
+    def trix(self, n: int, array: Literal[False] = False) -> float:
+        """
+        `trix` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def trix(self, n: int, array: Literal[True]) -> np.ndarray: ...
+    def trix(self, n: int, array: Literal[True]) -> np.ndarray:
+        """
+        `trix` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def trix(self, n: int, array: bool = False) -> float | np.ndarray:
         """
-        TRIX.
+        计算三重平滑动量指标。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.TRIX(self.close, n)
         if array:
@@ -787,12 +1027,26 @@ class ArrayManager:
         return result_value
 
     @overload
-    def std(self, n: int, nbdev: int = 1, array: Literal[False] = False) -> float: ...
+    def std(self, n: int, nbdev: int = 1, array: Literal[False] = False) -> float:
+        """
+        `std` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def std(self, n: int, nbdev: int = 1, *, array: Literal[True]) -> np.ndarray: ...
+    def std(self, n: int, nbdev: int = 1, *, array: Literal[True]) -> np.ndarray:
+        """
+        `std` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def std(self, n: int, nbdev: int = 1, array: bool = False) -> float | np.ndarray:
         """
-        Standard deviation.
+        计算标准差。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.STDDEV(self.close, n, nbdev)
         if array:
@@ -802,12 +1056,26 @@ class ArrayManager:
         return result_value
 
     @overload
-    def obv(self, array: Literal[False] = False) -> float: ...
+    def obv(self, array: Literal[False] = False) -> float:
+        """
+        `obv` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def obv(self, array: Literal[True]) -> np.ndarray: ...
+    def obv(self, array: Literal[True]) -> np.ndarray:
+        """
+        `obv` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def obv(self, array: bool = False) -> float | np.ndarray:
         """
-        OBV.
+        计算能量潮指标。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.OBV(self.close, self.volume)
         if array:
@@ -817,12 +1085,26 @@ class ArrayManager:
         return result_value
 
     @overload
-    def cci(self, n: int, array: Literal[False] = False) -> float: ...
+    def cci(self, n: int, array: Literal[False] = False) -> float:
+        """
+        `cci` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def cci(self, n: int, array: Literal[True]) -> np.ndarray: ...
+    def cci(self, n: int, array: Literal[True]) -> np.ndarray:
+        """
+        `cci` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def cci(self, n: int, array: bool = False) -> float | np.ndarray:
         """
-        Commodity Channel Index (CCI).
+        计算顺势指标。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.CCI(self.high, self.low, self.close, n)
         if array:
@@ -832,12 +1114,26 @@ class ArrayManager:
         return result_value
 
     @overload
-    def atr(self, n: int, array: Literal[False] = False) -> float: ...
+    def atr(self, n: int, array: Literal[False] = False) -> float:
+        """
+        `atr` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def atr(self, n: int, array: Literal[True]) -> np.ndarray: ...
+    def atr(self, n: int, array: Literal[True]) -> np.ndarray:
+        """
+        `atr` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def atr(self, n: int, array: bool = False) -> float | np.ndarray:
         """
-        Average True Range (ATR).
+        计算平均真实波幅。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.ATR(self.high, self.low, self.close, n)
         if array:
@@ -847,12 +1143,26 @@ class ArrayManager:
         return result_value
 
     @overload
-    def natr(self, n: int, array: Literal[False] = False) -> float: ...
+    def natr(self, n: int, array: Literal[False] = False) -> float:
+        """
+        `natr` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def natr(self, n: int, array: Literal[True]) -> np.ndarray: ...
+    def natr(self, n: int, array: Literal[True]) -> np.ndarray:
+        """
+        `natr` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def natr(self, n: int, array: bool = False) -> float | np.ndarray:
         """
-        NATR.
+        计算标准化平均真实波幅。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.NATR(self.high, self.low, self.close, n)
         if array:
@@ -862,12 +1172,26 @@ class ArrayManager:
         return result_value
 
     @overload
-    def rsi(self, n: int, array: Literal[False] = False) -> float: ...
+    def rsi(self, n: int, array: Literal[False] = False) -> float:
+        """
+        `rsi` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def rsi(self, n: int, array: Literal[True]) -> np.ndarray: ...
+    def rsi(self, n: int, array: Literal[True]) -> np.ndarray:
+        """
+        `rsi` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def rsi(self, n: int, array: bool = False) -> float | np.ndarray:
         """
-        Relative Strenght Index (RSI).
+        计算相对强弱指标。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.RSI(self.close, n)
         if array:
@@ -877,9 +1201,21 @@ class ArrayManager:
         return result_value
 
     @overload
-    def macd(self, fast_period: int, slow_period: int, signal_period: int, array: Literal[False] = False) -> tuple[float, float, float]: ...
+    def macd(self, fast_period: int, slow_period: int, signal_period: int, array: Literal[False] = False) -> tuple[float, float, float]:
+        """
+        `macd` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def macd(self, fast_period: int, slow_period: int, signal_period: int, array: Literal[True]) -> tuple[np.ndarray, np.ndarray, np.ndarray]: ...
+    def macd(self, fast_period: int, slow_period: int, signal_period: int, array: Literal[True]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        `macd` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def macd(
         self,
         fast_period: int,
@@ -888,7 +1224,9 @@ class ArrayManager:
         array: bool = False
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | tuple[float, float, float]:
         """
-        MACD.
+        计算 MACD。
+        
+        `array=True` 返回 (DIF, DEA, HIST) 全序列；否则返回最新一组值。
         """
         macd, signal, hist = talib.MACD(
             self.close, fast_period, slow_period, signal_period
@@ -898,12 +1236,26 @@ class ArrayManager:
         return macd[-1], signal[-1], hist[-1]
 
     @overload
-    def adx(self, n: int, array: Literal[False] = False) -> float: ...
+    def adx(self, n: int, array: Literal[False] = False) -> float:
+        """
+        `adx` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def adx(self, n: int, array: Literal[True]) -> np.ndarray: ...
+    def adx(self, n: int, array: Literal[True]) -> np.ndarray:
+        """
+        `adx` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def adx(self, n: int, array: bool = False) -> float | np.ndarray:
         """
-        ADX.
+        计算平均趋向指数。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.ADX(self.high, self.low, self.close, n)
         if array:
@@ -913,12 +1265,26 @@ class ArrayManager:
         return result_value
 
     @overload
-    def adxr(self, n: int, array: Literal[False] = False) -> float: ...
+    def adxr(self, n: int, array: Literal[False] = False) -> float:
+        """
+        `adxr` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def adxr(self, n: int, array: Literal[True]) -> np.ndarray: ...
+    def adxr(self, n: int, array: Literal[True]) -> np.ndarray:
+        """
+        `adxr` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def adxr(self, n: int, array: bool = False) -> float | np.ndarray:
         """
-        ADXR.
+        计算平均趋向指数平滑值。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.ADXR(self.high, self.low, self.close, n)
         if array:
@@ -928,12 +1294,26 @@ class ArrayManager:
         return result_value
 
     @overload
-    def dx(self, n: int, array: Literal[False] = False) -> float: ...
+    def dx(self, n: int, array: Literal[False] = False) -> float:
+        """
+        `dx` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def dx(self, n: int, array: Literal[True]) -> np.ndarray: ...
+    def dx(self, n: int, array: Literal[True]) -> np.ndarray:
+        """
+        `dx` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def dx(self, n: int, array: bool = False) -> float | np.ndarray:
         """
-        DX.
+        计算趋向指数。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.DX(self.high, self.low, self.close, n)
         if array:
@@ -943,12 +1323,26 @@ class ArrayManager:
         return result_value
 
     @overload
-    def minus_di(self, n: int, array: Literal[False] = False) -> float: ...
+    def minus_di(self, n: int, array: Literal[False] = False) -> float:
+        """
+        `minus_di` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def minus_di(self, n: int, array: Literal[True]) -> np.ndarray: ...
+    def minus_di(self, n: int, array: Literal[True]) -> np.ndarray:
+        """
+        `minus_di` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def minus_di(self, n: int, array: bool = False) -> float | np.ndarray:
         """
-        MINUS_DI.
+        计算负方向指标。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.MINUS_DI(self.high, self.low, self.close, n)
         if array:
@@ -958,12 +1352,26 @@ class ArrayManager:
         return result_value
 
     @overload
-    def plus_di(self, n: int, array: Literal[False] = False) -> float: ...
+    def plus_di(self, n: int, array: Literal[False] = False) -> float:
+        """
+        `plus_di` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def plus_di(self, n: int, array: Literal[True]) -> np.ndarray: ...
+    def plus_di(self, n: int, array: Literal[True]) -> np.ndarray:
+        """
+        `plus_di` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def plus_di(self, n: int, array: bool = False) -> float | np.ndarray:
         """
-        PLUS_DI.
+        计算正方向指标。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.PLUS_DI(self.high, self.low, self.close, n)
         if array:
@@ -973,12 +1381,26 @@ class ArrayManager:
         return result_value
 
     @overload
-    def willr(self, n: int, array: Literal[False] = False) -> float: ...
+    def willr(self, n: int, array: Literal[False] = False) -> float:
+        """
+        `willr` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def willr(self, n: int, array: Literal[True]) -> np.ndarray: ...
+    def willr(self, n: int, array: Literal[True]) -> np.ndarray:
+        """
+        `willr` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def willr(self, n: int, array: bool = False) -> float | np.ndarray:
         """
-        WILLR.
+        计算威廉指标。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.WILLR(self.high, self.low, self.close, n)
         if array:
@@ -988,9 +1410,21 @@ class ArrayManager:
         return result_value
 
     @overload
-    def ultosc(self, time_period1: int = 7, time_period2: int = 14, time_period3: int = 28, array: Literal[False] = False) -> float: ...
+    def ultosc(self, time_period1: int = 7, time_period2: int = 14, time_period3: int = 28, array: Literal[False] = False) -> float:
+        """
+        `ultosc` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def ultosc(self, time_period1: int = 7, time_period2: int = 14, time_period3: int = 28, *, array: Literal[True]) -> np.ndarray: ...
+    def ultosc(self, time_period1: int = 7, time_period2: int = 14, time_period3: int = 28, *, array: Literal[True]) -> np.ndarray:
+        """
+        `ultosc` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def ultosc(
         self,
         time_period1: int = 7,
@@ -999,7 +1433,9 @@ class ArrayManager:
         array: bool = False
     ) -> float | np.ndarray:
         """
-        Ultimate Oscillator.
+        计算终极振荡器。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.ULTOSC(self.high, self.low, self.close, time_period1, time_period2, time_period3)
         if array:
@@ -1009,12 +1445,26 @@ class ArrayManager:
         return result_value
 
     @overload
-    def trange(self, array: Literal[False] = False) -> float: ...
+    def trange(self, array: Literal[False] = False) -> float:
+        """
+        `trange` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def trange(self, array: Literal[True]) -> np.ndarray: ...
+    def trange(self, array: Literal[True]) -> np.ndarray:
+        """
+        `trange` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def trange(self, array: bool = False) -> float | np.ndarray:
         """
-        TRANGE.
+        计算真实波幅。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.TRANGE(self.high, self.low, self.close)
         if array:
@@ -1024,9 +1474,21 @@ class ArrayManager:
         return result_value
 
     @overload
-    def boll(self, n: int, dev: float, array: Literal[False] = False) -> tuple[float, float]: ...
+    def boll(self, n: int, dev: float, array: Literal[False] = False) -> tuple[float, float]:
+        """
+        `boll` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def boll(self, n: int, dev: float, array: Literal[True]) -> tuple[np.ndarray, np.ndarray]: ...
+    def boll(self, n: int, dev: float, array: Literal[True]) -> tuple[np.ndarray, np.ndarray]:
+        """
+        `boll` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def boll(
         self,
         n: int,
@@ -1034,7 +1496,9 @@ class ArrayManager:
         array: bool = False
     ) -> tuple[np.ndarray, np.ndarray] | tuple[float, float]:
         """
-        Bollinger Channel.
+        计算布林通道上下轨。
+        
+        `array=True` 返回上下轨序列；否则返回最新上下轨。
         """
         mid_array: np.ndarray = talib.SMA(self.close, n)
         std_array: np.ndarray = talib.STDDEV(self.close, n, 1)
@@ -1051,9 +1515,21 @@ class ArrayManager:
             return up, down
 
     @overload
-    def keltner(self, n: int, dev: float, array: Literal[False] = False) -> tuple[float, float]: ...
+    def keltner(self, n: int, dev: float, array: Literal[False] = False) -> tuple[float, float]:
+        """
+        `keltner` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def keltner(self, n: int, dev: float, array: Literal[True]) -> tuple[np.ndarray, np.ndarray]: ...
+    def keltner(self, n: int, dev: float, array: Literal[True]) -> tuple[np.ndarray, np.ndarray]:
+        """
+        `keltner` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def keltner(
         self,
         n: int,
@@ -1061,7 +1537,9 @@ class ArrayManager:
         array: bool = False
     ) -> tuple[np.ndarray, np.ndarray] | tuple[float, float]:
         """
-        Keltner Channel.
+        计算肯特纳通道上下轨。
+        
+        `array=True` 返回上下轨序列；否则返回最新上下轨。
         """
         mid_array: np.ndarray = talib.SMA(self.close, n)
         atr_array: np.ndarray = talib.ATR(self.high, self.low, self.close, n)
@@ -1078,14 +1556,28 @@ class ArrayManager:
             return up, down
 
     @overload
-    def donchian(self, n: int, array: Literal[False] = False) -> tuple[float, float]: ...
+    def donchian(self, n: int, array: Literal[False] = False) -> tuple[float, float]:
+        """
+        `donchian` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def donchian(self, n: int, array: Literal[True]) -> tuple[np.ndarray, np.ndarray]: ...
+    def donchian(self, n: int, array: Literal[True]) -> tuple[np.ndarray, np.ndarray]:
+        """
+        `donchian` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def donchian(
         self, n: int, array: bool = False
     ) -> tuple[np.ndarray, np.ndarray] | tuple[float, float]:
         """
-        Donchian Channel.
+        计算唐奇安通道上下轨。
+        
+        `array=True` 返回上下轨序列；否则返回最新上下轨。
         """
         up: np.ndarray = talib.MAX(self.high, n)
         down: np.ndarray = talib.MIN(self.low, n)
@@ -1095,16 +1587,30 @@ class ArrayManager:
         return up[-1], down[-1]
 
     @overload
-    def aroon(self, n: int, array: Literal[False] = False) -> tuple[float, float]: ...
+    def aroon(self, n: int, array: Literal[False] = False) -> tuple[float, float]:
+        """
+        `aroon` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def aroon(self, n: int, array: Literal[True]) -> tuple[np.ndarray, np.ndarray]: ...
+    def aroon(self, n: int, array: Literal[True]) -> tuple[np.ndarray, np.ndarray]:
+        """
+        `aroon` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def aroon(
         self,
         n: int,
         array: bool = False
     ) -> tuple[np.ndarray, np.ndarray] | tuple[float, float]:
         """
-        Aroon indicator.
+        计算阿隆指标双线值。
+        
+        `array=True` 返回两条线的完整序列；否则返回最新值。
         """
         aroon_down, aroon_up = talib.AROON(self.high, self.low, n)
 
@@ -1113,12 +1619,26 @@ class ArrayManager:
         return aroon_up[-1], aroon_down[-1]
 
     @overload
-    def aroonosc(self, n: int, array: Literal[False] = False) -> float: ...
+    def aroonosc(self, n: int, array: Literal[False] = False) -> float:
+        """
+        `aroonosc` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def aroonosc(self, n: int, array: Literal[True]) -> np.ndarray: ...
+    def aroonosc(self, n: int, array: Literal[True]) -> np.ndarray:
+        """
+        `aroonosc` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def aroonosc(self, n: int, array: bool = False) -> float | np.ndarray:
         """
-        Aroon Oscillator.
+        计算阿隆振荡器。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.AROONOSC(self.high, self.low, n)
 
@@ -1129,12 +1649,26 @@ class ArrayManager:
         return result_value
 
     @overload
-    def minus_dm(self, n: int, array: Literal[False] = False) -> float: ...
+    def minus_dm(self, n: int, array: Literal[False] = False) -> float:
+        """
+        `minus_dm` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def minus_dm(self, n: int, array: Literal[True]) -> np.ndarray: ...
+    def minus_dm(self, n: int, array: Literal[True]) -> np.ndarray:
+        """
+        `minus_dm` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def minus_dm(self, n: int, array: bool = False) -> float | np.ndarray:
         """
-        MINUS_DM.
+        计算负方向动量。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.MINUS_DM(self.high, self.low, n)
 
@@ -1145,12 +1679,26 @@ class ArrayManager:
         return result_value
 
     @overload
-    def plus_dm(self, n: int, array: Literal[False] = False) -> float: ...
+    def plus_dm(self, n: int, array: Literal[False] = False) -> float:
+        """
+        `plus_dm` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def plus_dm(self, n: int, array: Literal[True]) -> np.ndarray: ...
+    def plus_dm(self, n: int, array: Literal[True]) -> np.ndarray:
+        """
+        `plus_dm` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def plus_dm(self, n: int, array: bool = False) -> float | np.ndarray:
         """
-        PLUS_DM.
+        计算正方向动量。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.PLUS_DM(self.high, self.low, n)
 
@@ -1161,12 +1709,26 @@ class ArrayManager:
         return result_value
 
     @overload
-    def mfi(self, n: int, array: Literal[False] = False) -> float: ...
+    def mfi(self, n: int, array: Literal[False] = False) -> float:
+        """
+        `mfi` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def mfi(self, n: int, array: Literal[True]) -> np.ndarray: ...
+    def mfi(self, n: int, array: Literal[True]) -> np.ndarray:
+        """
+        `mfi` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def mfi(self, n: int, array: bool = False) -> float | np.ndarray:
         """
-        Money Flow Index.
+        计算资金流量指标。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.MFI(self.high, self.low, self.close, self.volume, n)
         if array:
@@ -1176,12 +1738,26 @@ class ArrayManager:
         return result_value
 
     @overload
-    def ad(self, array: Literal[False] = False) -> float: ...
+    def ad(self, array: Literal[False] = False) -> float:
+        """
+        `ad` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def ad(self, array: Literal[True]) -> np.ndarray: ...
+    def ad(self, array: Literal[True]) -> np.ndarray:
+        """
+        `ad` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def ad(self, array: bool = False) -> float | np.ndarray:
         """
-        AD.
+        计算累积/派发线。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.AD(self.high, self.low, self.close, self.volume)
         if array:
@@ -1191,9 +1767,21 @@ class ArrayManager:
         return result_value
 
     @overload
-    def adosc(self, fast_period: int, slow_period: int, array: Literal[False] = False) -> float: ...
+    def adosc(self, fast_period: int, slow_period: int, array: Literal[False] = False) -> float:
+        """
+        `adosc` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def adosc(self, fast_period: int, slow_period: int, array: Literal[True]) -> np.ndarray: ...
+    def adosc(self, fast_period: int, slow_period: int, array: Literal[True]) -> np.ndarray:
+        """
+        `adosc` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def adosc(
         self,
         fast_period: int,
@@ -1201,7 +1789,9 @@ class ArrayManager:
         array: bool = False
     ) -> float | np.ndarray:
         """
-        ADOSC.
+        计算累积/派发振荡器。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.ADOSC(self.high, self.low, self.close, self.volume, fast_period, slow_period)
         if array:
@@ -1211,12 +1801,26 @@ class ArrayManager:
         return result_value
 
     @overload
-    def bop(self, array: Literal[False] = False) -> float: ...
+    def bop(self, array: Literal[False] = False) -> float:
+        """
+        `bop` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def bop(self, array: Literal[True]) -> np.ndarray: ...
+    def bop(self, array: Literal[True]) -> np.ndarray:
+        """
+        `bop` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def bop(self, array: bool = False) -> float | np.ndarray:
         """
-        BOP.
+        计算买卖均衡指标。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.BOP(self.open, self.high, self.low, self.close)
 
@@ -1227,9 +1831,21 @@ class ArrayManager:
         return result_value
 
     @overload
-    def stoch(self, fastk_period: int, slowk_period: int, slowk_matype: int, slowd_period: int, slowd_matype: int, array: Literal[False] = False) -> tuple[float, float]: ...
+    def stoch(self, fastk_period: int, slowk_period: int, slowk_matype: int, slowd_period: int, slowd_matype: int, array: Literal[False] = False) -> tuple[float, float]:
+        """
+        `stoch` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def stoch(self, fastk_period: int, slowk_period: int, slowk_matype: int, slowd_period: int, slowd_matype: int, array: Literal[True]) -> tuple[np.ndarray, np.ndarray]: ...
+    def stoch(self, fastk_period: int, slowk_period: int, slowk_matype: int, slowd_period: int, slowd_matype: int, array: Literal[True]) -> tuple[np.ndarray, np.ndarray]:
+        """
+        `stoch` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def stoch(
         self,
         fastk_period: int,
@@ -1240,7 +1856,9 @@ class ArrayManager:
         array: bool = False
     ) -> tuple[float, float] | tuple[np.ndarray, np.ndarray]:
         """
-        Stochastic Indicator
+        计算随机指标双线值。
+        
+        `array=True` 返回两条线的完整序列；否则返回最新值。
         """
         k, d = talib.STOCH(
             self.high,
@@ -1257,12 +1875,26 @@ class ArrayManager:
         return k[-1], d[-1]
 
     @overload
-    def sar(self, acceleration: float, maximum: float, array: Literal[False] = False) -> float: ...
+    def sar(self, acceleration: float, maximum: float, array: Literal[False] = False) -> float:
+        """
+        `sar` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     @overload
-    def sar(self, acceleration: float, maximum: float, array: Literal[True]) -> np.ndarray: ...
+    def sar(self, acceleration: float, maximum: float, array: Literal[True]) -> np.ndarray:
+        """
+        `sar` 的类型重载声明。
+        
+        用于约束 `array=True/False` 时的返回类型，不包含运行逻辑。
+        """
+        ...
     def sar(self, acceleration: float, maximum: float, array: bool = False) -> float | np.ndarray:
         """
-        SAR.
+        计算抛物转向指标。
+        
+        `array=True` 返回完整指标序列；`array=False` 返回最新一个值。
         """
         result_array: np.ndarray = talib.SAR(self.high, self.low, acceleration, maximum)
         if array:

@@ -9,7 +9,16 @@ from .locale import _
 
 class Direction(Enum):
     """
-    Direction of order/trade/position.
+    交易方向枚举，表达买入/卖出、做多/做空等方向语义。
+    
+    职责：
+    1. 避免在系统中散落魔法字符串，提升代码可读性与可维护性。
+    2. 为对象序列化、UI 展示、策略判断提供统一常量来源。
+    3. 约束参数输入范围，减少跨模块对接歧义。
+    
+    协作：
+    1. 广泛用于 `OrderData/ContractData/Request` 等业务对象字段。
+    2. 被网关适配层用于本地常量与交易柜台协议之间的映射。
     """
     LONG = _("多")
     SHORT = _("空")
@@ -18,7 +27,16 @@ class Direction(Enum):
 
 class Offset(Enum):
     """
-    Offset of order/trade.
+    开平枚举，表达开仓、平仓、平今、平昨等交易意图。
+    
+    职责：
+    1. 避免在系统中散落魔法字符串，提升代码可读性与可维护性。
+    2. 为对象序列化、UI 展示、策略判断提供统一常量来源。
+    3. 约束参数输入范围，减少跨模块对接歧义。
+    
+    协作：
+    1. 广泛用于 `OrderData/ContractData/Request` 等业务对象字段。
+    2. 被网关适配层用于本地常量与交易柜台协议之间的映射。
     """
     NONE = ""
     OPEN = _("开")
@@ -29,7 +47,16 @@ class Offset(Enum):
 
 class Status(Enum):
     """
-    Order status.
+    委托状态枚举，描述订单从提交到成交/撤销/拒绝的生命周期。
+    
+    职责：
+    1. 避免在系统中散落魔法字符串，提升代码可读性与可维护性。
+    2. 为对象序列化、UI 展示、策略判断提供统一常量来源。
+    3. 约束参数输入范围，减少跨模块对接歧义。
+    
+    协作：
+    1. 广泛用于 `OrderData/ContractData/Request` 等业务对象字段。
+    2. 被网关适配层用于本地常量与交易柜台协议之间的映射。
     """
     SUBMITTING = _("提交中")
     NOTTRADED = _("未成交")
@@ -41,7 +68,16 @@ class Status(Enum):
 
 class Product(Enum):
     """
-    Product class.
+    合约品种枚举，用于区分股票、期货、期权、基金、数字货币等资产类型。
+    
+    职责：
+    1. 避免在系统中散落魔法字符串，提升代码可读性与可维护性。
+    2. 为对象序列化、UI 展示、策略判断提供统一常量来源。
+    3. 约束参数输入范围，减少跨模块对接歧义。
+    
+    协作：
+    1. 广泛用于 `OrderData/ContractData/Request` 等业务对象字段。
+    2. 被网关适配层用于本地常量与交易柜台协议之间的映射。
     """
     EQUITY = _("股票")
     FUTURES = _("期货")
@@ -60,7 +96,16 @@ class Product(Enum):
 
 class OrderType(Enum):
     """
-    Order type.
+    委托类型枚举，描述限价、市价、FAK/FOK 等撮合方式。
+    
+    职责：
+    1. 避免在系统中散落魔法字符串，提升代码可读性与可维护性。
+    2. 为对象序列化、UI 展示、策略判断提供统一常量来源。
+    3. 约束参数输入范围，减少跨模块对接歧义。
+    
+    协作：
+    1. 广泛用于 `OrderData/ContractData/Request` 等业务对象字段。
+    2. 被网关适配层用于本地常量与交易柜台协议之间的映射。
     """
     LIMIT = _("限价")
     MARKET = _("市价")
@@ -73,7 +118,16 @@ class OrderType(Enum):
 
 class OptionType(Enum):
     """
-    Option type.
+    期权类型枚举，区分看涨期权与看跌期权。
+    
+    职责：
+    1. 避免在系统中散落魔法字符串，提升代码可读性与可维护性。
+    2. 为对象序列化、UI 展示、策略判断提供统一常量来源。
+    3. 约束参数输入范围，减少跨模块对接歧义。
+    
+    协作：
+    1. 广泛用于 `OrderData/ContractData/Request` 等业务对象字段。
+    2. 被网关适配层用于本地常量与交易柜台协议之间的映射。
     """
     CALL = _("看涨期权")
     PUT = _("看跌期权")
@@ -81,7 +135,16 @@ class OptionType(Enum):
 
 class Exchange(Enum):
     """
-    Exchange.
+    交易所枚举，统一系统内部对各交易所代码的表达。
+    
+    职责：
+    1. 避免在系统中散落魔法字符串，提升代码可读性与可维护性。
+    2. 为对象序列化、UI 展示、策略判断提供统一常量来源。
+    3. 约束参数输入范围，减少跨模块对接歧义。
+    
+    协作：
+    1. 广泛用于 `OrderData/ContractData/Request` 等业务对象字段。
+    2. 被网关适配层用于本地常量与交易柜台协议之间的映射。
     """
     # Chinese
     CFFEX = "CFFEX"         # China Financial Futures Exchange
@@ -141,7 +204,16 @@ class Exchange(Enum):
 
 class Currency(Enum):
     """
-    Currency.
+    币种枚举，标识账户与交易使用的结算货币。
+    
+    职责：
+    1. 避免在系统中散落魔法字符串，提升代码可读性与可维护性。
+    2. 为对象序列化、UI 展示、策略判断提供统一常量来源。
+    3. 约束参数输入范围，减少跨模块对接歧义。
+    
+    协作：
+    1. 广泛用于 `OrderData/ContractData/Request` 等业务对象字段。
+    2. 被网关适配层用于本地常量与交易柜台协议之间的映射。
     """
     USD = "USD"
     HKD = "HKD"
@@ -151,7 +223,16 @@ class Currency(Enum):
 
 class Interval(Enum):
     """
-    Interval of bar data.
+    K 线周期枚举，统一分钟、小时、日线等时间粒度。
+    
+    职责：
+    1. 避免在系统中散落魔法字符串，提升代码可读性与可维护性。
+    2. 为对象序列化、UI 展示、策略判断提供统一常量来源。
+    3. 约束参数输入范围，减少跨模块对接歧义。
+    
+    协作：
+    1. 广泛用于 `OrderData/ContractData/Request` 等业务对象字段。
+    2. 被网关适配层用于本地常量与交易柜台协议之间的映射。
     """
     MINUTE = "1m"
     HOUR = "1h"

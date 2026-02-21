@@ -72,18 +72,53 @@ def create_qapp(app_name: str = "VeighNa Trader") -> QtWidgets.QApplication:
 
 
 class ExceptionWidget(QtWidgets.QWidget):
-    """"""
+    """
+    `ExceptionWidget` 是异常弹窗组件，用于在 GUI 中展示未捕获异常堆栈。
+    
+    职责：
+    1. 将异常信息格式化为可阅读文本。
+    2. 在界面层提供错误反馈，避免异常静默。
+    3. 辅助用户快速定位运行问题。
+    
+    协作：
+    1. 通常由全局异常钩子触发。
+    2. 与日志系统配合形成“弹窗 + 持久日志”双通道告警。
+    """
     signal: QtCore.Signal = QtCore.Signal(str)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
-        """"""
+        """
+        初始化实例，完成依赖绑定与基础状态准备。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `parent` (`QtWidgets.QWidget | None`)，默认值 `None`：输入参数，用于控制该方法的处理行为。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         super().__init__(parent)
 
         self.init_ui()
         self.signal.connect(self.show_exception)
 
     def init_ui(self) -> None:
-        """"""
+        """
+        执行 `init_ui` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         self.setWindowTitle(_("触发异常"))
         self.setFixedSize(600, 600)
 
@@ -111,15 +146,51 @@ class ExceptionWidget(QtWidgets.QWidget):
         self.setLayout(vbox)
 
     def show_exception(self, msg: str) -> None:
-        """"""
+        """
+        执行 `show_exception` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. `msg` (`str`)：日志或提示消息文本。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         self.msg_edit.setText(msg)
         self.show()
 
     def _copy_text(self) -> None:
-        """"""
+        """
+        执行 `_copy_text` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         self.msg_edit.selectAll()
         self.msg_edit.copy()
 
     def _open_community(self) -> None:
-        """"""
+        """
+        执行 `_open_community` 相关业务逻辑。
+        
+        用途说明：
+        1. 封装当前方法对应的单一职责逻辑。
+        2. 对外提供稳定接口，供上层流程组合调用。
+        
+        参数：
+        1. 无显式业务参数。
+        
+        返回：
+        1. `None`：无返回值，结果通过内部状态或副作用体现。
+        """
         webbrowser.open("https://www.vnpy.com/forum/forum/2-ti-wen-qiu-zhu")

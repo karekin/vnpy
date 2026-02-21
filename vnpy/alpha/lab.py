@@ -18,10 +18,22 @@ from .model import AlphaModel
 
 
 class AlphaLab:
-    """Alpha Research Laboratory"""
+    """
+    Alpha 研究工作空间管理器。
+
+    把研究过程中需要长期复用的资产统一落盘和读取：
+    1. 行情数据（分钟/日线 parquet）
+    2. 指数成分历史（按交易日记录）
+    3. 合约交易参数（手续费、合约乘数、最小变动价位）
+    4. 研究产物（dataset/model/signal）
+    """
 
     def __init__(self, lab_path: str) -> None:
-        """Constructor"""
+        """
+        初始化实验目录结构。
+
+        约定把不同类型数据分目录存放，避免训练数据、模型文件和信号文件互相混杂。
+        """
         # Set data paths
         self.lab_path: Path = Path(lab_path)
 
@@ -49,7 +61,14 @@ class AlphaLab:
                 path.mkdir(parents=True)
 
     def save_bar_data(self, bars: list[BarData]) -> None:
-        """Save bar data"""
+        """
+        将一批 K 线写入本地 parquet。
+
+        写入规则：
+        1. 按 `vt_symbol` 和周期（日线/分钟）分文件存储。
+        2. 若文件已存在，则与历史数据合并后按 `datetime` 去重、排序。
+        3. 只保留研究需要的标准 OHLCV 字段和成交额/持仓量。
+        """
         if not bars:
             return
 
@@ -100,7 +119,11 @@ class AlphaLab:
         start: datetime | str,
         end: datetime | str
     ) -> list[BarData]:
-        """Load bar data"""
+        """
+        读取指定合约和区间的 K 线，并还原为 `BarData` 列表。
+
+        主要用于回测或单标的特征计算场景，返回结构与网关推送的 `BarData` 保持一致。
+        """
         # Convert types
         if isinstance(interval, str):
             interval = Interval(interval)
@@ -161,7 +184,14 @@ class AlphaLab:
         end: datetime | str,
         extended_days: int
     ) -> pl.DataFrame | None:
-        """Load bar data as DataFrame"""
+        """
+        批量读取多标的行情，生成横截面研究用 DataFrame。
+
+        处理逻辑：
+        1. 查询区间前后各扩展一定交易日，给滚动因子预留 warmup 数据。
+        2. 计算 `vwap`，并将 OHLC 按首日收盘价归一化，便于跨标的比较。
+        3. 把全 0 行视为停牌数据并转为 NaN，减少对统计结果的污染。
+        """
         if not vt_symbols:
             return None
 
@@ -247,7 +277,12 @@ class AlphaLab:
         index_symbol: str,
         index_components: dict[str, list[str]]
     ) -> None:
-        """Save index component data"""
+        """
+        保存指数成分历史。
+
+        `index_components` 通常是 `{交易日字符串: 成分合约列表}`，
+        用于复现某天真实可交易股票池/期货池，避免未来函数。
+        """
         file_path: Path = self.component_path.joinpath(f"{index_symbol}")
 
         with shelve.open(str(file_path)) as db:
@@ -260,7 +295,12 @@ class AlphaLab:
         start: datetime | str,
         end: datetime | str
     ) -> dict[datetime, list[str]]:
-        """Load index component data as DataFrame"""
+        """
+        读取指数在给定时间段内的每日成分。
+
+        返回值键为交易日，值为当日成分列表；结果做了 `lru_cache`，
+        方便同一窗口被多次回测/训练重复调用。
+        """
         file_path: Path = self.component_path.joinpath(f"{index_symbol}")
 
         start = to_datetime(start)
@@ -284,7 +324,11 @@ class AlphaLab:
         start: datetime | str,
         end: datetime | str
     ) -> list[str]:
-        """Collect index component symbols"""
+        """
+        获取区间内出现过的全部成分合约去重列表。
+
+        适合先做“候选池全集”准备，再结合每日成分做逐日过滤。
+        """
         index_components: dict[datetime, list[str]] = self.load_component_data(
             index_symbol,
             start,
@@ -304,7 +348,13 @@ class AlphaLab:
         start: datetime | str,
         end: datetime | str
     ) -> dict[str, list[tuple[datetime, datetime]]]:
-        """Collect index component duration filters"""
+        """
+        把每日成分快照转换为“连续在池区间”。
+
+        返回格式为：
+        `vt_symbol -> [(入池开始日, 出池结束日), ...]`
+        可直接用于训练/回测时按日期过滤不可交易或已剔除标的。
+        """
         index_components: dict[datetime, list[str]] = self.load_component_data(
             index_symbol,
             start,
@@ -354,7 +404,12 @@ class AlphaLab:
         size: float,
         pricetick: float
     ) -> None:
-        """Add contract information"""
+        """
+        写入或更新单个合约的交易参数。
+
+        这些参数用于信号转持仓、收益换算和交易成本估算，
+        包括多空费率、合约乘数与最小价格跳动。
+        """
         contracts: dict = {}
 
         if self.contract_path.exists():
@@ -377,7 +432,11 @@ class AlphaLab:
             )
 
     def load_contract_setttings(self) -> dict:
-        """Load contract settings"""
+        """
+        读取全部合约参数配置。
+
+        若配置文件不存在，返回空字典，便于上层按默认值兜底。
+        """
         contracts: dict = {}
 
         if self.contract_path.exists():
@@ -387,14 +446,22 @@ class AlphaLab:
         return contracts
 
     def save_dataset(self, name: str, dataset: AlphaDataset) -> None:
-        """Save dataset"""
+        """
+        持久化训练数据集对象。
+
+        `name` 相当于实验版本号，可用于同一标的池下多套特征方案并行管理。
+        """
         file_path: Path = self.dataset_path.joinpath(f"{name}.pkl")
 
         with open(file_path, mode="wb") as f:
             pickle.dump(dataset, f)
 
     def load_dataset(self, name: str) -> AlphaDataset | None:
-        """Load dataset"""
+        """
+        按名称加载训练数据集。
+
+        文件缺失时返回 `None`，并记录错误日志。
+        """
         file_path: Path = self.dataset_path.joinpath(f"{name}.pkl")
         if not file_path.exists():
             logger.error(f"Dataset file {name} does not exist")
@@ -405,7 +472,11 @@ class AlphaLab:
             return dataset
 
     def remove_dataset(self, name: str) -> bool:
-        """Remove dataset"""
+        """
+        删除指定数据集文件。
+
+        常用于清理失效实验版本。
+        """
         file_path: Path = self.dataset_path.joinpath(f"{name}.pkl")
         if not file_path.exists():
             logger.error(f"Dataset file {name} does not exist")
@@ -415,18 +486,28 @@ class AlphaLab:
         return True
 
     def list_all_datasets(self) -> list[str]:
-        """List all datasets"""
+        """
+        列出当前实验目录下所有数据集名称。
+        """
         return [file.stem for file in self.dataset_path.glob("*.pkl")]
 
     def save_model(self, name: str, model: AlphaModel) -> None:
-        """Save model"""
+        """
+        持久化模型对象。
+
+        用于保存已训练模型，后续直接加载做推理或回测。
+        """
         file_path: Path = self.model_path.joinpath(f"{name}.pkl")
 
         with open(file_path, mode="wb") as f:
             pickle.dump(model, f)
 
     def load_model(self, name: str) -> AlphaModel | None:
-        """Load model"""
+        """
+        按名称加载模型文件。
+
+        文件缺失时返回 `None`，避免上层直接抛异常中断实验流程。
+        """
         file_path: Path = self.model_path.joinpath(f"{name}.pkl")
         if not file_path.exists():
             logger.error(f"Model file {name} does not exist")
@@ -437,7 +518,11 @@ class AlphaLab:
             return model
 
     def remove_model(self, name: str) -> bool:
-        """Remove model"""
+        """
+        删除指定模型文件。
+
+        返回值表示是否实际删除成功。
+        """
         file_path: Path = self.model_path.joinpath(f"{name}.pkl")
         if not file_path.exists():
             logger.error(f"Model file {name} does not exist")
@@ -447,17 +532,27 @@ class AlphaLab:
         return True
 
     def list_all_models(self) -> list[str]:
-        """List all models"""
+        """
+        列出已保存的全部模型名称。
+        """
         return [file.stem for file in self.model_path.glob("*.pkl")]
 
     def save_signal(self, name: str, signal: pl.DataFrame) -> None:
-        """Save signal"""
+        """
+        保存模型输出信号表。
+
+        通常为按日期和标的组织的分值/仓位指令，供回测或实盘映射使用。
+        """
         file_path: Path = self.signal_path.joinpath(f"{name}.parquet")
 
         signal.write_parquet(file_path)
 
     def load_signal(self, name: str) -> pl.DataFrame | None:
-        """Load signal"""
+        """
+        加载指定信号文件为 DataFrame。
+
+        不存在时返回 `None`。
+        """
         file_path: Path = self.signal_path.joinpath(f"{name}.parquet")
         if not file_path.exists():
             logger.error(f"Signal file {name} does not exist")
@@ -466,7 +561,9 @@ class AlphaLab:
         return pl.read_parquet(file_path)
 
     def remove_signal(self, name: str) -> bool:
-        """Remove signal"""
+        """
+        删除指定信号文件。
+        """
         file_path: Path = self.signal_path.joinpath(f"{name}.parquet")
         if not file_path.exists():
             logger.error(f"Signal file {name} does not exist")
@@ -476,5 +573,7 @@ class AlphaLab:
         return True
 
     def list_all_signals(self) -> list[str]:
-        """List all signals"""
+        """
+        列出可用信号名称列表。
+        """
         return [file.stem for file in self.model_path.glob("*.parquet")]
