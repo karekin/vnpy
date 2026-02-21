@@ -52,18 +52,18 @@ export default function AdminLayout({
   console.log(`⚡ Performance: Layout render completed in ${(endTime - startTime).toFixed(2)}ms`);
 
   return (
-    <div className="min-h-screen xl:flex">
+    <div className="min-h-screen overflow-x-hidden xl:flex">
       {/* Sidebar and Backdrop */}
       <AppSidebar />
       <Backdrop />
       {/* Main Content Area */}
       <div
-        className={`flex-1 transition-all  duration-300 ease-in-out ${mainContentMargin}`}
+        className={`flex-1 min-w-0 overflow-x-hidden transition-all duration-300 ease-in-out ${mainContentMargin}`}
       >
         {/* Header */}
         <AppHeader />
         {/* Page Content */}
-        <div className={getRouteSpecificStyles()}>{children}</div>
+        <div className={`${getRouteSpecificStyles()} min-w-0 overflow-x-hidden`}>{children}</div>
       </div>
     </div>
   );
