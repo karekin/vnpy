@@ -73,6 +73,8 @@ export default function CbQuantBacktestEvaluationPage() {
       const hitKeyword =
         !keyword ||
         row.jobId.toLowerCase().includes(keyword) ||
+        row.strategyId.toLowerCase().includes(keyword) ||
+        row.comboId.toLowerCase().includes(keyword) ||
         row.template.toLowerCase().includes(keyword) ||
         row.worker.toLowerCase().includes(keyword);
       const hitStatus = jobStatus === "all" || row.status === jobStatus;
@@ -82,7 +84,11 @@ export default function CbQuantBacktestEvaluationPage() {
 
   const filteredLeaderboard = useMemo(() => {
     return backtestLeaderboard.filter((row) => {
-      const hitKeyword = !keyword || row.template.toLowerCase().includes(keyword);
+      const hitKeyword =
+        !keyword ||
+        row.strategyId.toLowerCase().includes(keyword) ||
+        row.comboId.toLowerCase().includes(keyword) ||
+        row.template.toLowerCase().includes(keyword);
       const hitWindow = leaderboardWindow === "all" || row.window === leaderboardWindow;
       return hitKeyword && hitWindow;
     });
@@ -123,9 +129,9 @@ export default function CbQuantBacktestEvaluationPage() {
 
   const searchPlaceholder =
     activeTab === "jobs"
-      ? "Search job/template/worker..."
+      ? "Search job/strategy/combo/worker..."
       : activeTab === "leaderboard"
-      ? "Search strategy template..."
+      ? "Search strategy/combo/template..."
       : "Search metric name...";
 
   const onExport = () => {
@@ -134,9 +140,11 @@ export default function CbQuantBacktestEvaluationPage() {
     if (activeTab === "jobs") {
       downloadCsv(
         `cb-quant-backtest-jobs-${date}.csv`,
-        ["任务ID", "模板", "窗口", "状态", "进度", "开始时间", "ETA", "Worker"],
+        ["任务ID", "策略ID", "组合ID", "模板", "窗口", "状态", "进度", "开始时间", "ETA", "Worker"],
         filteredJobs.map((row) => [
           row.jobId,
+          row.strategyId,
+          row.comboId,
           row.template,
           row.window,
           row.status,
@@ -152,9 +160,11 @@ export default function CbQuantBacktestEvaluationPage() {
     if (activeTab === "leaderboard") {
       downloadCsv(
         `cb-quant-backtest-leaderboard-${date}.csv`,
-        ["排名", "模板", "CAGR", "MDD", "Calmar", "胜率", "换手", "近1年", "稳健分", "窗口"],
+        ["排名", "策略ID", "组合ID", "模板", "CAGR", "MDD", "Calmar", "胜率", "换手", "近1年", "稳健分", "窗口"],
         filteredLeaderboard.map((row) => [
           row.rank,
+          row.strategyId,
+          row.comboId,
           row.template,
           toPercent(row.cagr),
           toPercent(row.mdd),
@@ -322,14 +332,16 @@ export default function CbQuantBacktestEvaluationPage() {
         {activeTab === "jobs" && (
           <div className="p-5">
             <ScrollableDataTable
-              headers={["任务ID", "模板", "窗口", "状态", "进度", "开始时间", "ETA", "Worker"]}
-              minTableWidthClass="min-w-[1280px]"
-              colSpan={8}
+              headers={["任务ID", "策略ID", "组合ID", "模板", "窗口", "状态", "进度", "开始时间", "ETA", "Worker"]}
+              minTableWidthClass="min-w-[1520px]"
+              colSpan={10}
               isEmpty={pagedJobs.length === 0}
             >
               {pagedJobs.map((row) => (
                 <TableRow key={row.jobId} className="border-b border-gray-100 dark:border-gray-800">
                   <TableCell className="px-4 py-3 text-sm font-semibold text-gray-900 whitespace-nowrap dark:text-white">{row.jobId}</TableCell>
+                  <TableCell className="px-4 py-3 text-sm font-medium text-gray-900 whitespace-nowrap dark:text-white">{row.strategyId}</TableCell>
+                  <TableCell className="px-4 py-3 text-sm font-medium text-gray-900 whitespace-nowrap dark:text-white">{row.comboId}</TableCell>
                   <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{row.template}</TableCell>
                   <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{row.window}</TableCell>
                   <TableCell className="px-4 py-3 text-sm whitespace-nowrap">
@@ -354,14 +366,16 @@ export default function CbQuantBacktestEvaluationPage() {
         {activeTab === "leaderboard" && (
           <div className="p-5">
             <ScrollableDataTable
-              headers={["排名", "模板", "CAGR", "MDD", "Calmar", "胜率", "换手", "近1年", "稳健分", "窗口"]}
-              minTableWidthClass="min-w-[1380px]"
-              colSpan={10}
+              headers={["排名", "策略ID", "组合ID", "模板", "CAGR", "MDD", "Calmar", "胜率", "换手", "近1年", "稳健分", "窗口"]}
+              minTableWidthClass="min-w-[1680px]"
+              colSpan={12}
               isEmpty={pagedLeaderboard.length === 0}
             >
               {pagedLeaderboard.map((row) => (
-                <TableRow key={`${row.template}-${row.rank}`} className="border-b border-gray-100 dark:border-gray-800">
+                <TableRow key={row.strategyId} className="border-b border-gray-100 dark:border-gray-800">
                   <TableCell className="px-4 py-3 text-sm font-semibold text-gray-900 whitespace-nowrap dark:text-white">#{row.rank}</TableCell>
+                  <TableCell className="px-4 py-3 text-sm font-medium text-gray-900 whitespace-nowrap dark:text-white">{row.strategyId}</TableCell>
+                  <TableCell className="px-4 py-3 text-sm font-medium text-gray-900 whitespace-nowrap dark:text-white">{row.comboId}</TableCell>
                   <TableCell className="px-4 py-3 text-sm font-medium text-gray-900 whitespace-nowrap dark:text-white">{row.template}</TableCell>
                   <TableCell className="px-4 py-3 text-sm text-green-700 whitespace-nowrap dark:text-green-300">{toPercent(row.cagr)}</TableCell>
                   <TableCell className="px-4 py-3 text-sm text-red-700 whitespace-nowrap dark:text-red-300">{toPercent(row.mdd)}</TableCell>

@@ -39,6 +39,8 @@ export type StrategyCandidateRow = {
 
 export type BacktestJobRow = {
   jobId: string;
+  strategyId: string;
+  comboId: string;
   template: string;
   window: string;
   status: JobStatus;
@@ -50,6 +52,8 @@ export type BacktestJobRow = {
 
 export type BacktestLeaderboardRow = {
   rank: number;
+  strategyId: string;
+  comboId: string;
   template: string;
   cagr: number;
   mdd: number;
@@ -231,23 +235,23 @@ export const strategyCandidates: StrategyCandidateRow[] = [
 ];
 
 export const backtestJobs: BacktestJobRow[] = [
-  { jobId: "BT-20260221-001", template: "双低稳健A", window: "2018-2025", status: "running", progress: 62, startedAt: "09:31:05", eta: "7m", worker: "wk-01" },
-  { jobId: "BT-20260221-002", template: "双低+评级", window: "近3年", status: "queued", progress: 0, startedAt: "09:33:15", eta: "--", worker: "wk-02" },
-  { jobId: "BT-20260221-003", template: "低价低溢价轮动", window: "近1年", status: "finished", progress: 100, startedAt: "09:15:22", eta: "done", worker: "wk-03" },
-  { jobId: "BT-20260221-004", template: "流动性优先", window: "2018-2025", status: "failed", progress: 44, startedAt: "08:56:40", eta: "stopped", worker: "wk-04" },
-  { jobId: "BT-20260221-005", template: "双低回撤保护", window: "近3年", status: "running", progress: 81, startedAt: "09:02:11", eta: "3m", worker: "wk-05" },
-  { jobId: "BT-20260221-006", template: "小盘债容量版", window: "近1年", status: "finished", progress: 100, startedAt: "08:21:53", eta: "done", worker: "wk-01" },
-  { jobId: "BT-20260221-007", template: "低溢价动量", window: "2018-2025", status: "queued", progress: 0, startedAt: "09:40:14", eta: "--", worker: "wk-03" },
+  { jobId: "BT-20260221-001", strategyId: "STR-001", comboId: "CMB-102883", template: "双低稳健A", window: "2018-2025", status: "running", progress: 62, startedAt: "09:31:05", eta: "7m", worker: "wk-01" },
+  { jobId: "BT-20260221-002", strategyId: "STR-002", comboId: "CMB-202551", template: "双低+评级", window: "近3年", status: "queued", progress: 0, startedAt: "09:33:15", eta: "--", worker: "wk-02" },
+  { jobId: "BT-20260221-003", strategyId: "STR-003", comboId: "CMB-140301", template: "低价低溢价轮动", window: "近1年", status: "finished", progress: 100, startedAt: "09:15:22", eta: "done", worker: "wk-03" },
+  { jobId: "BT-20260221-004", strategyId: "STR-004", comboId: "CMB-033421", template: "流动性优先", window: "2018-2025", status: "failed", progress: 44, startedAt: "08:56:40", eta: "stopped", worker: "wk-04" },
+  { jobId: "BT-20260221-005", strategyId: "STR-005", comboId: "CMB-883102", template: "双低回撤保护", window: "近3年", status: "running", progress: 81, startedAt: "09:02:11", eta: "3m", worker: "wk-05" },
+  { jobId: "BT-20260221-006", strategyId: "STR-006", comboId: "CMB-553210", template: "小盘债容量版", window: "近1年", status: "finished", progress: 100, startedAt: "08:21:53", eta: "done", worker: "wk-01" },
+  { jobId: "BT-20260221-007", strategyId: "STR-007", comboId: "CMB-932811", template: "低溢价动量", window: "2018-2025", status: "queued", progress: 0, startedAt: "09:40:14", eta: "--", worker: "wk-03" },
 ];
 
 export const backtestLeaderboard: BacktestLeaderboardRow[] = [
-  { rank: 1, template: "双低稳健A", cagr: 0.342, mdd: 0.192, calmar: 1.78, winRate: 62.4, turnover: 0.29, recent1y: 0.271, robustScore: 92.2, window: "full" },
-  { rank: 2, template: "双低+评级", cagr: 0.331, mdd: 0.185, calmar: 1.79, winRate: 61.2, turnover: 0.27, recent1y: 0.259, robustScore: 90.9, window: "3y" },
-  { rank: 3, template: "双低回撤保护", cagr: 0.316, mdd: 0.169, calmar: 1.87, winRate: 59.8, turnover: 0.25, recent1y: 0.246, robustScore: 89.8, window: "1y" },
-  { rank: 4, template: "低价低溢价轮动", cagr: 0.354, mdd: 0.222, calmar: 1.59, winRate: 60.1, turnover: 0.33, recent1y: 0.221, robustScore: 86.4, window: "full" },
-  { rank: 5, template: "流动性优先", cagr: 0.288, mdd: 0.141, calmar: 2.04, winRate: 57.6, turnover: 0.21, recent1y: 0.208, robustScore: 85.2, window: "3y" },
-  { rank: 6, template: "小盘债容量版", cagr: 0.301, mdd: 0.201, calmar: 1.49, winRate: 58.8, turnover: 0.26, recent1y: 0.193, robustScore: 82.9, window: "1y" },
-  { rank: 7, template: "低溢价动量", cagr: 0.278, mdd: 0.236, calmar: 1.18, winRate: 54.1, turnover: 0.38, recent1y: 0.161, robustScore: 77.5, window: "full" },
+  { rank: 1, strategyId: "STR-001", comboId: "CMB-102883", template: "双低稳健A", cagr: 0.342, mdd: 0.192, calmar: 1.78, winRate: 62.4, turnover: 0.29, recent1y: 0.271, robustScore: 92.2, window: "full" },
+  { rank: 2, strategyId: "STR-002", comboId: "CMB-202551", template: "双低+评级", cagr: 0.331, mdd: 0.185, calmar: 1.79, winRate: 61.2, turnover: 0.27, recent1y: 0.259, robustScore: 90.9, window: "3y" },
+  { rank: 3, strategyId: "STR-005", comboId: "CMB-883102", template: "双低回撤保护", cagr: 0.316, mdd: 0.169, calmar: 1.87, winRate: 59.8, turnover: 0.25, recent1y: 0.246, robustScore: 89.8, window: "1y" },
+  { rank: 4, strategyId: "STR-003", comboId: "CMB-140301", template: "低价低溢价轮动", cagr: 0.354, mdd: 0.222, calmar: 1.59, winRate: 60.1, turnover: 0.33, recent1y: 0.221, robustScore: 86.4, window: "full" },
+  { rank: 5, strategyId: "STR-004", comboId: "CMB-033421", template: "流动性优先", cagr: 0.288, mdd: 0.141, calmar: 2.04, winRate: 57.6, turnover: 0.21, recent1y: 0.208, robustScore: 85.2, window: "3y" },
+  { rank: 6, strategyId: "STR-006", comboId: "CMB-553210", template: "小盘债容量版", cagr: 0.301, mdd: 0.201, calmar: 1.49, winRate: 58.8, turnover: 0.26, recent1y: 0.193, robustScore: 82.9, window: "1y" },
+  { rank: 7, strategyId: "STR-007", comboId: "CMB-932811", template: "低溢价动量", cagr: 0.278, mdd: 0.236, calmar: 1.18, winRate: 54.1, turnover: 0.38, recent1y: 0.161, robustScore: 77.5, window: "full" },
 ];
 
 export const backtestCompareRows: BacktestCompareRow[] = [

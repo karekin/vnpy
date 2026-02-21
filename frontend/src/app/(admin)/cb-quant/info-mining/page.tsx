@@ -5,7 +5,6 @@ import ScrollableDataTable from "@/components/cb-quant/ScrollableDataTable";
 import TablePaginationBar from "@/components/cb-quant/TablePaginationBar";
 import WorkbenchHeader from "@/components/cb-quant/WorkbenchHeader";
 import { TableCell, TableRow } from "@/components/ui/table";
-import { AlertIcon } from "@/icons/index";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 type StockRow = {
@@ -186,6 +185,7 @@ export default function CbQuantInfoMiningPage() {
   const [lineagePage, setLineagePage] = useState<number>(1);
   const [showFilter, setShowFilter] = useState<boolean>(false);
   const filterRef = useRef<HTMLDivElement>(null);
+  const riskAlertCount = 1;
 
   const filteredStocks = useMemo(() => {
     const keyword = stockKeyword.trim().toLowerCase();
@@ -548,40 +548,22 @@ export default function CbQuantInfoMiningPage() {
       subtitle="交易者数据工作台：按 Invoices 风格展示概览、筛选与明细表，突出高频操作与审计可追溯。"
     >
       <div className="space-y-6">
-        <div className="rounded-2xl border border-gray-200 bg-white p-4 sm:p-6 dark:border-gray-800 dark:bg-white/[0.03]">
-          <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h2 className="font-semibold text-gray-800 dark:text-white/90">Overview</h2>
-              <p className="text-sm text-gray-500 dark:text-gray-400">信息挖掘阶段关键样本规模、审计覆盖与数据风险。</p>
-            </div>
-            <button className="bg-brand-500 shadow-theme-xs hover:bg-brand-600 inline-flex items-center justify-center gap-2 rounded-lg px-4 py-3 text-sm font-medium text-white transition">
-              <svg width="16" height="16" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M10 3.33325V16.6666M3.33398 9.99992H16.6673" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-              刷新快照
-            </button>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+          <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]">
+            <p className="text-sm text-gray-500 dark:text-gray-400">A股快照</p>
+            <p className="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">{filteredStocks.length}</p>
           </div>
-          <div className="grid grid-cols-1 rounded-xl border border-gray-200 sm:grid-cols-2 lg:grid-cols-4 lg:divide-x lg:divide-y-0 dark:divide-gray-800 dark:border-gray-800">
-            <div className="border-b p-5 sm:border-r lg:border-b-0 dark:border-gray-800">
-              <p className="mb-1.5 text-sm text-gray-400 dark:text-gray-500">A股快照</p>
-              <h3 className="text-3xl text-gray-800 dark:text-white/90">{filteredStocks.length}</h3>
-            </div>
-            <div className="border-b p-5 lg:border-b-0 dark:border-gray-800">
-              <p className="mb-1.5 text-sm text-gray-400 dark:text-gray-500">可转债快照</p>
-              <h3 className="text-3xl text-gray-800 dark:text-white/90">{filteredBonds.length}</h3>
-            </div>
-            <div className="border-b p-5 sm:border-r sm:border-b-0 dark:border-gray-800">
-              <p className="mb-1.5 text-sm text-gray-400 dark:text-gray-500">字段追踪</p>
-              <h3 className="text-3xl text-gray-800 dark:text-white/90">{filteredLineage.length}</h3>
-            </div>
-            <div className="p-5">
-              <div className="mb-1.5 flex items-center gap-1.5 text-sm text-yellow-700 dark:text-yellow-300">
-                <AlertIcon className="h-4 w-4" />
-                <span>风险提示</span>
-              </div>
-              <p className="text-sm font-medium text-yellow-700 dark:text-yellow-300">jsl 无 cookie 可能字段不全</p>
-              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">建议启用 cookie + 昨日快照回退</p>
-            </div>
+          <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]">
+            <p className="text-sm text-gray-500 dark:text-gray-400">可转债快照</p>
+            <p className="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">{filteredBonds.length}</p>
+          </div>
+          <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]">
+            <p className="text-sm text-gray-500 dark:text-gray-400">字段追踪</p>
+            <p className="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">{filteredLineage.length}</p>
+          </div>
+          <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]">
+            <p className="text-sm text-gray-500 dark:text-gray-400">风险告警</p>
+            <p className="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">{riskAlertCount}</p>
           </div>
         </div>
 
