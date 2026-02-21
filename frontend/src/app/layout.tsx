@@ -1,23 +1,17 @@
-import type { Metadata } from "next";
-import { Space_Grotesk, Noto_Sans_SC } from "next/font/google";
+import { Outfit } from "next/font/google";
 import "./globals.css";
+import "swiper/swiper-bundle.css";
+import "simplebar-react/dist/simplebar.min.css";
+import { SidebarProvider } from "@/context/SidebarContext";
+import { ThemeProvider } from "@/context/ThemeContext";
+import { AuthProvider } from "@/context/AuthContext";
+import { TenantProvider } from "@/context/TenantContext";
+import { PermissionProvider } from "@/context/PermissionContext";
+import { TenantThemeProvider } from "@/components/layout/TenantThemeProvider";
 
-const displayFont = Space_Grotesk({
-  variable: "--font-display",
+const outfit = Outfit({
   subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
 });
-
-const textFont = Noto_Sans_SC({
-  variable: "--font-text",
-  subsets: ["latin"],
-  weight: ["400", "500", "700"],
-});
-
-export const metadata: Metadata = {
-  title: "Convertible Bond Quant Lab",
-  description: "A-share and convertible bond quant workflow dashboard built with Next.js.",
-};
 
 export default function RootLayout({
   children,
@@ -25,8 +19,20 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="zh-CN">
-      <body className={`${displayFont.variable} ${textFont.variable}`}>{children}</body>
+    <html lang="en">
+      <body className={`${outfit.className} dark:bg-gray-900`}>
+        <AuthProvider>
+          <TenantProvider>
+            <PermissionProvider>
+              <ThemeProvider>
+                <TenantThemeProvider>
+                  <SidebarProvider>{children}</SidebarProvider>
+                </TenantThemeProvider>
+              </ThemeProvider>
+            </PermissionProvider>
+          </TenantProvider>
+        </AuthProvider>
+      </body>
     </html>
   );
 }
