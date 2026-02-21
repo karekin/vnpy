@@ -266,6 +266,110 @@ bash install_osx.sh
 
 * 在VeighNa Trader的运行过程中请勿关闭VeighNa Station（会自动退出）
 
+## 可转债集成技术规划（CB Quant）
+
+针对“可转债参数化策略（几十万组合）-> 回测筛选 -> 实盘交易”的需求，推荐采用分阶段集成方式：
+
+### Phase A（当前阶段，已落地）
+
+目标：保留 `convertible-bond-crawler` 的回测逻辑，将参数空间交给 `vnpy.trader.optimize` 批量搜索并输出 TopN。
+
+实现位置：
+
+* `convertible-bond-crawler/scripts/phase_a_optimize.py`
+
+执行示例（默认参数空间约为几十万级）：
+
+```bash
+python convertible-bond-crawler/scripts/phase_a_optimize.py \
+  --data-dir convertible-bond-crawler/out \
+  --output-dir convertible-bond-crawler/out/phase_a \
+  --top-n 50 \
+  --max-workers 4 \
+  --target return_drawdown_ratio
+```
+
+产出：
+
+* `phase_a_top_*.json`：完整参数与绩效指标
+* `phase_a_top_*.csv`：TopN 策略清单（便于人工复核/导入后续流程）
+
+### Phase B（推荐下一阶段）
+
+目标：将 `easyquotation` 数据接入标准化为统一快照与版本化存储，回测统一读取离线数据，提升可复现性与稳定性。
+
+核心动作：
+
+* 建立字段映射与数据质量校验（缺失、异常值、时间戳）
+* 固化“交易日快照版本”，避免在线抓取波动影响回测结果
+* 回测和研究任务全部改为读取同一份标准化数据
+
+### Phase C（执行闭环）
+
+目标：将 TopN 中筛选后的策略接入实盘执行（券商 Gateway）与风控，形成自动复盘与迭代。
+
+核心动作：
+
+* 将策略输出转为目标持仓/调仓指令
+* 接入交易前风控（流动性、强赎、仓位上限）
+* 记录成交偏差，按月滚动重跑 Phase A/B
+
+### Phase D（Web层建设，推荐并行推进）
+
+目标：提供 `REST + WebSocket` 服务，覆盖桌面端核心能力，实现前后端分离的可转债交易系统。
+
+落地目录（建议）：
+
+* `vnpy/web/api`：HTTP 接口（命令面）
+* `vnpy/web/ws`：实时推送（事件面）
+* `vnpy/web/services`：业务编排与权限/校验
+* `vnpy/web/adapters`：对接 `MainEngine`/`EventEngine` 的薄适配层
+
+首批接口范围（用于替代客户端核心功能）：
+
+* 系统与鉴权：`/api/v1/auth/*`、`/api/v1/system/health`
+* 网关管理：`/api/v1/gateways`、`/connect`、`/disconnect`
+* 行情与订阅：`/api/v1/contracts`、`/api/v1/market/ticks`、`/api/v1/market/subscribe`
+* 交易链路：`/api/v1/orders`、`/api/v1/orders/{vt_orderid}/cancel`
+* 资产查询：`/api/v1/trades`、`/api/v1/positions`、`/api/v1/accounts`
+* 策略与任务：`/api/v1/strategies/*`、`/api/v1/backtest/jobs`、`/api/v1/optimize/jobs`
+* 实时推送：`/ws/events`（`tick/order/trade/position/account/log`）
+
+实施节奏（建议）：
+
+1. `P0`：先打通交易必需链路（网关连接、下撤单、订单成交推送、账户持仓查询）。
+2. `P1`：接入回测与优化任务 API（异步 Job 化，支持 TopN 结果查询与下载）。
+3. `P2`：补齐审计、限流、告警、权限分级、灰度发布等生产能力。
+
+工程原则：
+
+* 不修改 `vnpy/trader` 核心引擎；通过 `adapters` 调用现有能力。
+* REST 负责请求响应；WebSocket 负责事件广播，避免轮询。
+* 回测/优化等长任务必须异步化（`job_id` + 状态查询），防止阻塞 Web 进程。
+
+备注：`vn.py` 已提供完整的事件驱动交易框架、优化器与扩展机制。可转债项目以“扩展实现”为主，不建议修改核心引擎。
+
+### 目录收口规划（移除 `convertible-bond-crawler`）
+
+为减少多仓库/多目录维护成本，后续建议将 `convertible-bond-crawler` 逻辑逐步收口到 `vnpy` 主目录内。收口方式不是“只做策略”或“只做回测”，而是采用 **策略模块 + 回测扩展** 的组合：
+
+* 策略模块：承载可转债多因子评分、过滤、调仓规则（可复用到回测和实盘）。
+* 回测扩展：承载组合持仓仿真、绩效统计、参数批量评估入口。
+* 优化引擎：继续复用 `vnpy.trader.optimize`，只替换 `evaluate_func` 到可转债回测扩展。
+
+推荐目录（示例）：
+
+* `vnpy/cbquant/strategy/multi_factor.py`
+* `vnpy/cbquant/backtesting/engine.py`
+* `vnpy/cbquant/optimize/phase_a.py`
+* `vnpy/cbquant/data/loader.py`
+
+迁移顺序：
+
+1. 先迁策略规则（纯函数化，保证输入输出稳定）。
+2. 再迁回测引擎（复用现有持仓和收益计算逻辑）。
+3. 最后迁优化入口（接入 `OptimizationSetting` 和 `run_bf_optimization`）。
+
 ## 脚本运行
 
 除了基于VeighNa Station的图形化启动方式外，也可以在任意目录下创建run.py，写入以下示例代码：

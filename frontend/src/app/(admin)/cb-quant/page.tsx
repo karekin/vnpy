@@ -1,140 +1,398 @@
+"use client";
+
 import CbQuantPageShell from "@/components/cb-quant/CbQuantPageShell";
-import { Metadata } from "next";
-import React from "react";
+import ScrollableDataTable from "@/components/cb-quant/ScrollableDataTable";
+import StatusTag from "@/components/cb-quant/StatusTag";
+import TablePaginationBar from "@/components/cb-quant/TablePaginationBar";
+import WorkbenchHeader from "@/components/cb-quant/WorkbenchHeader";
+import { actionRows, alertRows, pipelineRows } from "@/components/cb-quant/mockData";
+import { downloadCsv, getPagedRows, getTotalPages } from "@/components/cb-quant/tableUtils";
+import { TableCell, TableRow } from "@/components/ui/table";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
-export const metadata: Metadata = {
-  title: "CB Quant Overview | TailAdmin",
-  description: "可转债量化策略闭环总览页面",
-};
+const tabs = [
+  { key: "pipeline", title: "流程看板" },
+  { key: "alerts", title: "风险告警" },
+  { key: "actions", title: "最近动作" },
+] as const;
 
-const targets = [
-  { label: "长期收益目标", value: "年化约 30%", desc: "在控制回撤与交易成本前提下达成。" },
-  { label: "近期鲁棒目标", value: "近3年/近1年持续有效", desc: "不依赖单一历史行情窗口。" },
-  { label: "自动化目标", value: "少人工决策", desc: "日常自动筛选，人工仅确认执行。" },
-];
+const pageSizeOptions = [5, 10, 20];
 
-const loopStages = [
-  { id: 1, title: "信息挖掘", desc: "从公开调仓记录、社区经验与历史回测提取可参数化规则。" },
-  { id: 2, title: "策略生成", desc: "用 Filters + Ranking + Portfolio + Rebalance + Risk 统一表达策略。" },
-  { id: 3, title: "回测评估", desc: "批量搜索策略并在全周期与近窗口同时打分和筛选。" },
-  { id: 4, title: "自动执行", desc: "先半自动推荐，后接交易接口逐步升级到全自动。" },
-  { id: 5, title: "反馈复盘", desc: "归因收益与回撤来源，检测策略失效并触发再优化。" },
-  { id: 6, title: "持续迭代", desc: "保留参数稳健区间，滚动更新，避免单点过拟合。" },
-];
+function getPipelineTone(status: "ready" | "running" | "blocked") {
+  if (status === "ready") return "green" as const;
+  if (status === "running") return "blue" as const;
+  return "red" as const;
+}
 
-const architecture = [
-  { stage: "A 信息挖掘", output: "策略要素字典 + 初始策略族" },
-  { stage: "B 数据接入", output: "可复现版本化快照" },
-  { stage: "C 策略生成", output: "<=30 参数配置化策略" },
-  { stage: "D 回测搜索", output: "多窗口评分与稳健区间" },
-  { stage: "E 决策层", output: "可解释推荐清单" },
-  { stage: "F 执行层", output: "成交回写与偏差记录" },
-  { stage: "G 反馈层", output: "失效触发 + 再训练" },
-];
+function getAlertTone(level: "high" | "medium" | "low") {
+  if (level === "high") return "red" as const;
+  if (level === "medium") return "yellow" as const;
+  return "green" as const;
+}
 
-const milestones = [
-  { id: "M1", title: "数据管道 + 基准回测", span: "1-2周" },
-  { id: "M2", title: "参数化 + 10万策略搜索", span: "2-4周" },
-  { id: "M3", title: "反推公开组合规则", span: "2-6周" },
-  { id: "M4", title: "自动推荐 + 线上监控", span: "持续迭代" },
-];
-
-const robustness = [
-  "多窗口硬约束：全周期、近3年、近1年同时达标。",
-  "稳健区间优先：选择参数平台而非单点最优。",
-  "状态切换：按溢价率中枢和波动率动态调整权重。",
-];
-
-const stack = [
-  "数据：AKShare / TuShare / 自建落库",
-  "回测：Backtrader / Qlib",
-  "执行：半自动清单优先，逐步升级自动交易",
-];
+function getActionTone(result: "success" | "running" | "failed") {
+  if (result === "success") return "green" as const;
+  if (result === "running") return "blue" as const;
+  return "red" as const;
+}
 
 export default function CbQuantOverviewPage() {
+  const [activeTab, setActiveTab] = useState<(typeof tabs)[number]["key"]>("pipeline");
+  const [search, setSearch] = useState<string>("");
+  const [showFilter, setShowFilter] = useState<boolean>(false);
+  const [pipelineStatus, setPipelineStatus] = useState<string>("all");
+  const [alertLevel, setAlertLevel] = useState<string>("all");
+  const [actionResult, setActionResult] = useState<string>("all");
+  const [pageSize, setPageSize] = useState<number>(5);
+  const [pipelinePage, setPipelinePage] = useState<number>(1);
+  const [alertPage, setAlertPage] = useState<number>(1);
+  const [actionPage, setActionPage] = useState<number>(1);
+  const filterRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const onClickOutside = (event: MouseEvent) => {
+      if (filterRef.current && !filterRef.current.contains(event.target as Node)) {
+        setShowFilter(false);
+      }
+    };
+    document.addEventListener("click", onClickOutside);
+    return () => document.removeEventListener("click", onClickOutside);
+  }, []);
+
+  useEffect(() => {
+    setShowFilter(false);
+  }, [activeTab]);
+
+  const keyword = search.trim().toLowerCase();
+
+  const filteredPipeline = useMemo(() => {
+    return pipelineRows.filter((row) => {
+      const hitKeyword =
+        !keyword ||
+        row.stage.toLowerCase().includes(keyword) ||
+        row.owner.toLowerCase().includes(keyword) ||
+        row.note.toLowerCase().includes(keyword);
+      const hitStatus = pipelineStatus === "all" || row.status === pipelineStatus;
+      return hitKeyword && hitStatus;
+    });
+  }, [keyword, pipelineStatus]);
+
+  const filteredAlerts = useMemo(() => {
+    return alertRows.filter((row) => {
+      const hitKeyword =
+        !keyword ||
+        row.id.toLowerCase().includes(keyword) ||
+        row.module.toLowerCase().includes(keyword) ||
+        row.message.toLowerCase().includes(keyword) ||
+        row.action.toLowerCase().includes(keyword);
+      const hitLevel = alertLevel === "all" || row.level === alertLevel;
+      return hitKeyword && hitLevel;
+    });
+  }, [keyword, alertLevel]);
+
+  const filteredActions = useMemo(() => {
+    return actionRows.filter((row) => {
+      const hitKeyword =
+        !keyword ||
+        row.operator.toLowerCase().includes(keyword) ||
+        row.action.toLowerCase().includes(keyword) ||
+        row.target.toLowerCase().includes(keyword);
+      const hitResult = actionResult === "all" || row.result === actionResult;
+      return hitKeyword && hitResult;
+    });
+  }, [keyword, actionResult]);
+
+  const pipelineTotalPages = getTotalPages(filteredPipeline.length, pageSize);
+  const alertTotalPages = getTotalPages(filteredAlerts.length, pageSize);
+  const actionTotalPages = getTotalPages(filteredActions.length, pageSize);
+
+  useEffect(() => {
+    if (pipelinePage > pipelineTotalPages) setPipelinePage(pipelineTotalPages);
+  }, [pipelinePage, pipelineTotalPages]);
+
+  useEffect(() => {
+    if (alertPage > alertTotalPages) setAlertPage(alertTotalPages);
+  }, [alertPage, alertTotalPages]);
+
+  useEffect(() => {
+    if (actionPage > actionTotalPages) setActionPage(actionTotalPages);
+  }, [actionPage, actionTotalPages]);
+
+  const pagedPipeline = getPagedRows(filteredPipeline, pipelinePage, pageSize);
+  const pagedAlerts = getPagedRows(filteredAlerts, alertPage, pageSize);
+  const pagedActions = getPagedRows(filteredActions, actionPage, pageSize);
+
+  const readyCount = pipelineRows.filter((row) => row.status === "ready").length;
+  const runningCount = pipelineRows.filter((row) => row.status === "running").length;
+  const blockedCount = pipelineRows.filter((row) => row.status === "blocked").length;
+  const highAlertCount = alertRows.filter((row) => row.level === "high").length;
+
+  const searchPlaceholder =
+    activeTab === "pipeline"
+      ? "Search stage/owner/note..."
+      : activeTab === "alerts"
+      ? "Search alert/module/message..."
+      : "Search operator/action/target...";
+
+  const onExport = () => {
+    const date = new Date().toISOString().slice(0, 10);
+
+    if (activeTab === "pipeline") {
+      downloadCsv(
+        `cb-quant-overview-pipeline-${date}.csv`,
+        ["阶段", "状态", "更新时间", "负责人", "说明"],
+        filteredPipeline.map((row) => [row.stage, row.status, row.updatedAt, row.owner, row.note])
+      );
+      return;
+    }
+
+    if (activeTab === "alerts") {
+      downloadCsv(
+        `cb-quant-overview-alerts-${date}.csv`,
+        ["告警ID", "等级", "模块", "消息", "影响", "建议动作", "更新时间"],
+        filteredAlerts.map((row) => [
+          row.id,
+          row.level,
+          row.module,
+          row.message,
+          row.impact,
+          row.action,
+          row.updatedAt,
+        ])
+      );
+      return;
+    }
+
+    downloadCsv(
+      `cb-quant-overview-actions-${date}.csv`,
+      ["时间", "操作人", "动作", "目标", "结果"],
+      filteredActions.map((row) => [row.time, row.operator, row.action, row.target, row.result])
+    );
+  };
+
+  const filterPanel = (
+    <div className="absolute right-0 z-20 mt-2 w-72 rounded-lg border border-gray-200 bg-white p-4 shadow-lg dark:border-gray-700 dark:bg-gray-800">
+      <div className="space-y-4">
+        {activeTab === "pipeline" && (
+          <div>
+            <label className="mb-2 block text-xs font-medium text-gray-700 dark:text-gray-300">流程状态</label>
+            <select
+              value={pipelineStatus}
+              onChange={(event) => {
+                setPipelineStatus(event.target.value);
+                setPipelinePage(1);
+              }}
+              className="h-10 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-800 dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
+            >
+              <option value="all">全部</option>
+              <option value="ready">ready</option>
+              <option value="running">running</option>
+              <option value="blocked">blocked</option>
+            </select>
+          </div>
+        )}
+
+        {activeTab === "alerts" && (
+          <div>
+            <label className="mb-2 block text-xs font-medium text-gray-700 dark:text-gray-300">告警等级</label>
+            <select
+              value={alertLevel}
+              onChange={(event) => {
+                setAlertLevel(event.target.value);
+                setAlertPage(1);
+              }}
+              className="h-10 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-800 dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
+            >
+              <option value="all">全部</option>
+              <option value="high">high</option>
+              <option value="medium">medium</option>
+              <option value="low">low</option>
+            </select>
+          </div>
+        )}
+
+        {activeTab === "actions" && (
+          <div>
+            <label className="mb-2 block text-xs font-medium text-gray-700 dark:text-gray-300">执行结果</label>
+            <select
+              value={actionResult}
+              onChange={(event) => {
+                setActionResult(event.target.value);
+                setActionPage(1);
+              }}
+              className="h-10 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-800 dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
+            >
+              <option value="all">全部</option>
+              <option value="success">success</option>
+              <option value="running">running</option>
+              <option value="failed">failed</option>
+            </select>
+          </div>
+        )}
+
+        <div>
+          <label className="mb-2 block text-xs font-medium text-gray-700 dark:text-gray-300">每页条数</label>
+          <select
+            value={String(pageSize)}
+            onChange={(event) => {
+              const newPageSize = Number(event.target.value);
+              setPageSize(newPageSize);
+              setPipelinePage(1);
+              setAlertPage(1);
+              setActionPage(1);
+            }}
+            className="h-10 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-800 dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
+          >
+            {pageSizeOptions.map((size) => (
+              <option key={size} value={size}>{`每页 ${size} 条`}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={() => setShowFilter(false)}
+        className="bg-brand-500 hover:bg-brand-600 mt-4 h-10 w-full rounded-lg text-sm font-medium text-white"
+      >
+        Apply
+      </button>
+    </div>
+  );
+
   return (
     <CbQuantPageShell
       title="CB Quant 总览"
-      subtitle="总览页聚合所有核心信息：目标、闭环阶段、架构、里程碑、稳健性与工具栈。6个行动页只保留可执行任务。"
+      subtitle="交易日指挥台：聚焦流程进度、风险告警和关键操作，先定位问题再进入行动页处理。"
     >
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        {targets.map((target) => (
-          <div
-            key={target.label}
-            className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]"
-          >
-            <p className="text-sm text-gray-500 dark:text-gray-400">{target.label}</p>
-            <p className="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">{target.value}</p>
-            <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">{target.desc}</p>
-          </div>
-        ))}
-      </div>
-
-      <div className="rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-800 dark:bg-white/[0.03]">
-        <h3 className="text-lg font-semibold text-gray-900 dark:text-white">策略闭环阶段</h3>
-        <div className="mt-5 grid grid-cols-1 gap-4 xl:grid-cols-3">
-          {loopStages.map((stage) => (
-            <div key={stage.title} className="rounded-2xl border border-gray-200 p-6 dark:border-gray-700">
-              <div className="flex items-center gap-4">
-                <span className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-brand-100 text-2xl font-semibold text-brand-600 dark:bg-brand-500/20 dark:text-brand-300">
-                  {stage.id}
-                </span>
-                <h4 className="text-2xl font-semibold text-gray-900 dark:text-white">{stage.title}</h4>
-              </div>
-              <p className="mt-4 text-sm leading-8 text-gray-600 dark:text-gray-300">{stage.desc}</p>
-            </div>
-          ))}
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+        <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]">
+          <p className="text-sm text-gray-500 dark:text-gray-400">流程就绪</p>
+          <p className="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">{readyCount}</p>
+        </div>
+        <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]">
+          <p className="text-sm text-gray-500 dark:text-gray-400">正在运行</p>
+          <p className="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">{runningCount}</p>
+        </div>
+        <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]">
+          <p className="text-sm text-gray-500 dark:text-gray-400">阻塞阶段</p>
+          <p className="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">{blockedCount}</p>
+        </div>
+        <div className="rounded-2xl border border-yellow-200 bg-yellow-50 p-5 dark:border-yellow-700/40 dark:bg-yellow-500/10">
+          <p className="text-sm text-yellow-700 dark:text-yellow-300">高优先告警</p>
+          <p className="mt-2 text-2xl font-semibold text-yellow-700 dark:text-yellow-300">{highAlertCount}</p>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-        <div className="rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-800 dark:bg-white/[0.03]">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">全流程架构输出</h3>
-          <ul className="mt-4 space-y-3 text-sm text-gray-700 dark:text-gray-200">
-            {architecture.map((item) => (
-              <li key={item.stage} className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
-                <p className="font-semibold text-gray-900 dark:text-white">{item.stage}</p>
-                <p className="mt-1 text-gray-600 dark:text-gray-300">{item.output}</p>
-              </li>
-            ))}
-          </ul>
-        </div>
+      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
+        <WorkbenchHeader
+          title="交易日运行台"
+          description="实时查看流程状态、告警和操作留痕"
+          tabs={tabs}
+          activeTab={activeTab}
+          onTabChange={(tab) => setActiveTab(tab)}
+          searchPlaceholder={searchPlaceholder}
+          searchValue={search}
+          onSearchChange={(value) => {
+            setSearch(value);
+            setPipelinePage(1);
+            setAlertPage(1);
+            setActionPage(1);
+          }}
+          filterOpen={showFilter}
+          onToggleFilter={() => setShowFilter((prev) => !prev)}
+          filterPanel={filterPanel}
+          filterRef={filterRef}
+          onExport={onExport}
+        />
 
-        <div className="space-y-5">
-          <div className="rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-800 dark:bg-white/[0.03]">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">里程碑计划</h3>
-            <div className="mt-4 space-y-3 text-sm text-gray-700 dark:text-gray-200">
-              {milestones.map((item) => (
-                <div key={item.id} className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
-                  <p className="font-semibold text-gray-900 dark:text-white">{item.id} · {item.title}</p>
-                  <p className="mt-1 text-gray-600 dark:text-gray-300">周期：{item.span}</p>
-                </div>
+        {activeTab === "pipeline" && (
+          <div className="p-5">
+            <ScrollableDataTable
+              headers={["阶段", "状态", "更新时间", "负责人", "说明"]}
+              minTableWidthClass="min-w-[1100px]"
+              colSpan={5}
+              isEmpty={pagedPipeline.length === 0}
+            >
+              {pagedPipeline.map((row) => (
+                <TableRow key={row.stage} className="border-b border-gray-100 dark:border-gray-800">
+                  <TableCell className="px-4 py-3 text-sm font-semibold text-gray-900 whitespace-nowrap dark:text-white">{row.stage}</TableCell>
+                  <TableCell className="px-4 py-3 text-sm whitespace-nowrap">
+                    <StatusTag label={row.status} tone={getPipelineTone(row.status)} />
+                  </TableCell>
+                  <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{row.updatedAt}</TableCell>
+                  <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{row.owner}</TableCell>
+                  <TableCell className="px-4 py-3 text-sm text-gray-600 dark:text-gray-300">{row.note}</TableCell>
+                </TableRow>
               ))}
-            </div>
+            </ScrollableDataTable>
+            <TablePaginationBar
+              totalItems={filteredPipeline.length}
+              currentPage={pipelinePage}
+              totalPages={pipelineTotalPages}
+              onPageChange={setPipelinePage}
+            />
           </div>
+        )}
 
-          <div className="rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-800 dark:bg-white/[0.03]">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">稳健性机制</h3>
-            <ul className="mt-4 space-y-3 text-sm text-gray-700 dark:text-gray-200">
-              {robustness.map((item) => (
-                <li key={item} className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
-                  {item}
-                </li>
+        {activeTab === "alerts" && (
+          <div className="p-5">
+            <ScrollableDataTable
+              headers={["告警ID", "等级", "模块", "消息", "影响", "建议动作", "更新时间"]}
+              minTableWidthClass="min-w-[1400px]"
+              colSpan={7}
+              isEmpty={pagedAlerts.length === 0}
+            >
+              {pagedAlerts.map((row) => (
+                <TableRow key={row.id} className="border-b border-gray-100 dark:border-gray-800">
+                  <TableCell className="px-4 py-3 text-sm font-semibold text-gray-900 whitespace-nowrap dark:text-white">{row.id}</TableCell>
+                  <TableCell className="px-4 py-3 text-sm whitespace-nowrap">
+                    <StatusTag label={row.level} tone={getAlertTone(row.level)} />
+                  </TableCell>
+                  <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{row.module}</TableCell>
+                  <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-200">{row.message}</TableCell>
+                  <TableCell className="px-4 py-3 text-sm text-gray-600 dark:text-gray-300">{row.impact}</TableCell>
+                  <TableCell className="px-4 py-3 text-sm text-gray-600 dark:text-gray-300">{row.action}</TableCell>
+                  <TableCell className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap dark:text-gray-400">{row.updatedAt}</TableCell>
+                </TableRow>
               ))}
-            </ul>
+            </ScrollableDataTable>
+            <TablePaginationBar
+              totalItems={filteredAlerts.length}
+              currentPage={alertPage}
+              totalPages={alertTotalPages}
+              onPageChange={setAlertPage}
+            />
           </div>
+        )}
 
-          <div className="rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-800 dark:bg-white/[0.03]">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">工具栈建议</h3>
-            <ul className="mt-4 space-y-3 text-sm text-gray-700 dark:text-gray-200">
-              {stack.map((item) => (
-                <li key={item} className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
-                  {item}
-                </li>
+        {activeTab === "actions" && (
+          <div className="p-5">
+            <ScrollableDataTable
+              headers={["时间", "操作人", "动作", "目标", "结果"]}
+              minTableWidthClass="min-w-[1050px]"
+              colSpan={5}
+              isEmpty={pagedActions.length === 0}
+            >
+              {pagedActions.map((row) => (
+                <TableRow key={`${row.time}-${row.target}`} className="border-b border-gray-100 dark:border-gray-800">
+                  <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{row.time}</TableCell>
+                  <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{row.operator}</TableCell>
+                  <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-200">{row.action}</TableCell>
+                  <TableCell className="px-4 py-3 text-sm font-medium text-gray-900 whitespace-nowrap dark:text-white">{row.target}</TableCell>
+                  <TableCell className="px-4 py-3 text-sm whitespace-nowrap">
+                    <StatusTag label={row.result} tone={getActionTone(row.result)} />
+                  </TableCell>
+                </TableRow>
               ))}
-            </ul>
+            </ScrollableDataTable>
+            <TablePaginationBar
+              totalItems={filteredActions.length}
+              currentPage={actionPage}
+              totalPages={actionTotalPages}
+              onPageChange={setActionPage}
+            />
           </div>
-        </div>
+        )}
       </div>
     </CbQuantPageShell>
   );
