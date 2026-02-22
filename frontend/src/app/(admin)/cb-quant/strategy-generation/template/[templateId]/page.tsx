@@ -4,13 +4,23 @@ import CbQuantPageShell from "@/components/cb-quant/CbQuantPageShell";
 import ScrollableDataTable from "@/components/cb-quant/ScrollableDataTable";
 import StatusTag from "@/components/cb-quant/StatusTag";
 import TablePaginationBar from "@/components/cb-quant/TablePaginationBar";
-import { strategyTemplates } from "@/components/cb-quant/mockData";
+import type { StrategyTemplateRow } from "@/components/cb-quant/mockData";
+import {
+  createMockCandidateRun,
+  getTemplateById,
+  getLatestCandidateRun,
+  getTemplateConfig,
+  saveCandidateRun,
+  upsertTemplate,
+  upsertTemplateConfig,
+} from "@/components/cb-quant/strategyCandidateStore";
 import { getPagedRows, getTotalPages } from "@/components/cb-quant/tableUtils";
 import { TableCell, TableRow } from "@/components/ui/table";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import React, { useEffect, useMemo, useState } from "react";
 
 type TemplateDetailTabKey = "overview" | "params" | "catalog";
+type GenerateState = "idle" | "running" | "finished" | "failed";
 
 const pageSizeOptions = [5, 10, 20];
 const defaultSeedFactorKeys = ["dblow", "conv_prem", "turnover", "remain_size", "rating"];
@@ -288,7 +298,7 @@ export default function StrategyTemplateDetailPage() {
   const mode = searchParams.get("mode");
 
   const templateId = params?.templateId ?? "";
-  const template = strategyTemplates.find((item) => item.id === templateId) ?? null;
+  const [template, setTemplate] = useState<StrategyTemplateRow | null>(null);
 
   const [detailTab, setDetailTab] = useState<TemplateDetailTabKey>("overview");
   const [isEditing, setIsEditing] = useState<boolean>(mode === "edit");
@@ -312,6 +322,17 @@ export default function StrategyTemplateDetailPage() {
 
   const [selectedFactorKeys, setSelectedFactorKeys] = useState<string[]>([]);
   const [expressionDraft, setExpressionDraft] = useState<string>("");
+  const [generateState, setGenerateState] = useState<GenerateState>("idle");
+  const [generateMessage, setGenerateMessage] = useState<string>("");
+  const [latestRunId, setLatestRunId] = useState<string>("");
+
+  useEffect(() => {
+    if (!templateId) {
+      setTemplate(null);
+      return;
+    }
+    setTemplate(getTemplateById(templateId));
+  }, [templateId]);
 
   useEffect(() => {
     setDraft({
@@ -323,6 +344,22 @@ export default function StrategyTemplateDetailPage() {
     });
     setIsEditing(mode === "edit");
   }, [mode, template]);
+
+  useEffect(() => {
+    if (!templateId) {
+      return;
+    }
+    const latestRun = getLatestCandidateRun(templateId);
+    if (latestRun) {
+      setLatestRunId(latestRun.runId);
+      setGenerateState("finished");
+      setGenerateMessage(`最新候选集：${latestRun.runId}（${latestRun.rows.length} 条）`);
+    } else {
+      setLatestRunId("");
+      setGenerateState("idle");
+      setGenerateMessage("");
+    }
+  }, [templateId]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -386,10 +423,25 @@ export default function StrategyTemplateDetailPage() {
   }, [functionCatalog]);
 
   useEffect(() => {
-    if (!flatFactors.length || selectedFactorKeys.length > 0) return;
-    const seeded = defaultSeedFactorKeys.filter((key) => flatFactors.some((factor) => factor.factor_key === key));
+    if (!flatFactors.length || !templateId) return;
+
+    const savedConfig = getTemplateConfig(templateId);
+    const validKeys = (savedConfig?.factorKeys ?? []).filter((key) =>
+      flatFactors.some((factor) => factor.factor_key === key),
+    );
+
+    if (validKeys.length) {
+      setSelectedFactorKeys(validKeys);
+      setExpressionDraft(savedConfig?.expressionDraft ?? "");
+      return;
+    }
+
+    const seeded = defaultSeedFactorKeys.filter((key) =>
+      flatFactors.some((factor) => factor.factor_key === key),
+    );
     setSelectedFactorKeys(seeded.length ? seeded : [flatFactors[0].factor_key]);
-  }, [flatFactors, selectedFactorKeys.length]);
+    setExpressionDraft(savedConfig?.expressionDraft ?? "");
+  }, [flatFactors, templateId]);
 
   const keyword = searchKeyword.trim().toLowerCase();
 
@@ -488,6 +540,69 @@ export default function StrategyTemplateDetailPage() {
     setExpressionDraft((prev) => (prev ? `${prev}\n${snippet}` : snippet));
   };
 
+  const persistTemplateConfig = (): void => {
+    if (!templateId || !template) {
+      return;
+    }
+    upsertTemplateConfig({
+      templateId,
+      templateName: draft.name || template.name,
+      factorKeys: selectedFactorKeys,
+      expressionDraft,
+      updatedAt: new Date().toISOString(),
+    });
+  };
+
+  const handleSave = (): void => {
+    if (!template) {
+      return;
+    }
+    const now = new Date().toISOString().slice(0, 16).replace("T", " ");
+    const updatedTemplate: StrategyTemplateRow = {
+      ...template,
+      name: draft.name || template.name,
+      status: draft.status,
+      rebalance: draft.rebalance,
+      riskPreset: draft.riskPreset,
+      owner: draft.owner || template.owner,
+      factorCount: selectedFactorKeys.length,
+      updatedAt: now,
+    };
+    upsertTemplate(updatedTemplate);
+    setTemplate(updatedTemplate);
+    persistTemplateConfig();
+    setGenerateMessage(`模板已保存：${updatedTemplate.id}（${updatedTemplate.updatedAt}）`);
+    setIsEditing(false);
+  };
+
+  const handleGenerateCandidates = async (): Promise<void> => {
+    if (!templateId || !template) {
+      return;
+    }
+    setGenerateState("running");
+    setGenerateMessage("候选生成中，请稍候...");
+
+    try {
+      persistTemplateConfig();
+      await new Promise((resolve) => {
+        window.setTimeout(resolve, 900);
+      });
+      const run = createMockCandidateRun({
+        templateId,
+        templateName: draft.name || template.name,
+        factorCount: selectedFactorKeys.length,
+        expressionDraft,
+      });
+      saveCandidateRun(run);
+      setLatestRunId(run.runId);
+      setGenerateState("finished");
+      setGenerateMessage(`已生成候选集：${run.runId}（${run.rows.length} 条）`);
+    } catch {
+      setGenerateState("failed");
+      setGenerateMessage("候选生成失败，请重试。");
+    }
+  };
+
   if (!template) {
     return (
       <CbQuantPageShell title="模板详情" subtitle="模板不存在或已删除。">
@@ -521,6 +636,25 @@ export default function StrategyTemplateDetailPage() {
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
+              onClick={handleGenerateCandidates}
+              disabled={generateState === "running"}
+              className="bg-brand-500 hover:bg-brand-600 disabled:bg-brand-300 rounded-lg px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed"
+            >
+              {generateState === "running" ? "生成中..." : "生成候选"}
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                router.push(
+                  `/cb-quant/strategy-generation?tab=candidates&templateId=${template.id}${latestRunId ? `&runId=${latestRunId}` : ""}`,
+                )
+              }
+              className="rounded-lg border border-brand-300 px-3 py-2 text-sm font-medium text-brand-600 hover:bg-brand-50 dark:border-brand-400/40 dark:text-brand-300 dark:hover:bg-brand-500/10"
+            >
+              查看候选预览
+            </button>
+            <button
+              type="button"
               onClick={() => router.push("/cb-quant/strategy-generation")}
               className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-white/[0.04]"
             >
@@ -530,7 +664,7 @@ export default function StrategyTemplateDetailPage() {
               <>
                 <button
                   type="button"
-                  onClick={() => setIsEditing(false)}
+                  onClick={handleSave}
                   className="bg-brand-500 hover:bg-brand-600 rounded-lg px-3 py-2 text-sm font-medium text-white"
                 >
                   保存（Mock）
@@ -556,6 +690,19 @@ export default function StrategyTemplateDetailPage() {
         </div>
 
         <div className="p-4">
+          {generateMessage && (
+            <div
+              className={`mb-4 rounded-lg border px-3 py-2 text-sm ${
+                generateState === "finished"
+                  ? "border-green-200 bg-green-50 text-green-700 dark:border-green-800/50 dark:bg-green-500/10 dark:text-green-300"
+                  : generateState === "failed"
+                    ? "border-red-200 bg-red-50 text-red-700 dark:border-red-800/50 dark:bg-red-500/10 dark:text-red-300"
+                    : "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800/50 dark:bg-blue-500/10 dark:text-blue-300"
+              }`}
+            >
+              {generateMessage}
+            </div>
+          )}
           <div className="border-b border-gray-200 dark:border-gray-800">
             <nav className="flex space-x-3 overflow-x-auto">
               {detailTabs.map((tab) => (

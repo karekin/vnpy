@@ -5,13 +5,30 @@ import ScrollableDataTable from "@/components/cb-quant/ScrollableDataTable";
 import StatusTag from "@/components/cb-quant/StatusTag";
 import TablePaginationBar from "@/components/cb-quant/TablePaginationBar";
 import WorkbenchHeader from "@/components/cb-quant/WorkbenchHeader";
-import { strategyCandidates, strategyTemplates } from "@/components/cb-quant/mockData";
+import { strategyCandidates } from "@/components/cb-quant/mockData";
+import {
+  getPreviewCandidateRows,
+  listTemplates,
+  saveTemplates,
+} from "@/components/cb-quant/strategyCandidateStore";
 import { downloadCsv, getPagedRows, getTotalPages } from "@/components/cb-quant/tableUtils";
 import { TableCell, TableRow } from "@/components/ui/table";
-import { useRouter } from "next/navigation";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import React, { Suspense, useEffect, useMemo, useRef, useState } from "react";
 
 type MainTabKey = "templates" | "candidates";
+type CandidateRowUi = {
+  rank: number;
+  templateId: string;
+  template: string;
+  comboId: string;
+  estCombos: number;
+  passRate: number;
+  window: "full" | "3y" | "1y";
+  source: "generated" | "mock";
+  runId?: string;
+  generatedAt?: string;
+};
 
 const mainTabs: { key: MainTabKey; title: string }[] = [
   { key: "templates", title: "模板库" },
@@ -32,17 +49,77 @@ function getWindowTone(windowName: "full" | "3y" | "1y") {
   return "yellow" as const;
 }
 
-export default function CbQuantStrategyGenerationPage() {
+function CbQuantStrategyGenerationPageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [activeTab, setActiveTab] = useState<MainTabKey>("templates");
   const [search, setSearch] = useState<string>("");
   const [showFilter, setShowFilter] = useState<boolean>(false);
   const [candidateWindow, setCandidateWindow] = useState<string>("all");
+  const [candidateTemplateId, setCandidateTemplateId] = useState<string>("all");
   const [candidatePageSize, setCandidatePageSize] = useState<number>(5);
   const [templatePage, setTemplatePage] = useState<number>(1);
   const [candidatePage, setCandidatePage] = useState<number>(1);
-  const [templates, setTemplates] = useState(strategyTemplates);
+  const [templates, setTemplates] = useState(() => listTemplates());
+  const [generatedCandidates, setGeneratedCandidates] = useState<CandidateRowUi[]>([]);
+  const [generatedHint, setGeneratedHint] = useState<string>("");
   const filterRef = useRef<HTMLDivElement>(null);
+
+  const refreshGeneratedCandidates = (): void => {
+    const rows = getPreviewCandidateRows();
+    if (!rows.length) {
+      setGeneratedCandidates([]);
+      return;
+    }
+    const mappedRows: CandidateRowUi[] = rows.map((row, idx) => ({
+      rank: idx + 1,
+      templateId: row.templateId,
+      template: row.template,
+      comboId: row.comboId,
+      estCombos: row.estCombos,
+      passRate: row.passRate,
+      window: row.window,
+      source: "generated",
+      runId: row.runId,
+      generatedAt: row.generatedAt,
+    }));
+    setGeneratedCandidates(mappedRows);
+  };
+
+  useEffect(() => {
+    setTemplates(listTemplates());
+  }, []);
+
+  useEffect(() => {
+    refreshGeneratedCandidates();
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === "cbq_candidate_runs_v1" || event.key === "cbq_template_config_v1") {
+        refreshGeneratedCandidates();
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  useEffect(() => {
+    const tab = searchParams.get("tab");
+    const templateId = searchParams.get("templateId");
+    const runId = searchParams.get("runId");
+
+    if (tab === "candidates") {
+      setActiveTab("candidates");
+    }
+    if (templateId) {
+      setCandidateTemplateId(templateId);
+      setCandidatePage(1);
+    }
+    if (runId) {
+      setGeneratedHint(`已定位到候选集：${runId}`);
+    }
+    if (tab || templateId || runId) {
+      refreshGeneratedCandidates();
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     const onClickOutside = (event: MouseEvent) => {
@@ -72,14 +149,31 @@ export default function CbQuantStrategyGenerationPage() {
     });
   }, [keyword, templates]);
 
+  const fallbackCandidates = useMemo<CandidateRowUi[]>(() => {
+    return strategyCandidates.map((row) => ({
+      rank: row.rank,
+      templateId: templates.find((tpl) => tpl.name === row.template)?.id ?? "unknown",
+      template: row.template,
+      comboId: row.comboId,
+      estCombos: row.estCombos,
+      passRate: row.passRate,
+      window: row.window,
+      source: "mock",
+    }));
+  }, [templates]);
+
+  const candidatesSource = generatedCandidates.length ? "generated" : "mock";
+  const sourceCandidates = generatedCandidates.length ? generatedCandidates : fallbackCandidates;
+
   const filteredCandidates = useMemo(() => {
-    return strategyCandidates.filter((row) => {
+    return sourceCandidates.filter((row) => {
       const hitKeyword =
         !keyword || row.template.toLowerCase().includes(keyword) || row.comboId.toLowerCase().includes(keyword);
       const hitWindow = candidateWindow === "all" || row.window === candidateWindow;
-      return hitKeyword && hitWindow;
+      const hitTemplate = candidateTemplateId === "all" || row.templateId === candidateTemplateId;
+      return hitKeyword && hitWindow && hitTemplate;
     });
-  }, [keyword, candidateWindow]);
+  }, [sourceCandidates, keyword, candidateWindow, candidateTemplateId]);
 
   const templateTotalPages = getTotalPages(filteredTemplates.length, 10);
   const candidateTotalPages = getTotalPages(filteredCandidates.length, candidatePageSize);
@@ -118,7 +212,11 @@ export default function CbQuantStrategyGenerationPage() {
       updatedAt: new Date().toISOString().slice(0, 16).replace("T", " "),
     };
 
-    setTemplates((prev) => [newTemplate, ...prev]);
+    setTemplates((prev) => {
+      const next = [newTemplate, ...prev];
+      saveTemplates(next);
+      return next;
+    });
     setTemplatePage(1);
     router.push(`/cb-quant/strategy-generation/template/${nextId}?mode=edit`);
   };
@@ -142,7 +240,11 @@ export default function CbQuantStrategyGenerationPage() {
       updatedAt: new Date().toISOString().slice(0, 16).replace("T", " "),
     };
 
-    setTemplates((prev) => [copied, ...prev]);
+    setTemplates((prev) => {
+      const next = [copied, ...prev];
+      saveTemplates(next);
+      return next;
+    });
     setTemplatePage(1);
   };
 
@@ -151,7 +253,11 @@ export default function CbQuantStrategyGenerationPage() {
     if (!target) return;
     const confirmed = window.confirm(`确认删除模板 ${target.id} - ${target.name} 吗？`);
     if (!confirmed) return;
-    setTemplates((prev) => prev.filter((row) => row.id !== templateId));
+    setTemplates((prev) => {
+      const next = prev.filter((row) => row.id !== templateId);
+      saveTemplates(next);
+      return next;
+    });
   };
 
   const onExport = (): void => {
@@ -173,6 +279,24 @@ export default function CbQuantStrategyGenerationPage() {
   const filterPanel = (
     <div className="absolute right-0 z-20 mt-2 w-72 rounded-lg border border-gray-200 bg-white p-4 shadow-lg dark:border-gray-700 dark:bg-gray-800">
       <div className="space-y-4">
+        <div>
+          <label className="mb-2 block text-xs font-medium text-gray-700 dark:text-gray-300">模板</label>
+          <select
+            value={candidateTemplateId}
+            onChange={(event) => {
+              setCandidateTemplateId(event.target.value);
+              setCandidatePage(1);
+            }}
+            className="h-10 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-800 dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
+          >
+            <option value="all">全部模板</option>
+            {templates.map((template) => (
+              <option key={template.id} value={template.id}>
+                {template.id} · {template.name}
+              </option>
+            ))}
+          </select>
+        </div>
         <div>
           <label className="mb-2 block text-xs font-medium text-gray-700 dark:text-gray-300">评估窗口</label>
           <select
@@ -218,7 +342,7 @@ export default function CbQuantStrategyGenerationPage() {
   return (
     <CbQuantPageShell
       title="策略生成行动页"
-      subtitle="模板库只做列表管理；模板详情进入独立页面维护参数空间与因子函数；候选预览只查看组合结果。"
+      subtitle="管理模板并查看候选预览。"
     >
       <div className="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]">
         <h3 className="text-base font-semibold text-gray-800 dark:text-white/90">用户动线</h3>
@@ -348,10 +472,22 @@ export default function CbQuantStrategyGenerationPage() {
 
         {activeTab === "candidates" && (
           <div className="p-5">
+            <div
+              className={`mb-4 rounded-lg border px-3 py-2 text-sm ${
+                candidatesSource === "generated"
+                  ? "border-green-200 bg-green-50 text-green-700 dark:border-green-800/50 dark:bg-green-500/10 dark:text-green-300"
+                  : "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800/50 dark:bg-amber-500/10 dark:text-amber-300"
+              }`}
+            >
+              {candidatesSource === "generated"
+                ? "当前展示来源：已生成候选集。可在模板详情页再次点击“生成候选”刷新。"
+                : "当前展示来源：Mock示例数据。请先进入模板详情页点击“生成候选”。"}
+              {generatedHint ? ` ${generatedHint}` : ""}
+            </div>
             <ScrollableDataTable
-              headers={["排名", "模板", "组合ID", "组合规模", "通过率", "评估窗口"]}
-              minTableWidthClass="min-w-[1020px]"
-              colSpan={6}
+              headers={["排名", "模板", "组合ID", "组合规模", "通过率", "评估窗口", "来源", "候选集ID", "生成时间"]}
+              minTableWidthClass="min-w-[1460px]"
+              colSpan={9}
               isEmpty={pagedCandidates.length === 0}
             >
               {pagedCandidates.map((row) => (
@@ -363,6 +499,15 @@ export default function CbQuantStrategyGenerationPage() {
                   <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{row.passRate.toFixed(1)}%</TableCell>
                   <TableCell className="px-4 py-3 text-sm whitespace-nowrap">
                     <StatusTag label={row.window} tone={getWindowTone(row.window)} />
+                  </TableCell>
+                  <TableCell className="px-4 py-3 text-sm whitespace-nowrap">
+                    <StatusTag label={row.source} tone={row.source === "generated" ? "green" : "yellow"} />
+                  </TableCell>
+                  <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">
+                    {row.runId ?? "-"}
+                  </TableCell>
+                  <TableCell className="px-4 py-3 text-sm text-gray-500 whitespace-nowrap dark:text-gray-400">
+                    {row.generatedAt ?? "-"}
                   </TableCell>
                 </TableRow>
               ))}
@@ -377,5 +522,21 @@ export default function CbQuantStrategyGenerationPage() {
         )}
       </div>
     </CbQuantPageShell>
+  );
+}
+
+export default function CbQuantStrategyGenerationPage() {
+  return (
+    <Suspense
+      fallback={
+        <CbQuantPageShell title="策略生成行动页" subtitle="管理模板并查看候选预览。">
+          <div className="rounded-xl border border-gray-200 bg-white p-6 text-sm text-gray-500 dark:border-gray-800 dark:bg-white/[0.03] dark:text-gray-400">
+            正在加载工作台...
+          </div>
+        </CbQuantPageShell>
+      }
+    >
+      <CbQuantStrategyGenerationPageContent />
+    </Suspense>
   );
 }
