@@ -9,10 +9,36 @@ from vnpy.web.schemas import (
     BacktestStatsResponse,
     BondMarketResponse,
     CandidateListResponse,
+    FactorCatalogResponse,
+    FunctionCatalogResponse,
 )
-from vnpy.web.services import cb_market_service, cb_quant_service
+from vnpy.web.services import cb_catalog_service, cb_market_service, cb_quant_service
 
 router = APIRouter(prefix="/cb-quant", tags=["cb-quant"])
+
+
+@router.get("/catalog/factors", response_model=FactorCatalogResponse)
+def list_factor_catalog(
+    category: str = Query(default="all"),
+    keyword: str = Query(default=""),
+    enabled_only: bool = Query(default=False),
+) -> FactorCatalogResponse:
+    return cb_catalog_service.list_factors(
+        category=category,
+        keyword=keyword,
+        enabled_only=enabled_only,
+    )
+
+
+@router.get("/catalog/functions", response_model=FunctionCatalogResponse)
+def list_function_catalog(
+    category: str = Query(default="all"),
+    keyword: str = Query(default=""),
+) -> FunctionCatalogResponse:
+    return cb_catalog_service.list_functions(
+        category=category,
+        keyword=keyword,
+    )
 
 
 @router.get("/strategy/candidates", response_model=CandidateListResponse)

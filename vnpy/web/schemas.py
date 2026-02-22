@@ -173,3 +173,58 @@ class BondMarketResponse(BaseModel):
     snapshot_time: str
     fallback_used: bool = False
     fallback_reason: str | None = None
+
+
+class FactorCatalogRow(BaseModel):
+    id: str
+    factor_name: str
+    factor_key: str
+    factor_type: int
+    expression: str
+    expression_type: int
+    enabled: bool
+    remark: str = ""
+    view_style: int = 0
+    view_precision: int = 2
+    view_color: bool = False
+    view_ratio: float = 1
+    view_unit: str = ""
+
+
+class FactorCatalogCategory(BaseModel):
+    category_name: str
+    category_key: str
+    factors: list[FactorCatalogRow]
+
+
+class FactorCatalogResponse(BaseModel):
+    items: list[FactorCatalogCategory]
+    total_categories: int
+    total_factors: int
+
+
+class FunctionParameterCatalogRow(BaseModel):
+    name: str
+    description: str
+    type_name: str
+    type: str
+
+
+class FunctionCatalogRow(BaseModel):
+    name: str
+    formular: str
+    description: str
+    parameter_size: int
+    parameters: list[FunctionParameterCatalogRow]
+
+
+class FunctionCatalogCategory(BaseModel):
+    category_name: str
+    category_key: str
+    functions: list[FunctionCatalogRow]
+
+
+class FunctionCatalogResponse(BaseModel):
+    items: list[FunctionCatalogCategory]
+    total_categories: int
+    total_functions: int

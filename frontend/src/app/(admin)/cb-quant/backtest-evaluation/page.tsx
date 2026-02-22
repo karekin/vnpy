@@ -28,7 +28,7 @@ const sectionTabs = [
   {
     key: "config",
     title: "回测配置",
-    subtitle: "先定义非打分规则并生成规则包",
+    subtitle: "选择候选组合与规则来源，仅配置实验参数并入队",
     icon: (
       <svg
         width="20"
@@ -49,7 +49,7 @@ const sectionTabs = [
   {
     key: "tasks",
     title: "回测任务",
-    subtitle: "查看队列进度、榜单和策略对比",
+    subtitle: "查看任务队列、结果榜单和策略横向对比",
     icon: (
       <svg
         width="20"
@@ -436,8 +436,46 @@ export default function CbQuantBacktestEvaluationPage() {
   return (
     <CbQuantPageShell
       title="回测评估行动页"
-      subtitle="业务动线：先在回测配置定义 rulePack，再进入回测任务查看队列、榜单和对比结果。"
+      subtitle="业务动线清晰化：策略规则在“策略生成”维护；本页只做回测入队与结果评估。"
     >
+      <div className="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]">
+        <h3 className="text-base font-semibold text-gray-800 dark:text-white/90">用户动线</h3>
+        <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-4">
+          <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-900/40">
+            <p className="text-xs font-semibold text-brand-500">Step 1</p>
+            <p className="mt-1 text-sm font-medium text-gray-900 dark:text-white">策略生成</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">在参数空间定义规则，产出候选组合</p>
+          </div>
+          <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-900/40">
+            <p className="text-xs font-semibold text-brand-500">Step 2</p>
+            <p className="mt-1 text-sm font-medium text-gray-900 dark:text-white">候选预览</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">选中 combo，并带入 rulePack 来源</p>
+          </div>
+          <div
+            className={`rounded-lg border p-3 ${
+              activeSection === "config"
+                ? "border-brand-500 bg-brand-50 dark:border-brand-400 dark:bg-brand-500/10"
+                : "border-gray-200 bg-gray-50 dark:border-gray-800 dark:bg-gray-900/40"
+            }`}
+          >
+            <p className="text-xs font-semibold text-brand-500">Step 3</p>
+            <p className="mt-1 text-sm font-medium text-gray-900 dark:text-white">回测配置</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">仅填写实验参数：窗口、资金、费用、基准</p>
+          </div>
+          <div
+            className={`rounded-lg border p-3 ${
+              activeSection === "tasks"
+                ? "border-brand-500 bg-brand-50 dark:border-brand-400 dark:bg-brand-500/10"
+                : "border-gray-200 bg-gray-50 dark:border-gray-800 dark:bg-gray-900/40"
+            }`}
+          >
+            <p className="text-xs font-semibold text-brand-500">Step 4</p>
+            <p className="mt-1 text-sm font-medium text-gray-900 dark:text-white">回测任务</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">看队列进度、榜单排序和策略对比</p>
+          </div>
+        </div>
+      </div>
+
       <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
         <div className="border-b border-gray-200 px-5 pt-4 dark:border-gray-800">
           <nav className="flex space-x-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">

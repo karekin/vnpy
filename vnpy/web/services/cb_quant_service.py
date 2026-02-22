@@ -208,8 +208,8 @@ class CbQuantService:
             self._jobs = [*created, *self._jobs]
 
         message = (
-            f"已入队 {len(created)} 个窗口任务（每个窗口 1 条）："
-            f"{request.combo_id} × {rule_pack_id}"
+            f"已入队 {len(created)} 条回测任务（每个窗口各 1 条）："
+            f"combo={request.combo_id}，rulePack={rule_pack_id}"
         )
 
         return BacktestCreateJobsResponse(

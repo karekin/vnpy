@@ -14,11 +14,14 @@ type WorkbenchHeaderProps<T extends string> = {
   searchPlaceholder: string;
   searchValue: string;
   onSearchChange: (value: string) => void;
-  filterOpen: boolean;
-  onToggleFilter: () => void;
-  filterPanel: React.ReactNode;
-  filterRef: React.RefObject<HTMLDivElement | null>;
-  onExport: () => void;
+  filterOpen?: boolean;
+  onToggleFilter?: () => void;
+  filterPanel?: React.ReactNode;
+  filterRef?: React.RefObject<HTMLDivElement | null>;
+  onExport?: () => void;
+  showFilterButton?: boolean;
+  showExportButton?: boolean;
+  customActions?: React.ReactNode;
 };
 
 export default function WorkbenchHeader<T extends string>({
@@ -30,11 +33,14 @@ export default function WorkbenchHeader<T extends string>({
   searchPlaceholder,
   searchValue,
   onSearchChange,
-  filterOpen,
+  filterOpen = false,
   onToggleFilter,
   filterPanel,
   filterRef,
   onExport,
+  showFilterButton = true,
+  showExportButton = true,
+  customActions,
 }: WorkbenchHeaderProps<T>) {
   return (
     <>
@@ -79,40 +85,45 @@ export default function WorkbenchHeader<T extends string>({
                 onChange={(e) => onSearchChange(e.target.value)}
               />
             </div>
-            <div className="relative" ref={filterRef}>
+            {showFilterButton && (
+              <div className="relative" ref={filterRef}>
+                <button
+                  className="shadow-theme-xs flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 sm:w-auto sm:min-w-[100px] dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400"
+                  onClick={onToggleFilter}
+                  type="button"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none">
+                    <path
+                      d="M14.6537 5.90414C14.6537 4.48433 13.5027 3.33331 12.0829 3.33331C10.6631 3.33331 9.51206 4.48433 9.51204 5.90415M14.6537 5.90414C14.6537 7.32398 13.5027 8.47498 12.0829 8.47498C10.663 8.47498 9.51204 7.32398 9.51204 5.90415M14.6537 5.90414L17.7087 5.90411M9.51204 5.90415L2.29199 5.90411M5.34694 14.0958C5.34694 12.676 6.49794 11.525 7.91777 11.525C9.33761 11.525 10.4886 12.676 10.4886 14.0958M5.34694 14.0958C5.34694 15.5156 6.49794 16.6666 7.91778 16.6666C9.33761 16.6666 10.4886 15.5156 10.4886 14.0958M5.34694 14.0958L2.29199 14.0958M10.4886 14.0958L17.7087 14.0958"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  Filter
+                </button>
+                {filterOpen && filterPanel}
+              </div>
+            )}
+            {showExportButton && (
               <button
-                className="shadow-theme-xs flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 sm:w-auto sm:min-w-[100px] dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400"
-                onClick={onToggleFilter}
-                type="button"
+                onClick={onExport}
+                className="shadow-theme-xs flex w-full items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-[11px] text-sm font-medium text-gray-700 sm:w-auto dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none">
                   <path
-                    d="M14.6537 5.90414C14.6537 4.48433 13.5027 3.33331 12.0829 3.33331C10.6631 3.33331 9.51206 4.48433 9.51204 5.90415M14.6537 5.90414C14.6537 7.32398 13.5027 8.47498 12.0829 8.47498C10.663 8.47498 9.51204 7.32398 9.51204 5.90415M14.6537 5.90414L17.7087 5.90411M9.51204 5.90415L2.29199 5.90411M5.34694 14.0958C5.34694 12.676 6.49794 11.525 7.91777 11.525C9.33761 11.525 10.4886 12.676 10.4886 14.0958M5.34694 14.0958C5.34694 15.5156 6.49794 16.6666 7.91778 16.6666C9.33761 16.6666 10.4886 15.5156 10.4886 14.0958M5.34694 14.0958L2.29199 14.0958M10.4886 14.0958L17.7087 14.0958"
+                    d="M16.6671 13.3333V15.4166C16.6671 16.1069 16.1074 16.6666 15.4171 16.6666H4.58301C3.89265 16.6666 3.33301 16.1069 3.33301 15.4166V13.3333M10.0013 3.33325L10.0013 13.3333M6.14553 7.18708L9.99958 3.33549L13.8539 7.18708"
                     stroke="currentColor"
                     strokeWidth="1.5"
                     strokeLinecap="round"
                     strokeLinejoin="round"
                   />
                 </svg>
-                Filter
+                Export
               </button>
-              {filterOpen && filterPanel}
-            </div>
-            <button
-              onClick={onExport}
-              className="shadow-theme-xs flex w-full items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-[11px] text-sm font-medium text-gray-700 sm:w-auto dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none">
-                <path
-                  d="M16.6671 13.3333V15.4166C16.6671 16.1069 16.1074 16.6666 15.4171 16.6666H4.58301C3.89265 16.6666 3.33301 16.1069 3.33301 15.4166V13.3333M10.0013 3.33325L10.0013 13.3333M6.14553 7.18708L9.99958 3.33549L13.8539 7.18708"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-              Export
-            </button>
+            )}
+            {customActions}
           </div>
         </div>
       </div>
