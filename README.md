@@ -316,38 +316,89 @@ python convertible-bond-crawler/scripts/phase_a_optimize.py \
 
 ### Phase D（Web层建设，推荐并行推进）
 
-目标：提供 `REST + WebSocket` 服务，覆盖桌面端核心能力，实现前后端分离的可转债交易系统。
+目标：提供 `REST + WebSocket` 服务，优先打通 CB Quant 前后端联调。
 
-落地目录（建议）：
+当前已落地（MVP，可联调）：
 
-* `vnpy/web/api`：HTTP 接口（命令面）
-* `vnpy/web/ws`：实时推送（事件面）
-* `vnpy/web/services`：业务编排与权限/校验
-* `vnpy/web/adapters`：对接 `MainEngine`/`EventEngine` 的薄适配层
+* 目录结构
+  * `vnpy/web/app.py`：FastAPI 入口
+  * `vnpy/web/api/router.py`：`/api/v1` 总路由
+  * `vnpy/web/api/system.py`：系统健康检查
+  * `vnpy/web/api/cb_quant.py`：CB Quant 回测联调接口
+  * `vnpy/web/ws/router.py`：`/ws/events` 事件推送
+  * `vnpy/web/services/cb_quant_service.py`：内存版服务（后续替换数据库和引擎调用）
+  * `vnpy/web/adapters/main_engine_adapter.py`：引擎适配占位
 
-首批接口范围（用于替代客户端核心功能）：
+安装与启动：
 
-* 系统与鉴权：`/api/v1/auth/*`、`/api/v1/system/health`
-* 网关管理：`/api/v1/gateways`、`/connect`、`/disconnect`
-* 行情与订阅：`/api/v1/contracts`、`/api/v1/market/ticks`、`/api/v1/market/subscribe`
-* 交易链路：`/api/v1/orders`、`/api/v1/orders/{vt_orderid}/cancel`
-* 资产查询：`/api/v1/trades`、`/api/v1/positions`、`/api/v1/accounts`
-* 策略与任务：`/api/v1/strategies/*`、`/api/v1/backtest/jobs`、`/api/v1/optimize/jobs`
-* 实时推送：`/ws/events`（`tick/order/trade/position/account/log`）
+```bash
+pip install -e ".[web]"
+python -m vnpy.web.app
+```
+
+默认地址：
+
+* HTTP: `http://127.0.0.1:9000`
+* OpenAPI: `http://127.0.0.1:9000/docs`
+* WebSocket: `ws://127.0.0.1:9000/ws/events`
+
+已提供 API（CB Quant 联调优先）：
+
+* `GET /api/v1/system/health`
+  * 返回：`status/service/version`
+* `GET /api/v1/cb-quant/strategy/candidates?keyword=&window=all`
+  * 返回：候选策略列表（`combo_id/template/est_combos/pass_rate/window`）
+* `GET /api/v1/cb-quant/market/bonds?min_volume_wan=0`
+  * 返回：可转债二级市场实时列表（东财实时：`bond_id/bond_name/price/increase_rt/premium_rt/convert_value/dblow/volume_wan/...`）
+* `GET /api/v1/cb-quant/backtest/stats`
+  * 返回：任务统计（运行中/排队/完成/失败/规则包数量/最高 CAGR）
+* `GET /api/v1/cb-quant/backtest/jobs?keyword=&status=all&page=1&page_size=20`
+  * 返回：任务队列（`job_id/strategy_id/combo_id/rule_pack_id/status/progress/...`）
+* `POST /api/v1/cb-quant/backtest/jobs`
+  * 入参：`combo_id + rule_pack_id(可选) + source_mode + windows + 回测参数`
+  * 出参：本次批次 `created_count`、`jobs`、`message`
+* `GET /api/v1/cb-quant/backtest/leaderboard?keyword=&window=all&page=1&page_size=20`
+  * 返回：结果榜单（策略维度，含 `rule_pack_id`）
+* `GET /api/v1/cb-quant/backtest/compare?keyword=&category=all`
+  * 返回：策略对比指标（return/risk/trade）
+
+WebSocket 事件（MVP）：
+
+* `connected`：连接成功
+* `cb_quant.stats`：5 秒推送一次回测统计
+* `heartbeat`：心跳
+
+联调示例（创建回测任务）：
+
+```bash
+curl -X POST "http://127.0.0.1:9000/api/v1/cb-quant/backtest/jobs" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "combo_id": "CMB-102883",
+    "source_mode": "candidate",
+    "windows": ["full", "3y", "1y"],
+    "start_date": "2025-02-13",
+    "end_date": "2026-02-13",
+    "capital_wan": 100,
+    "fee_permille": 1,
+    "benchmark": "沪深300",
+    "est_strategies": 199455
+  }'
+```
 
 实施节奏（建议）：
 
-1. `P0`：先打通交易必需链路（网关连接、下撤单、订单成交推送、账户持仓查询）。
-2. `P1`：接入回测与优化任务 API（异步 Job 化，支持 TopN 结果查询与下载）。
-3. `P2`：补齐审计、限流、告警、权限分级、灰度发布等生产能力。
+1. `P0`（当前）：完成 CB Quant 联调 API（mock service + 稳定契约）。
+2. `P1`：`services` 从内存迁移到数据库（任务、结果、规则包持久化）。
+3. `P2`：`adapters` 对接 `MainEngine`/`EventEngine`，接入真实回测与优化任务。
+4. `P3`：补齐鉴权、审计、限流、告警、灰度发布等生产能力。
 
 工程原则：
 
 * 不修改 `vnpy/trader` 核心引擎；通过 `adapters` 调用现有能力。
 * REST 负责请求响应；WebSocket 负责事件广播，避免轮询。
 * 回测/优化等长任务必须异步化（`job_id` + 状态查询），防止阻塞 Web 进程。
-
-备注：`vn.py` 已提供完整的事件驱动交易框架、优化器与扩展机制。可转债项目以“扩展实现”为主，不建议修改核心引擎。
+* 统一策略主键：`strategy_id = combo_id + rule_pack_id + window`（逻辑上唯一）。
 
 ### 目录收口规划（移除 `convertible-bond-crawler`）
 

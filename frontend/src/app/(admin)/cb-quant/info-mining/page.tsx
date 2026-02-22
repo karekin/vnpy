@@ -5,6 +5,7 @@ import ScrollableDataTable from "@/components/cb-quant/ScrollableDataTable";
 import TablePaginationBar from "@/components/cb-quant/TablePaginationBar";
 import WorkbenchHeader from "@/components/cb-quant/WorkbenchHeader";
 import { TableCell, TableRow } from "@/components/ui/table";
+import { Tooltip } from "@/components/ui/tooltip/Tooltip";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 type StockRow = {
@@ -30,16 +31,83 @@ type BondRow = {
   bondName: string;
   price: number;
   increaseRt: string;
+  stockId: string;
+  stockName: string;
+  stockPrice?: number | null;
+  stockIncreaseRt?: number | null;
+  stockPb?: number | null;
+  convertPrice?: number | null;
+  pureBondValue?: number | null;
   premiumRt: string;
   convertValue: number;
   dblow: number;
+  optionValue?: number | null;
+  stockVolatility?: number | null;
+  putTriggerPrice?: number | null;
+  redeemTriggerPrice?: number | null;
+  floatMvRatio?: number | null;
+  fundHoldingRatio?: number | null;
+  maturityDate?: string | null;
+  remainYears?: number | null;
+  expiryYtmPreTax?: number | null;
+  putYtm?: number | null;
+  amountWan?: number;
+  turnoverRt?: number | null;
   volumeWan: number;
-  currIssAmtYi: number;
-  rating: "AA" | "AA+" | "AAA";
-  stockId: string;
-  stockName: string;
-  source: "jsl";
+  currIssAmtYi: number | null;
+  rating: string;
+  listedDate?: string | null;
+  convertStartDate?: string | null;
+  subscribeDate?: string | null;
+  source: string;
   updateTime: string;
+};
+
+type BondMarketApiRow = {
+  bond_id: string;
+  bond_name: string;
+  price: number;
+  increase_rt: number;
+  stock_id: string;
+  stock_name: string;
+  stock_price: number | null;
+  stock_increase_rt: number | null;
+  stock_pb: number | null;
+  convert_price: number | null;
+  pure_bond_value: number | null;
+  premium_rt: number;
+  convert_value: number;
+  dblow: number;
+  option_value: number | null;
+  stock_volatility: number | null;
+  put_trigger_price: number | null;
+  redeem_trigger_price: number | null;
+  float_mv_ratio: number | null;
+  fund_holding_ratio: number | null;
+  maturity_date: string | null;
+  remain_years: number | null;
+  remain_scale_yi: number | null;
+  amount_wan: number | null;
+  turnover_rt: number | null;
+  expiry_ytm_pre_tax: number | null;
+  put_ytm: number | null;
+  volume_wan: number;
+  issue_scale_yi: number | null;
+  rating: string | null;
+  listed_date: string | null;
+  convert_start_date: string | null;
+  subscribe_date: string | null;
+  source: string;
+  update_time: string;
+};
+
+type BondMarketApiResponse = {
+  items: BondMarketApiRow[];
+  total: number;
+  source: string;
+  snapshot_time: string;
+  fallback_used: boolean;
+  fallback_reason?: string | null;
 };
 
 type LineageRow = {
@@ -82,21 +150,33 @@ const bondSnapshot: BondRow[] = [
 ];
 
 const sourceLedger: LineageRow[] = [
-  { field: "code / bondId", meaning: "交易标识", stockSource: "tencent.real(prefix=True) 返回 key", bondSource: "jsl.cb() -> row.id", usage: "跨表关联、去重、下单路由", domain: "common" },
-  { field: "name / bond_nm", meaning: "标的名称", stockSource: "tencent/sina -> name", bondSource: "jsl.cb() -> row.cell.bond_nm", usage: "交易确认、审计追踪", domain: "common" },
+  { field: "code / bondId", meaning: "交易标识", stockSource: "tencent.real(prefix=True) 返回 key", bondSource: "eastmoney.push2 clist -> f12", usage: "跨表关联、去重、下单路由", domain: "common" },
+  { field: "name / bond_nm", meaning: "标的名称", stockSource: "tencent/sina -> name", bondSource: "eastmoney.push2 clist -> f14", usage: "交易确认、审计追踪", domain: "common" },
   { field: "now", meaning: "股票最新价", stockSource: "tencent.real()['now']", bondSource: "N/A", usage: "正股动量与情绪判断", domain: "stock" },
-  { field: "price", meaning: "转债最新价", stockSource: "N/A", bondSource: "jsl.cb() -> row.cell.price", usage: "转债排名与入场点", domain: "bond" },
+  { field: "price", meaning: "转债最新价", stockSource: "N/A", bondSource: "eastmoney.push2 clist -> f2", usage: "转债排名与入场点", domain: "bond" },
   { field: "涨跌(%)", meaning: "股票涨跌幅", stockSource: "tencent.real()['涨跌(%)']", bondSource: "N/A", usage: "异动筛查", domain: "stock" },
-  { field: "increase_rt", meaning: "转债涨跌幅", stockSource: "N/A", bondSource: "jsl.cb() -> row.cell.increase_rt", usage: "分时强弱监控", domain: "bond" },
+  { field: "increase_rt", meaning: "转债涨跌幅", stockSource: "N/A", bondSource: "eastmoney.push2 clist -> f3", usage: "分时强弱监控", domain: "bond" },
   { field: "成交额(万)", meaning: "股票成交额", stockSource: "tencent.real()['成交额(万)']", bondSource: "N/A", usage: "流动性门槛", domain: "stock" },
-  { field: "volume", meaning: "转债成交额", stockSource: "N/A", bondSource: "jsl.cb() -> row.cell.volume", usage: "容量评估", domain: "bond" },
+  { field: "volume", meaning: "转债成交额", stockSource: "N/A", bondSource: "eastmoney.push2 clist -> f6", usage: "容量评估", domain: "bond" },
   { field: "turnover", meaning: "股票换手率", stockSource: "tencent.real()['turnover'] / sina.turnover", bondSource: "N/A", usage: "拥挤度过滤", domain: "stock" },
-  { field: "premium_rt", meaning: "转股溢价率", stockSource: "N/A", bondSource: "jsl.cb() -> row.cell.premium_rt", usage: "双低核心因子", domain: "bond" },
-  { field: "convert_value", meaning: "转股价值", stockSource: "N/A", bondSource: "jsl.cb() -> row.cell.convert_value", usage: "股债性拆解", domain: "bond" },
-  { field: "dblow", meaning: "双低值", stockSource: "N/A", bondSource: "jsl.cb() -> row.cell.dblow", usage: "排序主键", domain: "bond" },
-  { field: "curr_iss_amt", meaning: "剩余规模", stockSource: "N/A", bondSource: "jsl.cb() -> row.cell.curr_iss_amt", usage: "仓位上限", domain: "bond" },
-  { field: "rating_cd", meaning: "信用评级", stockSource: "N/A", bondSource: "jsl.cb() -> row.cell.rating_cd", usage: "信用风险过滤", domain: "bond" },
-  { field: "date/time", meaning: "更新时间", stockSource: "sina.real()['date'/'time']", bondSource: "jsl.cb() -> row.cell.last_time", usage: "新鲜度监控", domain: "common" },
+  { field: "premium_rt", meaning: "转股溢价率", stockSource: "N/A", bondSource: "eastmoney.push2 clist -> f237", usage: "双低核心因子", domain: "bond" },
+  { field: "stock_price", meaning: "正股价", stockSource: "N/A", bondSource: "eastmoney.push2 clist -> f229", usage: "股债联动判断", domain: "bond" },
+  { field: "stock_increase_rt", meaning: "正股涨跌", stockSource: "N/A", bondSource: "eastmoney.push2 clist -> f230", usage: "判断转债上涨驱动", domain: "bond" },
+  { field: "stock_pb", meaning: "正股 PB", stockSource: "N/A", bondSource: "eastmoney.stock_batch -> f23", usage: "估值约束与行业对比", domain: "bond" },
+  { field: "stock_volatility", meaning: "正股波动率(代理)", stockSource: "N/A", bondSource: "eastmoney.stock_batch -> f7(日振幅)", usage: "高波动过滤", domain: "bond" },
+  { field: "convert_price", meaning: "转股价", stockSource: "N/A", bondSource: "eastmoney.push2 clist -> f235", usage: "评估转股价值", domain: "bond" },
+  { field: "convert_value", meaning: "转股价值", stockSource: "N/A", bondSource: "eastmoney.push2 clist -> f236", usage: "股债性拆解", domain: "bond" },
+  { field: "dblow", meaning: "双低值", stockSource: "N/A", bondSource: "price + premium_rt（前端计算）", usage: "排序主键", domain: "bond" },
+  { field: "pure_bond_value", meaning: "纯债价值", stockSource: "N/A", bondSource: "eastmoney.push2 clist -> f227", usage: "债底保护评估", domain: "bond" },
+  { field: "option_value", meaning: "期权价值", stockSource: "N/A", bondSource: "eastmoney.push2 clist -> f238", usage: "股性溢价拆解", domain: "bond" },
+  { field: "put/redeem_trigger_price", meaning: "回售/强赎触发价", stockSource: "N/A", bondSource: "eastmoney.push2 clist -> f239/f240", usage: "条款风险监控", domain: "bond" },
+  { field: "float_mv_ratio", meaning: "转债流通市值占比(估算)", stockSource: "N/A", bondSource: "remain_scale / stock_float_mv(f21)", usage: "容量冲击评估", domain: "bond" },
+  { field: "fund_holding_ratio", meaning: "基金持仓", stockSource: "N/A", bondSource: "当前公开接口无稳定字段，保留占位", usage: "机构拥挤度观察", domain: "bond" },
+  { field: "turnover_rt", meaning: "换手率", stockSource: "N/A", bondSource: "eastmoney.push2 clist -> f8", usage: "成交拥挤度过滤", domain: "bond" },
+  { field: "issue_scale", meaning: "发行规模", stockSource: "N/A", bondSource: "eastmoney.datacenter -> ACTUAL_ISSUE_SCALE", usage: "容量评估辅助", domain: "bond" },
+  { field: "rating", meaning: "信用评级", stockSource: "N/A", bondSource: "eastmoney.datacenter -> RATING", usage: "信用风险过滤", domain: "bond" },
+  { field: "maturity_date", meaning: "到期时间", stockSource: "N/A", bondSource: "eastmoney.datacenter -> EXPIRE_DATE", usage: "剩余年限计算", domain: "bond" },
+  { field: "date/time", meaning: "更新时间", stockSource: "sina.real()['date'/'time']", bondSource: "后端抓取时间戳 snapshot_time", usage: "新鲜度监控", domain: "common" },
 ];
 
 const traderChecklist = [
@@ -109,6 +189,7 @@ const traderChecklist = [
 const tips = [
   { title: "Tip: prefix=True", text: "避免指数与个股同代码冲突，确保下游映射唯一。" },
   { title: "Tip: jsl 字段动态", text: "jsl.cb() 返回 row.cell 字典，字段可能调整，前端应容忍字段增减。" },
+  { title: "Tip: 正股PB口径差异", text: "当前正股PB来自东财接口，可能与集思录口径不同，使用时请以同源数据比较。"},
   { title: "Tip: 双低不是单因子", text: "双低值需配合流动性和评级，否则实盘可成交性差。" },
   { title: "Tip: 前端职责", text: "前端负责展示与追溯；数据清洗、回填、纠错由后端执行。" },
 ];
@@ -117,13 +198,6 @@ const sourceOptions = [
   { value: "all", label: "全部来源" },
   { value: "tencent", label: "tencent" },
   { value: "sina", label: "sina" },
-];
-
-const ratingOptions = [
-  { value: "all", label: "全部评级" },
-  { value: "AAA", label: "AAA" },
-  { value: "AA+", label: "AA+" },
-  { value: "AA", label: "AA" },
 ];
 
 const lineageDomainOptions = [
@@ -146,6 +220,21 @@ const tabOptions = [
 ] as const;
 
 const percentToNumber = (value: string): number => Number(value.replace("%", ""));
+
+const formatNumber = (value: number | null | undefined, digits = 2): string => {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return "-";
+  }
+  return Number(value).toFixed(digits);
+};
+
+const formatPercent = (value: number | null | undefined, digits = 2): string => {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return "-";
+  }
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${Number(value).toFixed(digits)}%`;
+};
 
 function NumberBadge({ value }: { value: number }) {
   const positive = value >= 0;
@@ -178,6 +267,10 @@ export default function CbQuantInfoMiningPage() {
   const [bondMinVolume, setBondMinVolume] = useState<string>("");
   const [bondPageSize, setBondPageSize] = useState<number>(5);
   const [bondPage, setBondPage] = useState<number>(1);
+  const [bondRows, setBondRows] = useState<BondRow[]>(bondSnapshot);
+  const [bondLoading, setBondLoading] = useState<boolean>(false);
+  const [bondSourceLabel, setBondSourceLabel] = useState<string>("mock.local");
+  const [bondFallbackReason, setBondFallbackReason] = useState<string>("");
 
   const [lineageKeyword, setLineageKeyword] = useState<string>("");
   const [lineageDomain, setLineageDomain] = useState<string>("all");
@@ -185,7 +278,87 @@ export default function CbQuantInfoMiningPage() {
   const [lineagePage, setLineagePage] = useState<number>(1);
   const [showFilter, setShowFilter] = useState<boolean>(false);
   const filterRef = useRef<HTMLDivElement>(null);
-  const riskAlertCount = 1;
+  const riskAlertCount = bondFallbackReason ? 1 : 0;
+
+  const ratingOptions = useMemo(() => {
+    const ratings = Array.from(new Set(bondRows.map((row) => row.rating).filter(Boolean))).sort();
+    return [{ value: "all", label: "全部评级" }, ...ratings.map((rating) => ({ value: rating, label: rating }))];
+  }, [bondRows]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const apiBase = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ?? "";
+    const url = `${apiBase}/api/v1/cb-quant/market/bonds`;
+
+    const loadBondMarket = async () => {
+      try {
+        setBondLoading(true);
+        const response = await fetch(url, {
+          method: "GET",
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const payload = (await response.json()) as BondMarketApiResponse;
+        const mappedRows: BondRow[] = payload.items.map((item) => ({
+          bondId: item.bond_id,
+          bondName: item.bond_name,
+          price: item.price,
+          increaseRt: `${item.increase_rt >= 0 ? "+" : ""}${item.increase_rt.toFixed(2)}%`,
+          stockId: item.stock_id,
+          stockName: item.stock_name,
+          stockPrice: item.stock_price,
+          stockIncreaseRt: item.stock_increase_rt,
+          stockPb: item.stock_pb,
+          convertPrice: item.convert_price,
+          pureBondValue: item.pure_bond_value,
+          premiumRt: `${item.premium_rt.toFixed(2)}%`,
+          convertValue: item.convert_value,
+          dblow: item.dblow,
+          optionValue: item.option_value,
+          stockVolatility: item.stock_volatility,
+          putTriggerPrice: item.put_trigger_price,
+          redeemTriggerPrice: item.redeem_trigger_price,
+          floatMvRatio: item.float_mv_ratio,
+          fundHoldingRatio: item.fund_holding_ratio,
+          maturityDate: item.maturity_date,
+          remainYears: item.remain_years,
+          expiryYtmPreTax: item.expiry_ytm_pre_tax,
+          putYtm: item.put_ytm,
+          amountWan: item.amount_wan ?? item.volume_wan,
+          turnoverRt: item.turnover_rt,
+          volumeWan: item.volume_wan,
+          currIssAmtYi: item.remain_scale_yi ?? item.issue_scale_yi,
+          rating: item.rating ?? "未评级",
+          listedDate: item.listed_date,
+          convertStartDate: item.convert_start_date,
+          subscribeDate: item.subscribe_date,
+          source: item.source,
+          updateTime: item.update_time || payload.snapshot_time,
+        }));
+
+        setBondRows(mappedRows.length ? mappedRows : bondSnapshot);
+        setBondSourceLabel(payload.source || "api");
+        setBondFallbackReason(payload.fallback_used ? payload.fallback_reason ?? "数据源降级" : "");
+      } catch (error) {
+        if (controller.signal.aborted) {
+          return;
+        }
+        setBondRows(bondSnapshot);
+        setBondSourceLabel("mock.local");
+        setBondFallbackReason(error instanceof Error ? error.message : "fetch error");
+      } finally {
+        if (!controller.signal.aborted) {
+          setBondLoading(false);
+        }
+      }
+    };
+
+    loadBondMarket();
+    return () => controller.abort();
+  }, []);
 
   const filteredStocks = useMemo(() => {
     const keyword = stockKeyword.trim().toLowerCase();
@@ -204,7 +377,7 @@ export default function CbQuantInfoMiningPage() {
     const maxPremium = bondMaxPremium ? Number(bondMaxPremium) : null;
     const minVolume = bondMinVolume ? Number(bondMinVolume) : null;
 
-    return bondSnapshot.filter((row) => {
+    return bondRows.filter((row) => {
       const matchKeyword =
         !keyword ||
         row.bondId.toLowerCase().includes(keyword) ||
@@ -216,7 +389,7 @@ export default function CbQuantInfoMiningPage() {
       const matchVolume = minVolume === null || row.volumeWan >= minVolume;
       return matchKeyword && matchRating && matchPremium && matchVolume;
     });
-  }, [bondKeyword, bondRating, bondMaxPremium, bondMinVolume]);
+  }, [bondRows, bondKeyword, bondRating, bondMaxPremium, bondMinVolume]);
 
   const filteredLineage = useMemo(() => {
     const keyword = lineageKeyword.trim().toLowerCase();
@@ -346,21 +519,68 @@ export default function CbQuantInfoMiningPage() {
         row.updateTime,
       ]);
     } else if (activeTab === "bond") {
-      headers = ["转债代码", "转债名称", "现价", "涨跌幅", "转股溢价率", "转股价值", "双低值", "成交额(万)", "剩余规模(亿)", "评级", "正股代码", "正股名称", "来源", "更新时间"];
+      headers = [
+        "代码",
+        "转债名称",
+        "现价",
+        "涨跌幅",
+        "正股代码",
+        "正股名称",
+        "正股价",
+        "正股涨跌",
+        "正股PB",
+        "转股价",
+        "转股价值",
+        "转股溢价率",
+        "双低",
+        "纯债价值",
+        "评级",
+        "期权价值",
+        "正股波动率",
+        "回售触发价",
+        "强赎触发价",
+        "转债流通市值占比",
+        "基金持仓",
+        "到期时间",
+        "剩余年限",
+        "剩余规模(亿元)",
+        "成交额(万元)",
+        "换手率",
+        "到期税前收益",
+        "回售收益",
+        "来源",
+        "更新时间",
+      ];
       rows = filteredBonds.map((row) => [
         row.bondId,
         row.bondName,
         row.price.toFixed(2),
         row.increaseRt,
-        row.premiumRt,
-        row.convertValue.toFixed(2),
-        row.dblow.toFixed(2),
-        row.volumeWan.toFixed(2),
-        row.currIssAmtYi.toFixed(2),
-        row.rating,
         row.stockId,
         row.stockName,
-        `easyquotation.${row.source}.cb()`,
+        formatNumber(row.stockPrice, 2),
+        formatPercent(row.stockIncreaseRt, 2),
+        formatNumber(row.stockPb, 2),
+        formatNumber(row.convertPrice, 2),
+        row.convertValue.toFixed(2),
+        row.premiumRt,
+        row.dblow.toFixed(2),
+        formatNumber(row.pureBondValue, 2),
+        row.rating,
+        formatNumber(row.optionValue, 2),
+        formatNumber(row.stockVolatility, 2),
+        formatNumber(row.putTriggerPrice, 2),
+        formatNumber(row.redeemTriggerPrice, 2),
+        formatPercent(row.floatMvRatio, 2),
+        formatPercent(row.fundHoldingRatio, 2),
+        row.maturityDate ?? "-",
+        formatNumber(row.remainYears, 2),
+        row.currIssAmtYi === null || row.currIssAmtYi === undefined ? "-" : row.currIssAmtYi.toFixed(2),
+        formatNumber(row.amountWan ?? row.volumeWan, 1),
+        formatPercent(row.turnoverRt, 2),
+        formatPercent(row.expiryYtmPreTax, 2),
+        formatPercent(row.putYtm, 2),
+        row.source,
         row.updateTime,
       ]);
     } else {
@@ -542,6 +762,17 @@ export default function CbQuantInfoMiningPage() {
     </div>
   );
 
+  const stockPbHeader = (
+    <span className="inline-flex items-center gap-1 whitespace-nowrap">
+      正股PB
+      <Tooltip content="该字段来自东财接口，和集思录口径可能不一致。" position="top">
+        <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-gray-400 text-[10px] font-semibold normal-case">
+          ?
+        </span>
+      </Tooltip>
+    </span>
+  );
+
   return (
     <CbQuantPageShell
       title="信息挖掘行动页"
@@ -564,6 +795,7 @@ export default function CbQuantInfoMiningPage() {
           <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]">
             <p className="text-sm text-gray-500 dark:text-gray-400">风险告警</p>
             <p className="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">{riskAlertCount}</p>
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{bondFallbackReason ? "实时源降级" : "实时源正常"}</p>
           </div>
         </div>
 
@@ -583,6 +815,12 @@ export default function CbQuantInfoMiningPage() {
             filterRef={filterRef}
             onExport={handleExport}
           />
+
+          <div className="border-t border-gray-100 px-5 py-2 text-xs text-gray-500 dark:border-gray-800 dark:text-gray-400">
+            转债主表数据源: {bondSourceLabel}{bondLoading ? "（刷新中）" : ""}
+            {bondFallbackReason ? `；降级原因: ${bondFallbackReason}` : ""}
+            ；提示: 正股PB当前为东财口径，和集思录可能不一致。
+          </div>
 
           {activeTab === "stock" && (
             <div className="p-5">
@@ -621,9 +859,40 @@ export default function CbQuantInfoMiningPage() {
           {activeTab === "bond" && (
             <div className="p-5">
               <ScrollableDataTable
-                headers={["转债代码", "转债名称", "现价", "涨跌幅", "转股溢价率", "转股价值", "双低值", "成交额(万)", "剩余规模(亿)", "评级", "正股", "来源", "更新时间"]}
-                minTableWidthClass="min-w-[1720px]"
-                colSpan={13}
+                headers={[
+                  "代码",
+                  "转债名称",
+                  "现价",
+                  "涨跌幅",
+                  "正股代码",
+                  "正股名称",
+                  "正股价",
+                  "正股涨跌",
+                  stockPbHeader,
+                  "转股价",
+                  "转股价值",
+                  "转股溢价率",
+                  "双低",
+                  "纯债价值",
+                  "评级",
+                  "期权价值",
+                  "正股波动率",
+                  "回售触发价",
+                  "强赎触发价",
+                  "转债流通市值占比",
+                  "基金持仓",
+                  "到期时间",
+                  "剩余年限",
+                  "剩余规模(亿元)",
+                  "成交额(万元)",
+                  "换手率",
+                  "到期税前收益",
+                  "回售收益",
+                  "来源",
+                  "更新时间",
+                ]}
+                minTableWidthClass="min-w-[3600px]"
+                colSpan={30}
                 isEmpty={!pagedBonds.length}
               >
                 {pagedBonds.map((row) => (
@@ -632,14 +901,35 @@ export default function CbQuantInfoMiningPage() {
                     <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{row.bondName}</TableCell>
                     <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{row.price.toFixed(2)}</TableCell>
                     <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{row.increaseRt}</TableCell>
-                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{row.premiumRt}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{row.stockId}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{row.stockName}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{formatNumber(row.stockPrice, 2)}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm whitespace-nowrap">
+                      {row.stockIncreaseRt === null || row.stockIncreaseRt === undefined ? "-" : <NumberBadge value={row.stockIncreaseRt} />}
+                    </TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{formatNumber(row.stockPb, 2)}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{formatNumber(row.convertPrice, 2)}</TableCell>
                     <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{row.convertValue.toFixed(2)}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{row.premiumRt}</TableCell>
                     <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{row.dblow.toFixed(2)}</TableCell>
-                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{row.volumeWan.toLocaleString()}</TableCell>
-                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{row.currIssAmtYi.toFixed(2)}</TableCell>
-                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{row.rating}</TableCell>
-                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{row.stockId} {row.stockName}</TableCell>
-                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">easyquotation.{row.source}.cb()</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{formatNumber(row.pureBondValue, 2)}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">
+                      {row.rating}
+                    </TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{formatNumber(row.optionValue, 2)}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{formatNumber(row.stockVolatility, 2)}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{formatNumber(row.putTriggerPrice, 2)}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{formatNumber(row.redeemTriggerPrice, 2)}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{formatPercent(row.floatMvRatio, 2)}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{formatPercent(row.fundHoldingRatio, 2)}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{row.maturityDate ?? "-"}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{formatNumber(row.remainYears, 2)}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{row.currIssAmtYi === null || row.currIssAmtYi === undefined ? "-" : row.currIssAmtYi.toFixed(2)}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{formatNumber(row.amountWan ?? row.volumeWan, 1)}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{formatPercent(row.turnoverRt, 2)}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{formatPercent(row.expiryYtmPreTax, 2)}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{formatPercent(row.putYtm, 2)}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{row.source}</TableCell>
                     <TableCell className="px-4 py-3 text-sm text-gray-500 whitespace-nowrap dark:text-gray-400">{row.updateTime}</TableCell>
                   </TableRow>
                 ))}

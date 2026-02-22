@@ -49,6 +49,12 @@ alpha = [
     "torch>=2.6.0",
     "pyarrow>=19.0.1",
 ]
+web = [
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "pydantic>=2.9.0",
+    "requests>=2.32.0",
+]
 dev = [
     "pandas-stubs>=2.2.3.250308",
     "hatchling>=1.27.0",

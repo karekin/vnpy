@@ -2,7 +2,7 @@ import { Table, TableBody, TableCell, TableHeader, TableRow } from "@/components
 import React from "react";
 
 type ScrollableDataTableProps = {
-  headers: string[];
+  headers: React.ReactNode[];
   minTableWidthClass: string;
   colSpan: number;
   isEmpty: boolean;
@@ -24,9 +24,9 @@ export default function ScrollableDataTable({
         <Table className="w-full">
           <TableHeader>
             <TableRow className="border-b border-gray-200 dark:border-gray-800">
-              {headers.map((header) => (
+              {headers.map((header, index) => (
                 <TableCell
-                  key={header}
+                  key={`header-${index}`}
                   isHeader
                   className="sticky top-0 z-10 bg-gray-50 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500 whitespace-nowrap dark:bg-gray-900"
                 >
