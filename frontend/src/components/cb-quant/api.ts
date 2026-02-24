@@ -1,0 +1,1205 @@
+export type WindowName = "full" | "3y" | "1y";
+export type StrategyTemplateStatus = "active" | "draft" | "archived";
+export type BacktestJobStatus = "queued" | "running" | "finished" | "failed";
+
+export type StrategyParamSpaceRow = {
+  factorKey: string;
+  valueType: "number" | "enum";
+  enabled: boolean;
+  minValue: number | null;
+  maxValue: number | null;
+  step: number | null;
+  enumValues: string[];
+};
+
+export type StrategyTemplate = {
+  id: string;
+  name: string;
+  version: string;
+  status: StrategyTemplateStatus;
+  factorCount: number;
+  rebalance: string;
+  riskPreset: string;
+  comboSize: number;
+  owner: string;
+  updatedAt: string;
+};
+
+export type StrategyTemplateConfig = {
+  templateId: string;
+  factorKeys: string[];
+  expressionDraft: string;
+  parameterSpace: StrategyParamSpaceRow[];
+  comboSize: number;
+  updatedAt: string;
+};
+
+export type StrategyTemplateDetail = {
+  template: StrategyTemplate;
+  config: StrategyTemplateConfig;
+};
+
+export type CandidateRow = {
+  rank: number;
+  templateId: string;
+  template: string;
+  comboId: string;
+  estCombos: number;
+  status: string;
+  passRate: number | null;
+  window: WindowName;
+  source: "generated" | "mock";
+  runId: string | null;
+  generatedAt: string | null;
+};
+
+export type CandidateGenerateResult = {
+  runId: string;
+  templateId: string;
+  templateName: string;
+  createdCount: number;
+  estCombos: number;
+  windows: WindowName[];
+  items: CandidateRow[];
+  message: string;
+};
+
+export type BacktestJob = {
+  jobId: string;
+  strategyId: string;
+  comboId: string;
+  rulePackId: string;
+  template: string;
+  window: string;
+  status: BacktestJobStatus;
+  progress: number;
+  startedAt: string;
+  eta: string;
+  worker: string;
+};
+
+export type BacktestLeaderboardRow = {
+  rank: number;
+  strategyId: string;
+  comboId: string;
+  rulePackId: string;
+  template: string;
+  cagr: number;
+  mdd: number;
+  calmar: number;
+  winRate: number;
+  turnover: number;
+  recent1y: number;
+  robustScore: number;
+  window: WindowName;
+};
+
+export type BacktestCompareRow = {
+  metric: string;
+  category: "return" | "risk" | "trade";
+  baseline: number;
+  candidateA: number;
+  candidateB: number;
+  candidateC: number;
+};
+
+export type BacktestStats = {
+  runningJobs: number;
+  queuedJobs: number;
+  finishedJobs: number;
+  failedJobs: number;
+  rulePackCount: number;
+  topCagr: number;
+};
+
+export type BacktestQueueRequest = {
+  comboId: string;
+  template: string;
+  sourceMode: "inherit" | "candidate" | "custom";
+  rulePackId?: string;
+  windows: WindowName[];
+  startDate: string;
+  endDate: string;
+  capitalWan: number;
+  feePermille: number;
+  benchmark: string;
+  estStrategies?: number;
+};
+
+export type BacktestQueueResult = {
+  batchId: string;
+  comboId: string;
+  rulePackId: string;
+  sourceMode: "inherit" | "candidate" | "custom";
+  createdCount: number;
+  windows: WindowName[];
+  jobs: BacktestJob[];
+  message: string;
+};
+
+export type HistoryDataSummary = {
+  snapshotCount: number;
+  dateStart: string | null;
+  dateEnd: string | null;
+  latestTradeDate: string | null;
+  latestBondCount: number;
+  dataDir: string;
+};
+
+export type HistorySyncStatus = {
+  hasLog: boolean;
+  syncAt: string | null;
+  mode: string | null;
+  source: string | null;
+  tradeDate: string | null;
+  upserted: number;
+  status: string | null;
+  message: string | null;
+};
+
+export type StrategyOptimizeTaskStatus = "queued" | "running" | "finished" | "failed";
+
+export type StrategyOptimizeTask = {
+  taskId: string;
+  templateId: string;
+  templateName: string;
+  status: StrategyOptimizeTaskStatus;
+  progress: number;
+  totalCombinations: number;
+  evaluatedCombinations: number;
+  windows: WindowName[];
+  startDate: string | null;
+  endDate: string | null;
+  eta: string;
+  message: string;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+};
+
+export type StrategyOptimizeResultRow = {
+  rank: number;
+  comboId: string;
+  robustScore: number;
+  cagr: number;
+  mdd: number;
+  calmar: number;
+  winRate: number;
+  turnover: number;
+  recent1y: number;
+  totalReturnPct: number;
+  params: Record<string, string | number | boolean | null>;
+};
+
+export type StrategyTopBondRow = {
+  rank: number;
+  bondId: string;
+  bondName: string;
+  price: number;
+  premiumRt: number;
+  dblow: number;
+  amountWan: number | null;
+  score: number;
+  updateTime: string;
+};
+
+export type StrategyOptimizeTaskDetail = {
+  task: StrategyOptimizeTask;
+  topStrategies: StrategyOptimizeResultRow[];
+  topBonds: StrategyTopBondRow[];
+};
+
+export type FactorCatalogFactor = {
+  id: string;
+  factorName: string;
+  factorKey: string;
+  factorType: number;
+  expression: string;
+  expressionType: number;
+  enabled: boolean;
+  remark: string;
+  viewStyle: number;
+  viewPrecision: number;
+  viewColor: boolean;
+  viewRatio: number;
+  viewUnit: string;
+};
+
+export type FactorCatalogCategory = {
+  categoryName: string;
+  categoryKey: string;
+  factors: FactorCatalogFactor[];
+};
+
+export type FunctionParameter = {
+  name: string;
+  description: string;
+  typeName: string;
+  type: string;
+};
+
+export type FunctionCatalogFunction = {
+  name: string;
+  formular: string;
+  description: string;
+  parameterSize: number;
+  parameters: FunctionParameter[];
+};
+
+export type FunctionCatalogCategory = {
+  categoryName: string;
+  categoryKey: string;
+  functions: FunctionCatalogFunction[];
+};
+
+type StrategyTemplateApi = {
+  id: string;
+  name: string;
+  version: string;
+  status: StrategyTemplateStatus;
+  factor_count: number;
+  rebalance: string;
+  risk_preset: string;
+  combo_size: number;
+  owner: string;
+  updated_at: string;
+};
+
+type StrategyTemplateConfigApi = {
+  template_id: string;
+  factor_keys: string[];
+  expression_draft: string;
+  parameter_space: Array<{
+    factor_key: string;
+    value_type: "number" | "enum";
+    enabled: boolean;
+    min_value: number | null;
+    max_value: number | null;
+    step: number | null;
+    enum_values: string[];
+  }>;
+  combo_size: number;
+  updated_at: string;
+};
+
+type StrategyTemplateDetailApi = {
+  template: StrategyTemplateApi;
+  config: StrategyTemplateConfigApi;
+};
+
+type CandidateRowApi = {
+  rank: number;
+  template_id?: string | null;
+  template: string;
+  combo_id: string;
+  est_combos: number;
+  status: string;
+  pass_rate?: number | null;
+  window: WindowName;
+  source: "generated" | "mock";
+  run_id?: string | null;
+  generated_at?: string | null;
+};
+
+type BacktestJobApi = {
+  job_id: string;
+  strategy_id: string;
+  combo_id: string;
+  rule_pack_id: string;
+  template: string;
+  window: string;
+  status: BacktestJobStatus;
+  progress: number;
+  started_at: string;
+  eta: string;
+  worker: string;
+};
+
+type BacktestLeaderboardApi = {
+  rank: number;
+  strategy_id: string;
+  combo_id: string;
+  rule_pack_id: string;
+  template: string;
+  cagr: number;
+  mdd: number;
+  calmar: number;
+  win_rate: number;
+  turnover: number;
+  recent_1y: number;
+  robust_score: number;
+  window: WindowName;
+};
+
+type BacktestCompareApi = {
+  metric: string;
+  category: "return" | "risk" | "trade";
+  baseline: number;
+  candidate_a: number;
+  candidate_b: number;
+  candidate_c: number;
+};
+
+type FactorCatalogFactorApi = {
+  id: string;
+  factor_name: string;
+  factor_key: string;
+  factor_type: number;
+  expression: string;
+  expression_type: number;
+  enabled: boolean;
+  remark: string;
+  view_style: number;
+  view_precision: number;
+  view_color: boolean;
+  view_ratio: number;
+  view_unit: string;
+};
+
+type FactorCatalogCategoryApi = {
+  category_name: string;
+  category_key: string;
+  factors: FactorCatalogFactorApi[];
+};
+
+type FunctionParameterApi = {
+  name: string;
+  description: string;
+  type_name: string;
+  type: string;
+};
+
+type FunctionCatalogFunctionApi = {
+  name: string;
+  formular: string;
+  description: string;
+  parameter_size: number;
+  parameters: FunctionParameterApi[];
+};
+
+type FunctionCatalogCategoryApi = {
+  category_name: string;
+  category_key: string;
+  functions: FunctionCatalogFunctionApi[];
+};
+
+type HistoryDataSummaryApi = {
+  snapshot_count: number;
+  date_start: string | null;
+  date_end: string | null;
+  latest_trade_date: string | null;
+  latest_bond_count: number;
+  data_dir: string;
+};
+
+type HistorySyncStatusApi = {
+  has_log: boolean;
+  sync_at: string | null;
+  mode: string | null;
+  source: string | null;
+  trade_date: string | null;
+  upserted: number;
+  status: string | null;
+  message: string | null;
+};
+
+type StrategyOptimizeTaskApi = {
+  task_id: string;
+  template_id: string;
+  template_name: string;
+  status: StrategyOptimizeTaskStatus;
+  progress: number;
+  total_combinations: number;
+  evaluated_combinations: number;
+  windows: WindowName[];
+  start_date: string | null;
+  end_date: string | null;
+  eta: string;
+  message: string;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+type StrategyOptimizeResultRowApi = {
+  rank: number;
+  combo_id: string;
+  robust_score: number;
+  cagr: number;
+  mdd: number;
+  calmar: number;
+  win_rate: number;
+  turnover: number;
+  recent_1y: number;
+  total_return_pct: number;
+  params: Record<string, string | number | boolean | null>;
+};
+
+type StrategyTopBondRowApi = {
+  rank: number;
+  bond_id: string;
+  bond_name: string;
+  price: number;
+  premium_rt: number;
+  dblow: number;
+  amount_wan: number | null;
+  score: number;
+  update_time: string;
+};
+
+const configuredApiBase = [
+  process.env.NEXT_PUBLIC_CB_QUANT_API_URL,
+  process.env.NEXT_PUBLIC_API_URL,
+  "http://127.0.0.1:8000",
+].find((item) => typeof item === "string" && item.trim().length > 0);
+
+const apiBase = (configuredApiBase ?? "http://127.0.0.1:8000").replace(/\/$/, "");
+
+function buildUrl(path: string, params?: Record<string, string | number | boolean | undefined>) {
+  const search = new URLSearchParams();
+  if (params) {
+    Object.entries(params).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === "") {
+        return;
+      }
+      search.set(key, String(value));
+    });
+  }
+  const qs = search.toString();
+  return `${apiBase}${path}${qs ? `?${qs}` : ""}`;
+}
+
+async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers ?? {}),
+    },
+    ...init,
+  });
+
+  if (!response.ok) {
+    const contentType = response.headers.get("content-type") ?? "";
+    const text = await response.text();
+    if (contentType.includes("text/html")) {
+      throw new Error(
+        `HTTP ${response.status}: received HTML instead of JSON (check NEXT_PUBLIC_CB_QUANT_API_URL/NEXT_PUBLIC_API_URL).`,
+      );
+    }
+    throw new Error(text || `HTTP ${response.status}`);
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    const text = await response.text();
+    if (text.startsWith("<!DOCTYPE html") || text.startsWith("<html")) {
+      throw new Error(
+        "API returned HTML instead of JSON. Please check backend URL configuration.",
+      );
+    }
+    throw new Error("API did not return JSON payload.");
+  }
+
+  return (await response.json()) as T;
+}
+
+function mapTemplate(row: StrategyTemplateApi): StrategyTemplate {
+  return {
+    id: row.id,
+    name: row.name,
+    version: row.version,
+    status: row.status,
+    factorCount: row.factor_count,
+    rebalance: row.rebalance,
+    riskPreset: row.risk_preset,
+    comboSize: row.combo_size,
+    owner: row.owner,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapTemplateConfig(row: StrategyTemplateConfigApi): StrategyTemplateConfig {
+  return {
+    templateId: row.template_id,
+    factorKeys: row.factor_keys,
+    expressionDraft: row.expression_draft,
+    parameterSpace: row.parameter_space.map((item) => ({
+      factorKey: item.factor_key,
+      valueType: item.value_type,
+      enabled: item.enabled,
+      minValue: item.min_value,
+      maxValue: item.max_value,
+      step: item.step,
+      enumValues: item.enum_values,
+    })),
+    comboSize: row.combo_size,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapCandidate(row: CandidateRowApi): CandidateRow {
+  return {
+    rank: row.rank,
+    templateId: row.template_id ?? "unknown",
+    template: row.template,
+    comboId: row.combo_id,
+    estCombos: row.est_combos,
+    status: row.status,
+    passRate: row.pass_rate ?? null,
+    window: row.window,
+    source: row.source,
+    runId: row.run_id ?? null,
+    generatedAt: row.generated_at ?? null,
+  };
+}
+
+function mapBacktestJob(row: BacktestJobApi): BacktestJob {
+  return {
+    jobId: row.job_id,
+    strategyId: row.strategy_id,
+    comboId: row.combo_id,
+    rulePackId: row.rule_pack_id,
+    template: row.template,
+    window: row.window,
+    status: row.status,
+    progress: row.progress,
+    startedAt: row.started_at,
+    eta: row.eta,
+    worker: row.worker,
+  };
+}
+
+function mapBacktestLeaderboardRow(row: BacktestLeaderboardApi): BacktestLeaderboardRow {
+  return {
+    rank: row.rank,
+    strategyId: row.strategy_id,
+    comboId: row.combo_id,
+    rulePackId: row.rule_pack_id,
+    template: row.template,
+    cagr: row.cagr,
+    mdd: row.mdd,
+    calmar: row.calmar,
+    winRate: row.win_rate,
+    turnover: row.turnover,
+    recent1y: row.recent_1y,
+    robustScore: row.robust_score,
+    window: row.window,
+  };
+}
+
+function mapBacktestCompareRow(row: BacktestCompareApi): BacktestCompareRow {
+  return {
+    metric: row.metric,
+    category: row.category,
+    baseline: row.baseline,
+    candidateA: row.candidate_a,
+    candidateB: row.candidate_b,
+    candidateC: row.candidate_c,
+  };
+}
+
+function mapFactorCatalogFactor(row: FactorCatalogFactorApi): FactorCatalogFactor {
+  return {
+    id: row.id,
+    factorName: row.factor_name,
+    factorKey: row.factor_key,
+    factorType: row.factor_type,
+    expression: row.expression,
+    expressionType: row.expression_type,
+    enabled: row.enabled,
+    remark: row.remark,
+    viewStyle: row.view_style,
+    viewPrecision: row.view_precision,
+    viewColor: row.view_color,
+    viewRatio: row.view_ratio,
+    viewUnit: row.view_unit,
+  };
+}
+
+function mapFunctionParameter(row: FunctionParameterApi): FunctionParameter {
+  return {
+    name: row.name,
+    description: row.description,
+    typeName: row.type_name,
+    type: row.type,
+  };
+}
+
+function mapHistorySummary(row: HistoryDataSummaryApi): HistoryDataSummary {
+  return {
+    snapshotCount: row.snapshot_count,
+    dateStart: row.date_start,
+    dateEnd: row.date_end,
+    latestTradeDate: row.latest_trade_date,
+    latestBondCount: row.latest_bond_count,
+    dataDir: row.data_dir,
+  };
+}
+
+function mapHistorySyncStatus(row: HistorySyncStatusApi): HistorySyncStatus {
+  return {
+    hasLog: row.has_log,
+    syncAt: row.sync_at,
+    mode: row.mode,
+    source: row.source,
+    tradeDate: row.trade_date,
+    upserted: row.upserted,
+    status: row.status,
+    message: row.message,
+  };
+}
+
+function mapOptimizeTask(row: StrategyOptimizeTaskApi): StrategyOptimizeTask {
+  return {
+    taskId: row.task_id,
+    templateId: row.template_id,
+    templateName: row.template_name,
+    status: row.status,
+    progress: row.progress,
+    totalCombinations: row.total_combinations,
+    evaluatedCombinations: row.evaluated_combinations,
+    windows: row.windows,
+    startDate: row.start_date,
+    endDate: row.end_date,
+    eta: row.eta,
+    message: row.message,
+    createdAt: row.created_at,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+  };
+}
+
+function mapOptimizeResultRow(row: StrategyOptimizeResultRowApi): StrategyOptimizeResultRow {
+  return {
+    rank: row.rank,
+    comboId: row.combo_id,
+    robustScore: row.robust_score,
+    cagr: row.cagr,
+    mdd: row.mdd,
+    calmar: row.calmar,
+    winRate: row.win_rate,
+    turnover: row.turnover,
+    recent1y: row.recent_1y,
+    totalReturnPct: row.total_return_pct,
+    params: row.params,
+  };
+}
+
+function mapTopBondRow(row: StrategyTopBondRowApi): StrategyTopBondRow {
+  return {
+    rank: row.rank,
+    bondId: row.bond_id,
+    bondName: row.bond_name,
+    price: row.price,
+    premiumRt: row.premium_rt,
+    dblow: row.dblow,
+    amountWan: row.amount_wan,
+    score: row.score,
+    updateTime: row.update_time,
+  };
+}
+
+export async function listStrategyTemplates(params?: {
+  keyword?: string;
+  status?: string;
+  page?: number;
+  pageSize?: number;
+}): Promise<{ items: StrategyTemplate[]; total: number; page: number; pageSize: number }> {
+  const payload = await requestJson<{
+    items: StrategyTemplateApi[];
+    total: number;
+    page: number;
+    page_size: number;
+  }>(
+    buildUrl("/api/v1/cb-quant/strategy/templates", {
+      keyword: params?.keyword ?? "",
+      status: params?.status ?? "all",
+      page: params?.page ?? 1,
+      page_size: params?.pageSize ?? 50,
+    }),
+  );
+
+  return {
+    items: payload.items.map(mapTemplate),
+    total: payload.total,
+    page: payload.page,
+    pageSize: payload.page_size,
+  };
+}
+
+export async function getHistoryDataSummary(): Promise<HistoryDataSummary> {
+  const payload = await requestJson<HistoryDataSummaryApi>(
+    buildUrl("/api/v1/cb-quant/strategy/history-summary"),
+  );
+  return mapHistorySummary(payload);
+}
+
+export async function triggerHistorySync(): Promise<{ ok: boolean; message: string; upserted: number }> {
+  const payload = await requestJson<{
+    ok: boolean;
+    message: string;
+    upserted: number;
+  }>(buildUrl("/api/v1/cb-quant/strategy/history-sync"), {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  return payload;
+}
+
+export async function getHistorySyncStatus(): Promise<HistorySyncStatus> {
+  const payload = await requestJson<HistorySyncStatusApi>(
+    buildUrl("/api/v1/cb-quant/strategy/history-sync/status"),
+  );
+  return mapHistorySyncStatus(payload);
+}
+
+export async function listFactorCatalog(params?: {
+  category?: string;
+  keyword?: string;
+  enabledOnly?: boolean;
+}): Promise<{ items: FactorCatalogCategory[]; totalCategories: number; totalFactors: number }> {
+  const payload = await requestJson<{
+    items: FactorCatalogCategoryApi[];
+    total_categories: number;
+    total_factors: number;
+  }>(
+    buildUrl("/api/v1/cb-quant/catalog/factors", {
+      category: params?.category ?? "all",
+      keyword: params?.keyword ?? "",
+      enabled_only: params?.enabledOnly ?? false,
+    }),
+  );
+
+  return {
+    items: payload.items.map((category) => ({
+      categoryName: category.category_name,
+      categoryKey: category.category_key,
+      factors: category.factors.map(mapFactorCatalogFactor),
+    })),
+    totalCategories: payload.total_categories,
+    totalFactors: payload.total_factors,
+  };
+}
+
+export async function listFunctionCatalog(params?: {
+  category?: string;
+  keyword?: string;
+}): Promise<{ items: FunctionCatalogCategory[]; totalCategories: number; totalFunctions: number }> {
+  const payload = await requestJson<{
+    items: FunctionCatalogCategoryApi[];
+    total_categories: number;
+    total_functions: number;
+  }>(
+    buildUrl("/api/v1/cb-quant/catalog/functions", {
+      category: params?.category ?? "all",
+      keyword: params?.keyword ?? "",
+    }),
+  );
+
+  return {
+    items: payload.items.map((category) => ({
+      categoryName: category.category_name,
+      categoryKey: category.category_key,
+      functions: category.functions.map((fn) => ({
+        name: fn.name,
+        formular: fn.formular,
+        description: fn.description,
+        parameterSize: fn.parameter_size,
+        parameters: fn.parameters.map(mapFunctionParameter),
+      })),
+    })),
+    totalCategories: payload.total_categories,
+    totalFunctions: payload.total_functions,
+  };
+}
+
+export async function createStrategyTemplate(payload: { name: string; owner?: string }): Promise<StrategyTemplate> {
+  const response = await requestJson<StrategyTemplateApi>(
+    buildUrl("/api/v1/cb-quant/strategy/templates"),
+    {
+      method: "POST",
+      body: JSON.stringify({ name: payload.name, owner: payload.owner ?? "quant_new" }),
+    },
+  );
+  return mapTemplate(response);
+}
+
+export async function expandStrategyFactorCombos(
+  templateId: string,
+  payload?: {
+    minFactorCount?: number;
+    maxFactorCount?: number;
+    maxStrategies?: number;
+  },
+): Promise<{
+  sourceTemplateId: string;
+  sourceTemplateName: string;
+  minFactorCount: number;
+  maxFactorCount: number;
+  totalSubsets: number;
+  createdCount: number;
+  truncated: boolean;
+  message: string;
+}> {
+  const response = await requestJson<{
+    source_template_id: string;
+    source_template_name: string;
+    min_factor_count: number;
+    max_factor_count: number;
+    total_subsets: number;
+    created_count: number;
+    truncated: boolean;
+    message: string;
+  }>(buildUrl(`/api/v1/cb-quant/strategy/templates/${templateId}/expand-factor-combos`), {
+    method: "POST",
+    body: JSON.stringify({
+      min_factor_count: payload?.minFactorCount ?? 1,
+      max_factor_count: payload?.maxFactorCount,
+      max_strategies: payload?.maxStrategies,
+    }),
+  });
+
+  return {
+    sourceTemplateId: response.source_template_id,
+    sourceTemplateName: response.source_template_name,
+    minFactorCount: response.min_factor_count,
+    maxFactorCount: response.max_factor_count,
+    totalSubsets: response.total_subsets,
+    createdCount: response.created_count,
+    truncated: response.truncated,
+    message: response.message,
+  };
+}
+
+export async function updateStrategyTemplate(
+  templateId: string,
+  payload: {
+    name?: string;
+    status?: StrategyTemplateStatus;
+    rebalance?: string;
+    riskPreset?: string;
+    owner?: string;
+  },
+): Promise<StrategyTemplate> {
+  const response = await requestJson<StrategyTemplateApi>(
+    buildUrl(`/api/v1/cb-quant/strategy/templates/${templateId}`),
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        name: payload.name,
+        status: payload.status,
+        rebalance: payload.rebalance,
+        risk_preset: payload.riskPreset,
+        owner: payload.owner,
+      }),
+    },
+  );
+  return mapTemplate(response);
+}
+
+export async function deleteStrategyTemplate(templateId: string): Promise<void> {
+  await requestJson<{ ok: boolean; message: string }>(
+    buildUrl(`/api/v1/cb-quant/strategy/templates/${templateId}`),
+    { method: "DELETE" },
+  );
+}
+
+export async function getStrategyTemplateDetail(templateId: string): Promise<StrategyTemplateDetail> {
+  const payload = await requestJson<StrategyTemplateDetailApi>(
+    buildUrl(`/api/v1/cb-quant/strategy/templates/${templateId}`),
+  );
+  return {
+    template: mapTemplate(payload.template),
+    config: mapTemplateConfig(payload.config),
+  };
+}
+
+export async function updateStrategyTemplateConfig(
+  templateId: string,
+  payload: { factorKeys: string[]; expressionDraft: string; parameterSpace?: StrategyParamSpaceRow[] },
+): Promise<StrategyTemplateConfig> {
+  const response = await requestJson<StrategyTemplateConfigApi>(
+    buildUrl(`/api/v1/cb-quant/strategy/templates/${templateId}/config`),
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        factor_keys: payload.factorKeys,
+        expression_draft: payload.expressionDraft,
+        parameter_space: (payload.parameterSpace ?? []).map((item) => ({
+          factor_key: item.factorKey,
+          value_type: item.valueType,
+          enabled: item.enabled,
+          min_value: item.minValue,
+          max_value: item.maxValue,
+          step: item.step,
+          enum_values: item.enumValues,
+        })),
+      }),
+    },
+  );
+  return mapTemplateConfig(response);
+}
+
+export async function generateStrategyCandidates(
+  templateId: string,
+  payload?: { windows?: WindowName[]; rowsPerWindow?: number },
+): Promise<CandidateGenerateResult> {
+  const response = await requestJson<{
+    run_id: string;
+    template_id: string;
+    template_name: string;
+    created_count: number;
+    est_combos: number;
+    windows: WindowName[];
+    items: CandidateRowApi[];
+    message: string;
+  }>(
+    buildUrl(`/api/v1/cb-quant/strategy/templates/${templateId}/generate-candidates`),
+    {
+      method: "POST",
+      body: JSON.stringify({
+        windows: payload?.windows ?? ["full", "3y", "1y"],
+        rows_per_window: payload?.rowsPerWindow ?? 5,
+      }),
+    },
+  );
+
+  return {
+    runId: response.run_id,
+    templateId: response.template_id,
+    templateName: response.template_name,
+    createdCount: response.created_count,
+    estCombos: response.est_combos,
+    windows: response.windows,
+    items: response.items.map(mapCandidate),
+    message: response.message,
+  };
+}
+
+export async function listStrategyCandidates(params?: {
+  keyword?: string;
+  window?: string;
+  templateId?: string;
+}): Promise<{ items: CandidateRow[]; total: number }> {
+  const payload = await requestJson<{
+    items: CandidateRowApi[];
+    total: number;
+  }>(
+    buildUrl("/api/v1/cb-quant/strategy/candidates", {
+      keyword: params?.keyword ?? "",
+      window: params?.window ?? "all",
+      template_id: params?.templateId ?? "all",
+    }),
+  );
+
+  return {
+    items: payload.items.map(mapCandidate),
+    total: payload.total,
+  };
+}
+
+export async function createStrategyOptimizeTask(payload: {
+  templateId: string;
+  windows: WindowName[];
+  startDate?: string;
+  endDate?: string;
+  topN?: number;
+  maxCombinations?: number;
+  currentTopN?: number;
+}): Promise<{ task: StrategyOptimizeTask; message: string }> {
+  const response = await requestJson<{
+    task: StrategyOptimizeTaskApi;
+    message: string;
+  }>(buildUrl("/api/v1/cb-quant/strategy/optimize-tasks"), {
+    method: "POST",
+    body: JSON.stringify({
+      template_id: payload.templateId,
+      windows: payload.windows,
+      start_date: payload.startDate,
+      end_date: payload.endDate,
+      top_n: payload.topN ?? 20,
+      max_combinations: payload.maxCombinations,
+      current_top_n: payload.currentTopN ?? 20,
+    }),
+  });
+  return {
+    task: mapOptimizeTask(response.task),
+    message: response.message,
+  };
+}
+
+export async function listStrategyOptimizeTasks(params?: {
+  templateId?: string;
+  status?: string;
+  page?: number;
+  pageSize?: number;
+}): Promise<{ items: StrategyOptimizeTask[]; total: number; page: number; pageSize: number }> {
+  const payload = await requestJson<{
+    items: StrategyOptimizeTaskApi[];
+    total: number;
+    page: number;
+    page_size: number;
+  }>(
+    buildUrl("/api/v1/cb-quant/strategy/optimize-tasks", {
+      template_id: params?.templateId ?? "all",
+      status: params?.status ?? "all",
+      page: params?.page ?? 1,
+      page_size: params?.pageSize ?? 20,
+    }),
+  );
+  return {
+    items: payload.items.map(mapOptimizeTask),
+    total: payload.total,
+    page: payload.page,
+    pageSize: payload.page_size,
+  };
+}
+
+export async function getStrategyOptimizeTaskDetail(taskId: string): Promise<StrategyOptimizeTaskDetail> {
+  const payload = await requestJson<{
+    task: StrategyOptimizeTaskApi;
+    top_strategies: StrategyOptimizeResultRowApi[];
+    top_bonds: StrategyTopBondRowApi[];
+  }>(buildUrl(`/api/v1/cb-quant/strategy/optimize-tasks/${taskId}`));
+  return {
+    task: mapOptimizeTask(payload.task),
+    topStrategies: payload.top_strategies.map(mapOptimizeResultRow),
+    topBonds: payload.top_bonds.map(mapTopBondRow),
+  };
+}
+
+export async function getBacktestStats(): Promise<BacktestStats> {
+  const payload = await requestJson<{
+    running_jobs: number;
+    queued_jobs: number;
+    finished_jobs: number;
+    failed_jobs: number;
+    rule_pack_count: number;
+    top_cagr: number;
+  }>(buildUrl("/api/v1/cb-quant/backtest/stats"));
+
+  return {
+    runningJobs: payload.running_jobs,
+    queuedJobs: payload.queued_jobs,
+    finishedJobs: payload.finished_jobs,
+    failedJobs: payload.failed_jobs,
+    rulePackCount: payload.rule_pack_count,
+    topCagr: payload.top_cagr,
+  };
+}
+
+export async function listBacktestJobs(params?: {
+  keyword?: string;
+  status?: string;
+  page?: number;
+  pageSize?: number;
+}): Promise<{ items: BacktestJob[]; total: number; page: number; pageSize: number }> {
+  const payload = await requestJson<{
+    items: BacktestJobApi[];
+    total: number;
+    page: number;
+    page_size: number;
+  }>(
+    buildUrl("/api/v1/cb-quant/backtest/jobs", {
+      keyword: params?.keyword ?? "",
+      status: params?.status ?? "all",
+      page: params?.page ?? 1,
+      page_size: params?.pageSize ?? 20,
+    }),
+  );
+
+  return {
+    items: payload.items.map(mapBacktestJob),
+    total: payload.total,
+    page: payload.page,
+    pageSize: payload.page_size,
+  };
+}
+
+export async function queueBacktestJobs(payload: BacktestQueueRequest): Promise<BacktestQueueResult> {
+  const response = await requestJson<{
+    batch_id: string;
+    combo_id: string;
+    rule_pack_id: string;
+    source_mode: "inherit" | "candidate" | "custom";
+    created_count: number;
+    windows: WindowName[];
+    jobs: BacktestJobApi[];
+    message: string;
+  }>(buildUrl("/api/v1/cb-quant/backtest/jobs"), {
+    method: "POST",
+    body: JSON.stringify({
+      combo_id: payload.comboId,
+      template: payload.template,
+      source_mode: payload.sourceMode,
+      rule_pack_id: payload.rulePackId,
+      windows: payload.windows,
+      start_date: payload.startDate,
+      end_date: payload.endDate,
+      capital_wan: payload.capitalWan,
+      fee_permille: payload.feePermille,
+      benchmark: payload.benchmark,
+      est_strategies: payload.estStrategies,
+    }),
+  });
+
+  return {
+    batchId: response.batch_id,
+    comboId: response.combo_id,
+    rulePackId: response.rule_pack_id,
+    sourceMode: response.source_mode,
+    createdCount: response.created_count,
+    windows: response.windows,
+    jobs: response.jobs.map(mapBacktestJob),
+    message: response.message,
+  };
+}
+
+export async function listBacktestLeaderboard(params?: {
+  keyword?: string;
+  window?: string;
+  page?: number;
+  pageSize?: number;
+}): Promise<{ items: BacktestLeaderboardRow[]; total: number; page: number; pageSize: number }> {
+  const payload = await requestJson<{
+    items: BacktestLeaderboardApi[];
+    total: number;
+    page: number;
+    page_size: number;
+  }>(
+    buildUrl("/api/v1/cb-quant/backtest/leaderboard", {
+      keyword: params?.keyword ?? "",
+      window: params?.window ?? "all",
+      page: params?.page ?? 1,
+      page_size: params?.pageSize ?? 20,
+    }),
+  );
+
+  return {
+    items: payload.items.map(mapBacktestLeaderboardRow),
+    total: payload.total,
+    page: payload.page,
+    pageSize: payload.page_size,
+  };
+}
+
+export async function listBacktestCompare(params?: {
+  keyword?: string;
+  category?: string;
+}): Promise<{ items: BacktestCompareRow[]; total: number }> {
+  const payload = await requestJson<{
+    items: BacktestCompareApi[];
+    total: number;
+  }>(
+    buildUrl("/api/v1/cb-quant/backtest/compare", {
+      keyword: params?.keyword ?? "",
+      category: params?.category ?? "all",
+    }),
+  );
+
+  return {
+    items: payload.items.map(mapBacktestCompareRow),
+    total: payload.total,
+  };
+}

@@ -7,8 +7,11 @@ from pydantic import BaseModel, Field
 
 WindowName = Literal["full", "3y", "1y"]
 JobStatus = Literal["queued", "running", "finished", "failed"]
+OptimizeTaskStatus = Literal["queued", "running", "finished", "failed"]
 CompareCategory = Literal["return", "risk", "trade"]
 RuleSourceMode = Literal["inherit", "candidate", "custom"]
+StrategyTemplateStatus = Literal["active", "draft", "archived"]
+CandidateSource = Literal["generated", "mock"]
 
 
 class HealthResponse(BaseModel):
@@ -17,13 +20,23 @@ class HealthResponse(BaseModel):
     version: str = "v1"
 
 
+class OperationResponse(BaseModel):
+    ok: bool = True
+    message: str = "ok"
+
+
 class CandidateRow(BaseModel):
     rank: int
+    template_id: str | None = None
     template: str
     combo_id: str
     est_combos: int
-    pass_rate: float
+    status: str = "pending_backtest"
+    pass_rate: float | None = None
     window: WindowName
+    source: CandidateSource = "generated"
+    run_id: str | None = None
+    generated_at: str | None = None
 
 
 class CandidateListResponse(BaseModel):
@@ -121,6 +134,203 @@ class BacktestStatsResponse(BaseModel):
     failed_jobs: int
     rule_pack_count: int
     top_cagr: float
+
+
+class StrategyTemplateRow(BaseModel):
+    id: str
+    name: str
+    version: str
+    status: StrategyTemplateStatus
+    factor_count: int = Field(ge=0)
+    rebalance: str
+    risk_preset: str
+    combo_size: int = Field(ge=0)
+    owner: str
+    updated_at: str
+
+
+class StrategyTemplateListResponse(BaseModel):
+    items: list[StrategyTemplateRow]
+    total: int
+    page: int
+    page_size: int
+
+
+class StrategyTemplateCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    owner: str = Field(default="quant_new", min_length=1, max_length=64)
+
+
+class StrategyTemplateUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    status: StrategyTemplateStatus | None = None
+    rebalance: str | None = None
+    risk_preset: str | None = None
+    owner: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class StrategyTemplateConfigRequest(BaseModel):
+    factor_keys: list[str] = Field(default_factory=list)
+    expression_draft: str = ""
+    parameter_space: list["StrategyParamSpaceRow"] = Field(default_factory=list)
+
+
+class StrategyTemplateConfigResponse(BaseModel):
+    template_id: str
+    factor_keys: list[str]
+    expression_draft: str
+    parameter_space: list["StrategyParamSpaceRow"] = Field(default_factory=list)
+    combo_size: int = Field(default=0, ge=0)
+    updated_at: str
+
+
+class StrategyTemplateDetailResponse(BaseModel):
+    template: StrategyTemplateRow
+    config: StrategyTemplateConfigResponse
+
+
+class StrategyExpandFactorCombosRequest(BaseModel):
+    min_factor_count: int = Field(default=1, ge=1)
+    max_factor_count: int | None = Field(default=None, ge=1)
+    max_strategies: int | None = Field(default=2000, ge=1)
+
+
+class StrategyExpandFactorCombosResponse(BaseModel):
+    source_template_id: str
+    source_template_name: str
+    min_factor_count: int
+    max_factor_count: int
+    total_subsets: int
+    created_count: int
+    truncated: bool = False
+    message: str
+
+
+class StrategyParamSpaceRow(BaseModel):
+    factor_key: str
+    value_type: Literal["number", "enum"] = "number"
+    enabled: bool = True
+    min_value: float | None = None
+    max_value: float | None = None
+    step: float | None = None
+    enum_values: list[str] = Field(default_factory=list)
+
+
+class CandidateGenerateRequest(BaseModel):
+    windows: list[WindowName] = Field(default_factory=lambda: ["full", "3y", "1y"])
+    rows_per_window: int = Field(default=5, ge=1, le=100)
+
+
+class CandidateGenerateResponse(BaseModel):
+    run_id: str
+    template_id: str
+    template_name: str
+    created_count: int
+    est_combos: int
+    windows: list[WindowName]
+    items: list[CandidateRow]
+    message: str
+
+
+class HistoryDataSummaryResponse(BaseModel):
+    snapshot_count: int
+    date_start: str | None = None
+    date_end: str | None = None
+    latest_trade_date: str | None = None
+    latest_bond_count: int = 0
+    data_dir: str
+
+
+class HistorySyncResponse(BaseModel):
+    ok: bool = True
+    mode: str
+    source: str
+    trade_date: str
+    upserted: int
+    message: str
+
+
+class HistorySyncStatusResponse(BaseModel):
+    has_log: bool
+    sync_at: str | None = None
+    mode: str | None = None
+    source: str | None = None
+    trade_date: str | None = None
+    upserted: int = 0
+    status: str | None = None
+    message: str | None = None
+
+
+class StrategyOptimizeTaskCreateRequest(BaseModel):
+    template_id: str = Field(min_length=3)
+    windows: list[WindowName] = Field(default_factory=lambda: ["full", "3y", "1y"])
+    start_date: date | None = None
+    end_date: date | None = None
+    top_n: int = Field(default=20, ge=1, le=200)
+    max_combinations: int | None = Field(default=None, ge=1)
+    current_top_n: int = Field(default=20, ge=1, le=200)
+
+
+class StrategyOptimizeTaskRow(BaseModel):
+    task_id: str
+    template_id: str
+    template_name: str
+    status: OptimizeTaskStatus
+    progress: int = Field(ge=0, le=100)
+    total_combinations: int = Field(ge=0)
+    evaluated_combinations: int = Field(ge=0)
+    windows: list[WindowName]
+    start_date: str | None = None
+    end_date: str | None = None
+    eta: str = "--"
+    message: str = ""
+    created_at: str
+    started_at: str | None = None
+    finished_at: str | None = None
+
+
+class StrategyOptimizeTaskListResponse(BaseModel):
+    items: list[StrategyOptimizeTaskRow]
+    total: int
+    page: int
+    page_size: int
+
+
+class StrategyOptimizeResultRow(BaseModel):
+    rank: int
+    combo_id: str
+    robust_score: float
+    cagr: float
+    mdd: float
+    calmar: float
+    win_rate: float
+    turnover: float
+    recent_1y: float
+    total_return_pct: float
+    params: dict
+
+
+class StrategyTopBondRow(BaseModel):
+    rank: int
+    bond_id: str
+    bond_name: str
+    price: float
+    premium_rt: float
+    dblow: float
+    amount_wan: float | None = None
+    score: float
+    update_time: str
+
+
+class StrategyOptimizeTaskDetailResponse(BaseModel):
+    task: StrategyOptimizeTaskRow
+    top_strategies: list[StrategyOptimizeResultRow]
+    top_bonds: list[StrategyTopBondRow]
+
+
+class StrategyOptimizeTaskCreateResponse(BaseModel):
+    task: StrategyOptimizeTaskRow
+    message: str
 
 
 class WsEvent(BaseModel):

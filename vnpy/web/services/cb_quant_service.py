@@ -1,9 +1,16 @@
 from __future__ import annotations
 
-from datetime import datetime
-from threading import Lock
-from typing import Iterable, TypeVar
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime
+from itertools import combinations, islice, product
+import json
+from math import comb
+from pathlib import Path
+from threading import Event, Lock, Thread
+from typing import Any, Iterable, TypeVar
 
+from vnpy.web.adapters import CrawlerPhaseABacktestAdapter
+from vnpy.web.services.cb_market_service import CbMarketService
 from vnpy.web.schemas import (
     BacktestCompareResponse,
     BacktestCompareRow,
@@ -14,8 +21,28 @@ from vnpy.web.schemas import (
     BacktestLeaderboardResponse,
     BacktestLeaderboardRow,
     BacktestStatsResponse,
+    CandidateGenerateRequest,
+    CandidateGenerateResponse,
     CandidateListResponse,
     CandidateRow,
+    HistoryDataSummaryResponse,
+    StrategyOptimizeResultRow,
+    StrategyOptimizeTaskCreateRequest,
+    StrategyOptimizeTaskCreateResponse,
+    StrategyOptimizeTaskDetailResponse,
+    StrategyOptimizeTaskListResponse,
+    StrategyOptimizeTaskRow,
+    StrategyTopBondRow,
+    StrategyTemplateConfigRequest,
+    StrategyTemplateConfigResponse,
+    StrategyTemplateCreateRequest,
+    StrategyTemplateDetailResponse,
+    StrategyExpandFactorCombosRequest,
+    StrategyExpandFactorCombosResponse,
+    StrategyTemplateListResponse,
+    StrategyParamSpaceRow,
+    StrategyTemplateRow,
+    StrategyTemplateUpdateRequest,
     WindowName,
 )
 
@@ -38,68 +65,690 @@ def _now_yyyymmdd() -> str:
     return datetime.now().strftime("%Y%m%d")
 
 
+def _now_readable() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M")
+
+
+def _now_compact() -> str:
+    return datetime.now().strftime("%Y%m%d%H%M")
+
+
 class CbQuantService:
-    """In-memory mock service for frontend-backend integration."""
+    """In-memory CB Quant service for frontend-backend integration."""
 
     def __init__(self) -> None:
         self._lock: Lock = Lock()
-        self._seq: int = 7
+        self._executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="cbq-bt")
+        self._adapter: CrawlerPhaseABacktestAdapter = CrawlerPhaseABacktestAdapter()
+        self._market_service: CbMarketService = CbMarketService()
+        self._seq: int = 0
+        self._template_seq: int = 0
+        self._opt_task_seq: int = 0
+        self._candidate_settings: dict[str, dict[str, Any]] = {}
+        self._job_context: dict[str, dict[str, Any]] = {}
+        self._storage_dir: Path = self._adapter.data_dir / "_cb_quant"
+        self._storage_dir.mkdir(parents=True, exist_ok=True)
+        self._templates_file: Path = self._storage_dir / "templates.json"
 
-        self._candidates: list[CandidateRow] = [
-            CandidateRow(rank=1, template="双低稳健A", combo_id="CMB-102883", est_combos=86400, pass_rate=9.3, window="full"),
-            CandidateRow(rank=2, template="双低+评级", combo_id="CMB-202551", est_combos=98304, pass_rate=8.7, window="3y"),
-            CandidateRow(rank=3, template="低价低溢价轮动", combo_id="CMB-140301", est_combos=145920, pass_rate=7.9, window="full"),
-            CandidateRow(rank=4, template="双低回撤保护", combo_id="CMB-883102", est_combos=110592, pass_rate=8.2, window="1y"),
-            CandidateRow(rank=5, template="小盘债容量版", combo_id="CMB-553210", est_combos=73728, pass_rate=9.1, window="3y"),
-            CandidateRow(rank=6, template="流动性优先", combo_id="CMB-033421", est_combos=57600, pass_rate=10.8, window="1y"),
-            CandidateRow(rank=7, template="低溢价动量", combo_id="CMB-932811", est_combos=122880, pass_rate=6.6, window="full"),
-            CandidateRow(rank=8, template="高波动降权", combo_id="CMB-502102", est_combos=69120, pass_rate=7.1, window="1y"),
+        self._templates, self._template_configs = self._load_templates_and_configs()
+        self._templates = self._sync_template_metrics(self._templates, self._template_configs)
+        self._template_seq = self._derive_template_seq(self._templates)
+
+        self._candidates: list[CandidateRow] = []
+        self._rebuild_candidate_settings()
+
+        self._jobs: list[BacktestJobRow] = []
+        self._leaderboard: list[BacktestLeaderboardRow] = []
+        self._compare: list[BacktestCompareRow] = []
+        self._refresh_compare_rows()
+
+        self._optimize_tasks: list[StrategyOptimizeTaskRow] = []
+        self._optimize_results: dict[str, list[StrategyOptimizeResultRow]] = {}
+        self._optimize_top_bonds: dict[str, list[StrategyTopBondRow]] = {}
+
+    # ---------- strategy templates ----------
+    def list_templates(
+        self,
+        *,
+        keyword: str = "",
+        status: str = "all",
+        page: int = 1,
+        page_size: int = 50,
+    ) -> StrategyTemplateListResponse:
+        needle = keyword.strip().lower()
+        rows: list[StrategyTemplateRow] = []
+
+        for row in self._templates:
+            if status != "all" and row.status != status:
+                continue
+            if needle:
+                raw = f"{row.id}|{row.name}|{row.owner}|{row.version}".lower()
+                if needle not in raw:
+                    continue
+            rows.append(row)
+
+        rows.sort(key=lambda item: item.updated_at, reverse=True)
+        total = len(rows)
+        paged = _paginate(rows, page, page_size)
+        return StrategyTemplateListResponse(items=paged, total=total, page=page, page_size=page_size)
+
+    def get_template_detail(self, template_id: str) -> StrategyTemplateDetailResponse | None:
+        template = self._find_template(template_id)
+        if not template:
+            return None
+
+        config = self._template_configs.get(template_id)
+        if not config:
+            config = self._default_config(template_id=template_id, updated_at=template.updated_at)
+            self._template_configs[template_id] = config
+
+        return StrategyTemplateDetailResponse(template=template, config=config)
+
+    def create_template(self, request: StrategyTemplateCreateRequest) -> StrategyTemplateRow:
+        with self._lock:
+            self._template_seq += 1
+            template_id = f"TPL-{self._template_seq:03d}"
+            now = _now_readable()
+            default_config = self._default_config(template_id=template_id, updated_at=now)
+            template = StrategyTemplateRow(
+                id=template_id,
+                name=request.name,
+                version="v0.1.0",
+                status="draft",
+                factor_count=len(default_config.factor_keys),
+                rebalance="weekly",
+                risk_preset="balanced",
+                combo_size=default_config.combo_size,
+                owner=request.owner,
+                updated_at=now,
+            )
+            self._templates.insert(0, template)
+            self._template_configs[template_id] = default_config
+            self._save_templates_and_configs()
+            return template
+
+    def update_template(self, template_id: str, request: StrategyTemplateUpdateRequest) -> StrategyTemplateRow | None:
+        with self._lock:
+            for idx, row in enumerate(self._templates):
+                if row.id != template_id:
+                    continue
+
+                updated = StrategyTemplateRow(
+                    id=row.id,
+                    name=request.name if request.name is not None else row.name,
+                    version=row.version,
+                    status=request.status if request.status is not None else row.status,
+                    factor_count=row.factor_count,
+                    rebalance=request.rebalance if request.rebalance is not None else row.rebalance,
+                    risk_preset=request.risk_preset if request.risk_preset is not None else row.risk_preset,
+                    combo_size=row.combo_size,
+                    owner=request.owner if request.owner is not None else row.owner,
+                    updated_at=_now_readable(),
+                )
+                self._templates[idx] = updated
+                self._save_templates_and_configs()
+                return updated
+        return None
+
+    def delete_template(self, template_id: str) -> bool:
+        with self._lock:
+            before = len(self._templates)
+            self._templates = [row for row in self._templates if row.id != template_id]
+            deleted = len(self._templates) != before
+            if deleted:
+                self._template_configs.pop(template_id, None)
+                self._candidates = [row for row in self._candidates if row.template_id != template_id]
+                self._candidate_settings = {
+                    combo_id: setting
+                    for combo_id, setting in self._candidate_settings.items()
+                    if any(row.combo_id == combo_id for row in self._candidates)
+                }
+                self._save_templates_and_configs()
+            return deleted
+
+    def expand_template_factor_combos(
+        self,
+        template_id: str,
+        request: StrategyExpandFactorCombosRequest,
+    ) -> StrategyExpandFactorCombosResponse | None:
+        template = self._find_template(template_id)
+        if not template:
+            return None
+
+        config = self._template_configs.get(template_id) or self._default_config(
+            template_id=template_id,
+            updated_at=template.updated_at,
+        )
+        factor_keys = list(dict.fromkeys(config.factor_keys))
+        factor_count = len(factor_keys)
+        if factor_count == 0:
+            return StrategyExpandFactorCombosResponse(
+                source_template_id=template.id,
+                source_template_name=template.name,
+                min_factor_count=0,
+                max_factor_count=0,
+                total_subsets=0,
+                created_count=0,
+                truncated=False,
+                message="策略没有可展开的因子，请先配置参数空间。",
+            )
+
+        min_count = max(1, min(request.min_factor_count, factor_count))
+        max_count = factor_count if request.max_factor_count is None else max(1, min(request.max_factor_count, factor_count))
+        if min_count > max_count:
+            min_count, max_count = max_count, min_count
+
+        total_subsets = sum(comb(factor_count, k) for k in range(min_count, max_count + 1))
+        max_strategies = request.max_strategies or total_subsets
+        created_rows: list[StrategyTemplateRow] = []
+        created_configs: dict[str, StrategyTemplateConfigResponse] = {}
+        created_count = 0
+        truncated = False
+        source_row_map: dict[str, StrategyParamSpaceRow] = {
+            row.factor_key: row for row in config.parameter_space
+        }
+
+        with self._lock:
+            for k in range(min_count, max_count + 1):
+                for subset in combinations(factor_keys, k):
+                    if created_count >= max_strategies:
+                        truncated = True
+                        break
+
+                    self._template_seq += 1
+                    new_id = f"TPL-{self._template_seq:03d}"
+                    now = _now_readable()
+                    subset_keys = list(subset)
+                    subset_space = [
+                        source_row_map[key] if key in source_row_map else self._default_param_space_row(key)
+                        for key in subset_keys
+                    ]
+                    normalized_space = self._normalize_parameter_space(
+                        factor_keys=subset_keys,
+                        parameter_space=subset_space,
+                    )
+                    combo_size = self._calculate_combo_size(
+                        factor_keys=subset_keys,
+                        parameter_space=normalized_space,
+                    )
+
+                    created_count += 1
+                    strategy_name = f"{template.name}-F{k}-{created_count:04d}"
+                    row = StrategyTemplateRow(
+                        id=new_id,
+                        name=strategy_name,
+                        version="v0.1.0",
+                        status="draft",
+                        factor_count=len(subset_keys),
+                        rebalance=template.rebalance,
+                        risk_preset=template.risk_preset,
+                        combo_size=combo_size,
+                        owner=template.owner,
+                        updated_at=now,
+                    )
+                    cfg = StrategyTemplateConfigResponse(
+                        template_id=new_id,
+                        factor_keys=subset_keys,
+                        expression_draft=config.expression_draft,
+                        parameter_space=normalized_space,
+                        combo_size=combo_size,
+                        updated_at=now,
+                    )
+                    created_rows.append(row)
+                    created_configs[new_id] = cfg
+
+                if truncated:
+                    break
+
+            if created_rows:
+                self._templates = [*created_rows, *self._templates]
+                self._template_configs.update(created_configs)
+                self._save_templates_and_configs()
+
+        message = (
+            f"已从策略 {template.name} 展开 {created_count} 个因子组合策略"
+            f"（{min_count}~{max_count} 因子，理论共 {total_subsets} 个）。"
+        )
+        if truncated:
+            message += " 已达到本次生成上限。"
+
+        return StrategyExpandFactorCombosResponse(
+            source_template_id=template.id,
+            source_template_name=template.name,
+            min_factor_count=min_count,
+            max_factor_count=max_count,
+            total_subsets=total_subsets,
+            created_count=created_count,
+            truncated=truncated,
+            message=message,
+        )
+
+    def update_template_config(
+        self,
+        template_id: str,
+        request: StrategyTemplateConfigRequest,
+    ) -> StrategyTemplateConfigResponse | None:
+        template = self._find_template(template_id)
+        if not template:
+            return None
+
+        normalized_space = self._normalize_parameter_space(
+            factor_keys=request.factor_keys,
+            parameter_space=request.parameter_space,
+        )
+        combo_size = self._calculate_combo_size(
+            factor_keys=request.factor_keys,
+            parameter_space=normalized_space,
+        )
+
+        config = StrategyTemplateConfigResponse(
+            template_id=template_id,
+            factor_keys=request.factor_keys,
+            expression_draft=request.expression_draft,
+            parameter_space=normalized_space,
+            combo_size=combo_size,
+            updated_at=_now_readable(),
+        )
+
+        with self._lock:
+            self._template_configs[template_id] = config
+            self._templates = [
+                StrategyTemplateRow(
+                    id=row.id,
+                    name=row.name,
+                    version=row.version,
+                    status=row.status,
+                    factor_count=len(request.factor_keys) if row.id == template_id else row.factor_count,
+                    rebalance=row.rebalance,
+                    risk_preset=row.risk_preset,
+                    combo_size=combo_size if row.id == template_id else row.combo_size,
+                    owner=row.owner,
+                    updated_at=config.updated_at if row.id == template_id else row.updated_at,
+                )
+                for row in self._templates
+            ]
+            template_combo_ids = {
+                row.combo_id for row in self._candidates if row.template_id == template_id
+            }
+            for combo_id in template_combo_ids:
+                self._candidate_settings[combo_id] = self._build_candidate_setting(
+                    template_id=template_id,
+                    combo_id=combo_id,
+                )
+            self._save_templates_and_configs()
+
+        return config
+
+    def generate_candidates(
+        self,
+        template_id: str,
+        request: CandidateGenerateRequest,
+    ) -> CandidateGenerateResponse | None:
+        template = self._find_template(template_id)
+        if not template:
+            return None
+
+        config = self._template_configs.get(template_id) or self._default_config(
+            template_id=template_id,
+            updated_at=template.updated_at,
+        )
+        combo_size = max(
+            1,
+            self._calculate_combo_size(
+                factor_keys=config.factor_keys,
+                parameter_space=config.parameter_space,
+            ),
+        )
+
+        windows = self._normalize_windows(request.windows)
+        if not windows:
+            windows = ["full", "3y", "1y"]
+
+        run_id = f"RUN-{template_id}-{_now_compact()}"
+        combo_settings: dict[str, dict[str, Any]] = {}
+        preview_settings = list(
+            self._iter_template_settings(
+                template_id=template_id,
+                limit=max(1, request.rows_per_window),
+            )
+        )
+        if not preview_settings:
+            preview_settings = [(f"CMB-{100000 + idx}", self._adapter.default_setting()) for idx in range(request.rows_per_window)]
+
+        rows: list[CandidateRow] = []
+        for window_name in windows:
+            for combo_id, setting in preview_settings:
+                combo_settings[combo_id] = dict(setting)
+                combo = CandidateRow(
+                    rank=0,
+                    template_id=template_id,
+                    template=template.name,
+                    combo_id=combo_id,
+                    est_combos=combo_size,
+                    status="pending_backtest",
+                    pass_rate=None,
+                    window=window_name,
+                    source="generated",
+                    run_id=run_id,
+                    generated_at=_now_readable(),
+                )
+                rows.append(combo)
+
+        rows.sort(key=lambda item: item.est_combos, reverse=True)
+        ranked_rows = [
+            CandidateRow(
+                rank=idx + 1,
+                template_id=item.template_id,
+                template=item.template,
+                combo_id=item.combo_id,
+                est_combos=item.est_combos,
+                status=item.status,
+                pass_rate=item.pass_rate,
+                window=item.window,
+                source=item.source,
+                run_id=item.run_id,
+                generated_at=item.generated_at,
+            )
+            for idx, item in enumerate(rows)
         ]
 
-        self._jobs: list[BacktestJobRow] = [
-            BacktestJobRow(job_id="BT-20260221-001", strategy_id="STR-001", combo_id="CMB-102883", rule_pack_id="RP-BASE-001", template="双低稳健A", window="2018-2025", status="running", progress=62, started_at="09:31:05", eta="7m", worker="wk-01"),
-            BacktestJobRow(job_id="BT-20260221-002", strategy_id="STR-002", combo_id="CMB-202551", rule_pack_id="RP-RISK-203", template="双低+评级", window="近3年", status="queued", progress=0, started_at="09:33:15", eta="--", worker="wk-02"),
-            BacktestJobRow(job_id="BT-20260221-003", strategy_id="STR-003", combo_id="CMB-140301", rule_pack_id="RP-FAST-112", template="低价低溢价轮动", window="近1年", status="finished", progress=100, started_at="09:15:22", eta="done", worker="wk-03"),
-            BacktestJobRow(job_id="BT-20260221-004", strategy_id="STR-004", combo_id="CMB-033421", rule_pack_id="RP-LIQ-088", template="流动性优先", window="2018-2025", status="failed", progress=44, started_at="08:56:40", eta="stopped", worker="wk-04"),
-            BacktestJobRow(job_id="BT-20260221-005", strategy_id="STR-005", combo_id="CMB-883102", rule_pack_id="RP-DD-157", template="双低回撤保护", window="近3年", status="running", progress=81, started_at="09:02:11", eta="3m", worker="wk-05"),
-            BacktestJobRow(job_id="BT-20260221-006", strategy_id="STR-006", combo_id="CMB-553210", rule_pack_id="RP-CAP-119", template="小盘债容量版", window="近1年", status="finished", progress=100, started_at="08:21:53", eta="done", worker="wk-01"),
-            BacktestJobRow(job_id="BT-20260221-007", strategy_id="STR-007", combo_id="CMB-932811", rule_pack_id="RP-MOM-076", template="低溢价动量", window="2018-2025", status="queued", progress=0, started_at="09:40:14", eta="--", worker="wk-03"),
-        ]
+        with self._lock:
+            self._candidates = [
+                *ranked_rows,
+                *[row for row in self._candidates if row.template_id != template_id],
+            ]
+            self._candidate_settings.update(combo_settings)
+            self._templates = [
+                StrategyTemplateRow(
+                    id=row.id,
+                    name=row.name,
+                    version=row.version,
+                    status=row.status,
+                    factor_count=row.factor_count,
+                    rebalance=row.rebalance,
+                    risk_preset=row.risk_preset,
+                    combo_size=combo_size if row.id == template_id else row.combo_size,
+                    owner=row.owner,
+                    updated_at=_now_readable() if row.id == template_id else row.updated_at,
+                )
+                for row in self._templates
+            ]
 
-        self._leaderboard: list[BacktestLeaderboardRow] = [
-            BacktestLeaderboardRow(rank=1, strategy_id="STR-001", combo_id="CMB-102883", rule_pack_id="RP-BASE-001", template="双低稳健A", cagr=0.342, mdd=0.192, calmar=1.78, win_rate=62.4, turnover=0.29, recent_1y=0.271, robust_score=92.2, window="full"),
-            BacktestLeaderboardRow(rank=2, strategy_id="STR-002", combo_id="CMB-202551", rule_pack_id="RP-RISK-203", template="双低+评级", cagr=0.331, mdd=0.185, calmar=1.79, win_rate=61.2, turnover=0.27, recent_1y=0.259, robust_score=90.9, window="3y"),
-            BacktestLeaderboardRow(rank=3, strategy_id="STR-005", combo_id="CMB-883102", rule_pack_id="RP-DD-157", template="双低回撤保护", cagr=0.316, mdd=0.169, calmar=1.87, win_rate=59.8, turnover=0.25, recent_1y=0.246, robust_score=89.8, window="1y"),
-            BacktestLeaderboardRow(rank=4, strategy_id="STR-003", combo_id="CMB-140301", rule_pack_id="RP-FAST-112", template="低价低溢价轮动", cagr=0.354, mdd=0.222, calmar=1.59, win_rate=60.1, turnover=0.33, recent_1y=0.221, robust_score=86.4, window="full"),
-            BacktestLeaderboardRow(rank=5, strategy_id="STR-004", combo_id="CMB-033421", rule_pack_id="RP-LIQ-088", template="流动性优先", cagr=0.288, mdd=0.141, calmar=2.04, win_rate=57.6, turnover=0.21, recent_1y=0.208, robust_score=85.2, window="3y"),
-            BacktestLeaderboardRow(rank=6, strategy_id="STR-006", combo_id="CMB-553210", rule_pack_id="RP-CAP-119", template="小盘债容量版", cagr=0.301, mdd=0.201, calmar=1.49, win_rate=58.8, turnover=0.26, recent_1y=0.193, robust_score=82.9, window="1y"),
-            BacktestLeaderboardRow(rank=7, strategy_id="STR-007", combo_id="CMB-932811", rule_pack_id="RP-MOM-076", template="低溢价动量", cagr=0.278, mdd=0.236, calmar=1.18, win_rate=54.1, turnover=0.38, recent_1y=0.161, robust_score=77.5, window="full"),
-        ]
+        return CandidateGenerateResponse(
+            run_id=run_id,
+            template_id=template_id,
+            template_name=template.name,
+            created_count=len(ranked_rows),
+            est_combos=combo_size,
+            windows=windows,
+            items=ranked_rows,
+            message=f"已生成候选集 {run_id}，共 {len(ranked_rows)} 条，参数空间组合数={combo_size}。",
+        )
 
-        self._compare: list[BacktestCompareRow] = [
-            BacktestCompareRow(metric="CAGR", category="return", baseline=0.214, candidate_a=0.342, candidate_b=0.331, candidate_c=0.316),
-            BacktestCompareRow(metric="近1年收益", category="return", baseline=0.112, candidate_a=0.271, candidate_b=0.259, candidate_c=0.246),
-            BacktestCompareRow(metric="最大回撤", category="risk", baseline=0.286, candidate_a=0.192, candidate_b=0.185, candidate_c=0.169),
-            BacktestCompareRow(metric="Calmar", category="risk", baseline=0.750, candidate_a=1.780, candidate_b=1.790, candidate_c=1.870),
-            BacktestCompareRow(metric="年化换手", category="trade", baseline=0.440, candidate_a=0.290, candidate_b=0.270, candidate_c=0.250),
-            BacktestCompareRow(metric="胜率", category="trade", baseline=0.490, candidate_a=0.624, candidate_b=0.612, candidate_c=0.598),
-        ]
-
-    def list_candidates(self, keyword: str = "", window: str = "all") -> CandidateListResponse:
+    # ---------- candidates ----------
+    def list_candidates(
+        self,
+        keyword: str = "",
+        window: str = "all",
+        template_id: str | None = None,
+    ) -> CandidateListResponse:
         rows: list[CandidateRow] = []
         needle = keyword.strip().lower()
 
         for row in self._candidates:
             if window != "all" and row.window != window:
                 continue
+            if template_id and template_id != "all" and row.template_id != template_id:
+                continue
             if needle:
-                raw = f"{row.template}|{row.combo_id}".lower()
+                raw = f"{row.template}|{row.combo_id}|{row.run_id or ''}".lower()
                 if needle not in raw:
                     continue
             rows.append(row)
 
-        return CandidateListResponse(items=rows, total=len(rows))
+        rows.sort(key=lambda item: (item.generated_at or "", item.est_combos), reverse=True)
+        ranked_rows = [
+            CandidateRow(
+                rank=idx + 1,
+                template_id=item.template_id,
+                template=item.template,
+                combo_id=item.combo_id,
+                est_combos=item.est_combos,
+                status=item.status,
+                pass_rate=item.pass_rate,
+                window=item.window,
+                source=item.source,
+                run_id=item.run_id,
+                generated_at=item.generated_at,
+            )
+            for idx, item in enumerate(rows)
+        ]
 
+        return CandidateListResponse(items=ranked_rows, total=len(ranked_rows))
+
+    # ---------- optimize tasks ----------
+    def get_history_data_summary(self) -> HistoryDataSummaryResponse:
+        try:
+            dataset = self._adapter.load_market_data()
+        except Exception:
+            dataset = []
+        normalized = sorted(dataset, key=lambda item: item[0])
+        if not normalized:
+            return HistoryDataSummaryResponse(
+                snapshot_count=0,
+                latest_bond_count=0,
+                data_dir=str(self._adapter.data_dir / "_cb_quant" / "cb_snapshots.db"),
+            )
+
+        latest_df = normalized[-1][1]
+        return HistoryDataSummaryResponse(
+            snapshot_count=len(normalized),
+            date_start=normalized[0][0],
+            date_end=normalized[-1][0],
+            latest_trade_date=normalized[-1][0],
+            latest_bond_count=int(len(latest_df)),
+            data_dir=str(self._adapter.data_dir / "_cb_quant" / "cb_snapshots.db"),
+        )
+
+    def create_optimize_task(
+        self,
+        request: StrategyOptimizeTaskCreateRequest,
+    ) -> StrategyOptimizeTaskCreateResponse | None:
+        template = self._find_template(request.template_id)
+        if not template:
+            return None
+
+        config = self._template_configs.get(template.id) or self._default_config(
+            template_id=template.id,
+            updated_at=template.updated_at,
+        )
+        windows = self._normalize_windows(request.windows)
+        if not windows:
+            windows = ["full", "3y", "1y"]
+
+        combo_size = max(
+            1,
+            self._calculate_combo_size(
+                factor_keys=config.factor_keys,
+                parameter_space=config.parameter_space,
+            ),
+        )
+        capped_total = combo_size if request.max_combinations is None else min(combo_size, request.max_combinations)
+
+        with self._lock:
+            self._opt_task_seq += 1
+            task_id = f"OPT-{_now_yyyymmdd()}-{self._opt_task_seq:04d}"
+            task = StrategyOptimizeTaskRow(
+                task_id=task_id,
+                template_id=template.id,
+                template_name=template.name,
+                status="queued",
+                progress=0,
+                total_combinations=capped_total,
+                evaluated_combinations=0,
+                windows=windows,
+                start_date=request.start_date.isoformat() if request.start_date else None,
+                end_date=request.end_date.isoformat() if request.end_date else None,
+                eta="--",
+                message="任务已入队",
+                created_at=_now_readable(),
+            )
+            self._optimize_tasks = [task, *self._optimize_tasks]
+            self._optimize_results[task_id] = []
+            self._optimize_top_bonds[task_id] = []
+
+        self._executor.submit(
+            self._run_optimize_task,
+            task_id,
+            request.top_n,
+            request.current_top_n,
+            request.start_date,
+            request.end_date,
+        )
+        return StrategyOptimizeTaskCreateResponse(
+            task=task,
+            message=f"已创建优化任务 {task_id}，待评估参数组合数={capped_total}",
+        )
+
+    def list_optimize_tasks(
+        self,
+        *,
+        template_id: str = "all",
+        status: str = "all",
+        page: int = 1,
+        page_size: int = 20,
+    ) -> StrategyOptimizeTaskListResponse:
+        rows = []
+        for row in self._optimize_tasks:
+            if template_id != "all" and row.template_id != template_id:
+                continue
+            if status != "all" and row.status != status:
+                continue
+            rows.append(row)
+        total = len(rows)
+        paged = _paginate(rows, page, page_size)
+        return StrategyOptimizeTaskListResponse(items=paged, total=total, page=page, page_size=page_size)
+
+    def get_optimize_task_detail(self, task_id: str) -> StrategyOptimizeTaskDetailResponse | None:
+        task = self._get_optimize_task(task_id)
+        if not task:
+            return None
+        return StrategyOptimizeTaskDetailResponse(
+            task=task,
+            top_strategies=self._optimize_results.get(task_id, []),
+            top_bonds=self._optimize_top_bonds.get(task_id, []),
+        )
+
+    def _run_optimize_task(
+        self,
+        task_id: str,
+        top_n: int,
+        current_top_n: int,
+        start_date: date | None,
+        end_date: date | None,
+    ) -> None:
+        task = self._get_optimize_task(task_id)
+        if not task:
+            return
+        template = self._find_template(task.template_id)
+        if not template:
+            self._update_optimize_task(task_id, status="failed", eta="--", message="template not found")
+            return
+
+        module = self._adapter._load_module()
+        dataset = self._adapter.load_market_data()
+
+        self._update_optimize_task(
+            task_id,
+            status="running",
+            progress=1,
+            started_at=_now_readable(),
+            eta="loading",
+            message="正在加载历史快照并初始化参数空间",
+        )
+
+        ranking_rows: list[StrategyOptimizeResultRow] = []
+        total = max(1, task.total_combinations)
+        evaluated = 0
+        start_at = datetime.now()
+
+        try:
+            for combo_id, setting in self._iter_template_settings(
+                template_id=task.template_id,
+                limit=task.total_combinations,
+            ):
+                evaluated += 1
+                row = self._evaluate_combo(
+                    module=module,
+                    dataset=dataset,
+                    combo_id=combo_id,
+                    windows=task.windows,
+                    start_date=start_date,
+                    end_date=end_date,
+                    setting=setting,
+                )
+                ranking_rows.append(row)
+                ranking_rows.sort(
+                    key=lambda item: (item.robust_score, item.cagr, -item.mdd),
+                    reverse=True,
+                )
+                ranking_rows = ranking_rows[:top_n]
+
+                if (
+                    evaluated == 1
+                    or evaluated == total
+                    or evaluated % max(1, total // 100) == 0
+                    or evaluated % 500 == 0
+                ):
+                    elapsed_seconds = max(1.0, (datetime.now() - start_at).total_seconds())
+                    remain = max(0, total - evaluated)
+                    per_cost = elapsed_seconds / evaluated
+                    eta_minutes = int((remain * per_cost) / 60)
+                    self._update_optimize_task(
+                        task_id,
+                        evaluated_combinations=evaluated,
+                        progress=max(1, min(99, int(evaluated / total * 100))),
+                        eta=f"{eta_minutes}m" if remain else "done",
+                        message=f"已评估 {evaluated}/{total}",
+                    )
+
+            ranked = [
+                row.model_copy(update={"rank": idx + 1})
+                for idx, row in enumerate(
+                    sorted(ranking_rows, key=lambda item: (item.robust_score, item.cagr, -item.mdd), reverse=True)
+                )
+            ]
+            best_setting = ranked[0].params if ranked else {}
+            self._optimize_results[task_id] = ranked
+            top_bonds: list[StrategyTopBondRow] = []
+            market_warning = ""
+            if best_setting:
+                try:
+                    top_bonds = self._score_current_market(best_setting, limit=current_top_n)
+                except Exception as exc:
+                    market_warning = f"；实时Top20计算失败: {str(exc)[:80]}"
+            self._optimize_top_bonds[task_id] = top_bonds
+            self._update_optimize_task(
+                task_id,
+                status="finished",
+                progress=100,
+                evaluated_combinations=evaluated,
+                eta="done",
+                finished_at=_now_readable(),
+                message=f"优化完成，最佳策略 {ranked[0].combo_id if ranked else '--'}{market_warning}",
+            )
+        except Exception as exc:
+            self._update_optimize_task(
+                task_id,
+                status="failed",
+                progress=max(1, min(99, int(evaluated / total * 100))) if evaluated > 0 else 0,
+                evaluated_combinations=evaluated,
+                eta="--",
+                finished_at=_now_readable(),
+                message=f"error: {str(exc)[:160]}",
+            )
+
+    # ---------- backtest ----------
     def list_jobs(
         self,
         keyword: str = "",
@@ -187,10 +836,14 @@ class CbQuantService:
 
         with self._lock:
             created: list[BacktestJobRow] = []
+            setting = self._resolve_setting_for_combo(
+                combo_id=request.combo_id,
+                template_name=template_name,
+            )
             for window_name in windows:
                 self._seq += 1
                 seq = self._seq
-                job = BacktestJobRow(
+                row = BacktestJobRow(
                     job_id=f"BT-{_now_yyyymmdd()}-{seq:03d}",
                     strategy_id=f"STR-{seq:03d}",
                     combo_id=request.combo_id,
@@ -203,14 +856,21 @@ class CbQuantService:
                     eta="--",
                     worker=f"wk-0{(seq % 5) + 1}",
                 )
-                created.append(job)
+                created.append(row)
+                self._job_context[row.job_id] = {
+                    "window_name": window_name,
+                    "start_date": request.start_date,
+                    "end_date": request.end_date,
+                    "setting": setting,
+                }
 
             self._jobs = [*created, *self._jobs]
 
-        message = (
-            f"已入队 {len(created)} 条回测任务（每个窗口各 1 条）："
-            f"combo={request.combo_id}，rulePack={rule_pack_id}"
-        )
+        for row in created:
+            self._executor.submit(self._run_job, row.job_id)
+
+        window_text = "、".join([self._window_label(name) for name in windows])
+        message = f"已入队 {len(created)} 个窗口任务（{window_text}）：{request.combo_id} × {rule_pack_id}"
 
         return BacktestCreateJobsResponse(
             batch_id=f"BATCH-{_now_yyyymmdd()}-{self._seq:03d}",
@@ -223,11 +883,789 @@ class CbQuantService:
             message=message,
         )
 
+    def _run_job(self, job_id: str) -> None:
+        context = self._job_context.get(job_id)
+        if not context:
+            self._update_job(job_id, status="failed", eta="missing context")
+            return
+
+        window_name = str(context.get("window_name", "full"))
+        start_date = context.get("start_date")
+        end_date = context.get("end_date")
+        setting = dict(context.get("setting", self._adapter.default_setting()))
+
+        ticker_stop = Event()
+        ticker = Thread(
+            target=self._progress_ticker,
+            args=(job_id, ticker_stop),
+            daemon=True,
+        )
+
+        self._update_job(job_id, status="running", progress=3, eta="loading data")
+        ticker.start()
+
+        try:
+            stats = self._adapter.run_backtest(
+                setting=setting,
+                window_name=window_name,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            metrics = self._derive_leaderboard_metrics(stats=stats, window_name=window_name)
+            job = self._get_job(job_id)
+            if not job:
+                return
+            row = BacktestLeaderboardRow(
+                rank=0,
+                strategy_id=job.strategy_id,
+                combo_id=job.combo_id,
+                rule_pack_id=job.rule_pack_id,
+                template=job.template,
+                cagr=metrics["cagr"],
+                mdd=metrics["mdd"],
+                calmar=metrics["calmar"],
+                win_rate=metrics["win_rate"],
+                turnover=metrics["turnover"],
+                recent_1y=metrics["recent_1y"],
+                robust_score=metrics["robust_score"],
+                window=window_name,
+            )
+            self._upsert_leaderboard_row(row)
+            done_eta = "done"
+            if bool(stats.get("fallback_used")):
+                done_eta = "done (auto-range)"
+            self._update_job(job_id, status="finished", progress=100, eta=done_eta)
+            self._refresh_candidate_status(job.combo_id)
+            self._refresh_compare_rows()
+        except Exception as exc:
+            reason = str(exc).splitlines()[0][:42] if str(exc) else "error"
+            self._update_job(job_id, status="failed", eta=f"error: {reason}")
+            job = self._get_job(job_id)
+            if job:
+                self._refresh_candidate_status(job.combo_id)
+        finally:
+            ticker_stop.set()
+            with self._lock:
+                self._job_context.pop(job_id, None)
+
+    def _progress_ticker(self, job_id: str, stop: Event) -> None:
+        while not stop.wait(timeout=2.0):
+            job = self._get_job(job_id)
+            if not job or job.status != "running":
+                return
+            next_progress = min(90, max(5, job.progress + 7))
+            eta_minutes = max(1, int((100 - next_progress) / 7) * 2)
+            self._update_job(job_id, progress=next_progress, eta=f"{eta_minutes}m")
+
+    def _get_job(self, job_id: str) -> BacktestJobRow | None:
+        with self._lock:
+            for row in self._jobs:
+                if row.job_id == job_id:
+                    return row
+        return None
+
+    def _update_job(self, job_id: str, **updates: Any) -> BacktestJobRow | None:
+        with self._lock:
+            for index, row in enumerate(self._jobs):
+                if row.job_id != job_id:
+                    continue
+                merged = row.model_copy(update=updates)
+                self._jobs[index] = merged
+                return merged
+        return None
+
+    def _get_optimize_task(self, task_id: str) -> StrategyOptimizeTaskRow | None:
+        with self._lock:
+            for row in self._optimize_tasks:
+                if row.task_id == task_id:
+                    return row
+        return None
+
+    def _update_optimize_task(self, task_id: str, **updates: Any) -> StrategyOptimizeTaskRow | None:
+        with self._lock:
+            for index, row in enumerate(self._optimize_tasks):
+                if row.task_id != task_id:
+                    continue
+                merged = row.model_copy(update=updates)
+                self._optimize_tasks[index] = merged
+                return merged
+        return None
+
+    def _evaluate_combo(
+        self,
+        *,
+        module: Any,
+        dataset: list[tuple[str, Any]],
+        combo_id: str,
+        windows: list[WindowName],
+        start_date: date | None,
+        end_date: date | None,
+        setting: dict[str, Any],
+    ) -> StrategyOptimizeResultRow:
+        head_count = max(1, int(round(self._to_float(setting.get("head_count"), 10.0))))
+        max_hold_num = max(1, int(round(self._to_float(setting.get("max_hold_num"), 12.0))))
+        until_win = bool(setting.get("until_win", False))
+        cfg = module.build_strategy_config(setting)
+
+        all_metrics: list[dict[str, float]] = []
+        all_returns: list[float] = []
+        for window_name in windows:
+            sliced = self._adapter._slice_dataset(
+                dataset=dataset,
+                window_name=window_name,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            if not sliced:
+                continue
+            stats = module.run_backtest(
+                dataset=sliced,
+                cfg=cfg,
+                head_count=head_count,
+                max_hold_num=max_hold_num,
+                until_win=until_win,
+            )
+            stats["sample_days"] = len(sliced)
+            stats["rebalanced_days"] = max(0, len(sliced) - 1)
+            metrics = self._derive_leaderboard_metrics(stats=stats, window_name=window_name)
+            all_metrics.append(metrics)
+            all_returns.append(self._to_float(stats.get("total_return_pct"), 0.0))
+
+        if not all_metrics:
+            for window_name in windows:
+                sliced = self._adapter._slice_dataset(
+                    dataset=dataset,
+                    window_name=window_name,
+                    start_date=None,
+                    end_date=None,
+                )
+                if not sliced:
+                    continue
+                stats = module.run_backtest(
+                    dataset=sliced,
+                    cfg=cfg,
+                    head_count=head_count,
+                    max_hold_num=max_hold_num,
+                    until_win=until_win,
+                )
+                stats["sample_days"] = len(sliced)
+                stats["rebalanced_days"] = max(0, len(sliced) - 1)
+                metrics = self._derive_leaderboard_metrics(stats=stats, window_name=window_name)
+                all_metrics.append(metrics)
+                all_returns.append(self._to_float(stats.get("total_return_pct"), 0.0))
+
+        if not all_metrics:
+            raise RuntimeError("No market snapshots available for selected window")
+
+        cagr = sum(item["cagr"] for item in all_metrics) / len(all_metrics)
+        mdd = max(item["mdd"] for item in all_metrics)
+        calmar = cagr / mdd if mdd > 0 else cagr
+        win_rate = sum(item["win_rate"] for item in all_metrics) / len(all_metrics)
+        turnover = sum(item["turnover"] for item in all_metrics) / len(all_metrics)
+        recent_1y = next((item["recent_1y"] for item, w in zip(all_metrics, windows) if w == "1y"), cagr)
+        robust_score = sum(item["robust_score"] for item in all_metrics) / len(all_metrics)
+        total_return_pct = sum(all_returns) / len(all_returns)
+
+        return StrategyOptimizeResultRow(
+            rank=0,
+            combo_id=combo_id,
+            robust_score=round(robust_score, 4),
+            cagr=round(cagr, 6),
+            mdd=round(mdd, 6),
+            calmar=round(calmar, 6),
+            win_rate=round(win_rate, 4),
+            turnover=round(turnover, 6),
+            recent_1y=round(recent_1y, 6),
+            total_return_pct=round(total_return_pct, 4),
+            params=self._serialize_setting(setting),
+        )
+
+    def _iter_template_settings(self, *, template_id: str, limit: int) -> Iterable[tuple[str, dict[str, Any]]]:
+        cfg = self._template_configs.get(template_id)
+        if not cfg:
+            return
+
+        enabled_rows = [row for row in cfg.parameter_space if row.enabled and row.factor_key in cfg.factor_keys]
+        if not enabled_rows:
+            return [(f"CMB-{idx:06d}", self._adapter.default_setting()) for idx in range(1, limit + 1)]
+
+        factor_keys = [row.factor_key for row in enabled_rows]
+        all_choices = [self._choices_for_param_row(row) for row in enabled_rows]
+
+        yielded = 0
+        for combo_values in islice(product(*all_choices), limit):
+            yielded += 1
+            factor_values = dict(zip(factor_keys, combo_values))
+            combo_id = f"CMB-{yielded:06d}"
+            yield combo_id, self._build_setting_from_factor_values(factor_values)
+
+    def _choices_for_param_row(self, row: StrategyParamSpaceRow) -> list[Any]:
+        if row.value_type == "enum":
+            values = [value for value in row.enum_values if value.strip()]
+            return values or ["default"]
+        if row.min_value is None or row.max_value is None or row.step is None or row.step <= 0:
+            return [0.0]
+        count = self._count_choices(row)
+        precision = 0
+        text = str(row.step)
+        if "." in text:
+            precision = len(text.split(".", 1)[1].rstrip("0"))
+        values: list[float] = []
+        for idx in range(count):
+            values.append(round(row.min_value + row.step * idx, min(6, max(0, precision))))
+        return values
+
+    def _build_setting_from_factor_values(self, values: dict[str, Any]) -> dict[str, Any]:
+        setting = self._adapter.default_setting()
+        direct_map: dict[str, str] = {
+            "price_bemchmark": "price_bemchmark",
+            "premium_bemchmark": "premium_bemchmark",
+            "stock_ratio": "stock_ratio",
+            "premium_ratio": "premium_ratio",
+            "stock_stdevry_bemchmark": "stock_stdevry_bemchmark",
+            "max_price": "max_price",
+            "head_count": "head_count",
+            "remain_ratio": "remain_ratio",
+            "max_hold_num": "max_hold_num",
+        }
+        for factor_key, setting_key in direct_map.items():
+            if factor_key in values:
+                setting[setting_key] = values[factor_key]
+
+        if "premium_max" in values and "premium_bemchmark" not in values:
+            setting["premium_bemchmark"] = self._to_float(values["premium_max"], 25.0)
+        if "conv_prem" in values and "premium_bemchmark" not in values:
+            setting["premium_bemchmark"] = self._to_float(values["conv_prem"], 25.0)
+        if "price_max" in values:
+            setting["max_price"] = self._to_float(values["price_max"], setting.get("max_price", 130.0))
+        if "remain_size" in values and "remain_ratio" not in values:
+            remain_size = self._to_float(values["remain_size"], 12.0)
+            setting["remain_ratio"] = max(0.05, min(0.50, remain_size / 100.0))
+        if "turnover" in values and "stock_stdevry_bemchmark" not in values:
+            turnover = self._to_float(values["turnover"], 2.0)
+            setting["stock_stdevry_bemchmark"] = max(10.0, min(60.0, turnover * 4.0 + 12.0))
+        if "dblow" in values and "price_bemchmark" not in values:
+            dblow = self._to_float(values["dblow"], 140.0)
+            premium = self._to_float(setting.get("premium_bemchmark"), 25.0)
+            setting["price_bemchmark"] = max(90.0, min(180.0, dblow - premium))
+        if "rating" in values:
+            rating = str(values["rating"]).upper()
+            if rating == "AAA":
+                setting["premium_ratio"] = 0.2
+                setting["max_price"] = min(130.0, self._to_float(setting.get("max_price"), 130.0))
+            elif rating == "AA+":
+                setting["premium_ratio"] = 0.25
+            else:
+                setting["premium_ratio"] = 0.3
+
+        setting["head_count"] = max(1, int(round(self._to_float(setting.get("head_count"), 10.0))))
+        setting["max_hold_num"] = max(1, int(round(self._to_float(setting.get("max_hold_num"), 12.0))))
+        setting["stock_ratio"] = max(0.0, min(1.0, self._to_float(setting.get("stock_ratio"), 0.3)))
+        setting["premium_ratio"] = max(0.0, min(1.0, self._to_float(setting.get("premium_ratio"), 0.3)))
+        setting["until_win"] = bool(setting.get("until_win", False))
+        return setting
+
+    def _score_current_market(self, setting: dict[str, Any], limit: int = 20) -> list[StrategyTopBondRow]:
+        market = self._market_service.list_bonds(min_volume_wan=0)
+        rows = []
+        price_b = max(1.0, self._to_float(setting.get("price_bemchmark"), 115.0))
+        premium_b = max(1.0, self._to_float(setting.get("premium_bemchmark"), 25.0))
+        stock_ratio = max(0.0, min(1.0, self._to_float(setting.get("stock_ratio"), 0.3)))
+        bond_ratio = max(0.0, min(1.0, 1.0 - stock_ratio))
+        premium_ratio = max(0.0, min(1.0, self._to_float(setting.get("premium_ratio"), 0.3)))
+        remain_ratio = max(0.0, min(1.0, self._to_float(setting.get("remain_ratio"), 0.1)))
+        stdev_b = max(5.0, self._to_float(setting.get("stock_stdevry_bemchmark"), 30.0))
+        max_price = self._to_float(setting.get("max_price"), 130.0)
+
+        for item in market.items:
+            if item.price > max_price:
+                continue
+            if item.premium_rt > 200:
+                continue
+
+            premium_score = 1 - (item.premium_rt - premium_b) / premium_b
+            price_score = 1 - (item.price - price_b) / price_b
+
+            remain_amount = self._to_float(item.remain_scale_yi, 10.0)
+            if remain_amount < 3:
+                remain_score = 1 - (remain_amount - 3) / 3
+            elif remain_amount > 30:
+                remain_score = max(0.6, 1 - (remain_amount - 30) / 30)
+            else:
+                remain_score = 1.0
+
+            pb = self._to_float(item.stock_pb, 1.5)
+            pb_score = min(1.0, max(0.6, 1 - (1.5 - pb) / 1.5))
+
+            stock_vol = self._to_float(item.stock_volatility, stdev_b)
+            stdev_score = min(1.5, max(0.6, 1 - (stdev_b - stock_vol) / stdev_b))
+
+            score = round(
+                bond_ratio * price_score
+                + stock_ratio * (premium_score * premium_ratio + stdev_score * 0.2 + remain_score * remain_ratio + pb_score * 0.1),
+                4,
+            )
+            if score <= 0:
+                continue
+            rows.append(
+                StrategyTopBondRow(
+                    rank=0,
+                    bond_id=item.bond_id,
+                    bond_name=item.bond_name,
+                    price=item.price,
+                    premium_rt=item.premium_rt,
+                    dblow=item.dblow,
+                    amount_wan=item.amount_wan,
+                    score=score,
+                    update_time=item.update_time,
+                )
+            )
+        rows.sort(key=lambda item: (item.score, item.amount_wan or 0.0), reverse=True)
+        ranked = [row.model_copy(update={"rank": idx + 1}) for idx, row in enumerate(rows[: max(1, limit)])]
+        return ranked
+
+    @staticmethod
+    def _serialize_setting(setting: dict[str, Any]) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        for key, value in setting.items():
+            if isinstance(value, (int, float, str, bool)) or value is None:
+                payload[key] = value
+        return payload
+
+    def _resolve_setting_for_combo(self, *, combo_id: str, template_name: str) -> dict[str, Any]:
+        setting = self._candidate_settings.get(combo_id)
+        if setting:
+            return dict(setting)
+
+        template_id = ""
+        candidate = self._find_candidate(combo_id)
+        if candidate and candidate.template_id:
+            template_id = candidate.template_id
+        elif template_name:
+            for row in self._templates:
+                if row.name == template_name:
+                    template_id = row.id
+                    break
+
+        if not template_id:
+            resolved = self._adapter.default_setting()
+            self._candidate_settings[combo_id] = dict(resolved)
+            return resolved
+        resolved = self._build_candidate_setting(template_id=template_id, combo_id=combo_id)
+        self._candidate_settings[combo_id] = dict(resolved)
+        return resolved
+
+    def _build_candidate_setting(self, *, template_id: str, combo_id: str) -> dict[str, Any]:
+        cfg = self._template_configs.get(template_id) or self._default_config(
+            template_id=template_id,
+            updated_at=_now_readable(),
+        )
+
+        row_map: dict[str, StrategyParamSpaceRow] = {
+            row.factor_key: row for row in cfg.parameter_space if row.enabled
+        }
+        values: dict[str, Any] = {}
+        for factor_key, row in row_map.items():
+            values[factor_key] = self._pick_param_value(combo_id=combo_id, row=row)
+        return self._build_setting_from_factor_values(values)
+
+    def _pick_param_value(self, *, combo_id: str, row: StrategyParamSpaceRow) -> Any:
+        seed = self._hash(f"{combo_id}|{row.factor_key}")
+        if row.value_type == "enum":
+            values = [value for value in row.enum_values if value.strip()]
+            if not values:
+                return "default"
+            return values[seed % len(values)]
+
+        if row.min_value is None or row.max_value is None or row.step is None or row.step <= 0:
+            return row.min_value if row.min_value is not None else 0.0
+
+        count = self._count_choices(row)
+        idx = seed % count
+        raw = row.min_value + row.step * idx
+        precision = 0
+        text = f"{row.step}"
+        if "." in text:
+            precision = len(text.split(".", 1)[1].rstrip("0"))
+        return round(raw, min(6, max(0, precision)))
+
+    @staticmethod
+    def _to_float(value: Any, default: float = 0.0) -> float:
+        try:
+            if value is None:
+                return default
+            return float(value)
+        except Exception:
+            return default
+
+    def _derive_leaderboard_metrics(self, *, stats: dict[str, Any], window_name: WindowName) -> dict[str, float]:
+        total_return_pct = self._to_float(stats.get("total_return_pct"), 0.0)
+        max_drawdown_pct = self._to_float(stats.get("max_drawdown_pct"), 0.0)
+        win_rate_pct = self._to_float(stats.get("win_rate_pct"), 0.0)
+        trade_count = self._to_float(stats.get("trade_count"), 0.0)
+        sample_days = max(1.0, self._to_float(stats.get("sample_days"), 1.0))
+        rebalanced_days = max(1.0, self._to_float(stats.get("rebalanced_days"), sample_days))
+
+        total_return = total_return_pct / 100.0
+        mdd = max(0.0, max_drawdown_pct / 100.0)
+        years = max(0.1, sample_days / 244.0)
+        cagr = (1 + total_return) ** (1 / years) - 1 if total_return > -0.999 else -0.999
+        calmar = cagr / mdd if mdd > 0 else max(0.0, cagr)
+        turnover = min(2.0, max(0.0, trade_count / rebalanced_days))
+        recent_1y = total_return if window_name == "1y" else cagr
+        robust_score = self._calculate_robust_score(
+            cagr=cagr,
+            mdd=mdd,
+            calmar=calmar,
+            win_rate_pct=win_rate_pct,
+            turnover=turnover,
+            window_name=window_name,
+        )
+        return {
+            "cagr": round(cagr, 6),
+            "mdd": round(mdd, 6),
+            "calmar": round(calmar, 6),
+            "win_rate": round(win_rate_pct, 4),
+            "turnover": round(turnover, 6),
+            "recent_1y": round(recent_1y, 6),
+            "robust_score": robust_score,
+        }
+
+    @staticmethod
+    def _calculate_robust_score(
+        *,
+        cagr: float,
+        mdd: float,
+        calmar: float,
+        win_rate_pct: float,
+        turnover: float,
+        window_name: WindowName,
+    ) -> float:
+        score = 55.0
+        score += max(-35.0, min(35.0, cagr * 120.0))
+        score += max(-20.0, min(22.0, (0.25 - mdd) * 80.0))
+        score += max(-8.0, min(18.0, calmar * 6.0))
+        score += max(-10.0, min(12.0, (win_rate_pct - 50.0) * 0.6))
+        score += max(-8.0, min(8.0, (0.30 - turnover) * 20.0))
+        if window_name == "full":
+            score += 2.0
+        return round(max(0.0, min(100.0, score)), 1)
+
+    def _upsert_leaderboard_row(self, row: BacktestLeaderboardRow) -> None:
+        with self._lock:
+            replaced = False
+            for index, item in enumerate(self._leaderboard):
+                same_key = (
+                    item.combo_id == row.combo_id
+                    and item.rule_pack_id == row.rule_pack_id
+                    and item.window == row.window
+                )
+                if not same_key:
+                    continue
+                self._leaderboard[index] = row
+                replaced = True
+                break
+            if not replaced:
+                self._leaderboard.append(row)
+
+            ordered = sorted(
+                self._leaderboard,
+                key=lambda item: (item.robust_score, item.cagr, -item.mdd),
+                reverse=True,
+            )
+            self._leaderboard = [
+                item.model_copy(update={"rank": idx + 1})
+                for idx, item in enumerate(ordered)
+            ]
+
+    def _refresh_compare_rows(self) -> None:
+        with self._lock:
+            top = self._leaderboard[:3]
+            baseline = {
+                "cagr": 0.214,
+                "recent_1y": 0.112,
+                "mdd": 0.286,
+                "calmar": 0.750,
+                "turnover": 0.440,
+                "win_rate": 49.0,
+            }
+            c1 = top[0] if len(top) > 0 else None
+            c2 = top[1] if len(top) > 1 else None
+            c3 = top[2] if len(top) > 2 else None
+            self._compare = [
+                BacktestCompareRow(
+                    metric="CAGR",
+                    category="return",
+                    baseline=baseline["cagr"],
+                    candidate_a=c1.cagr if c1 else 0.0,
+                    candidate_b=c2.cagr if c2 else 0.0,
+                    candidate_c=c3.cagr if c3 else 0.0,
+                ),
+                BacktestCompareRow(
+                    metric="近1年收益",
+                    category="return",
+                    baseline=baseline["recent_1y"],
+                    candidate_a=c1.recent_1y if c1 else 0.0,
+                    candidate_b=c2.recent_1y if c2 else 0.0,
+                    candidate_c=c3.recent_1y if c3 else 0.0,
+                ),
+                BacktestCompareRow(
+                    metric="最大回撤",
+                    category="risk",
+                    baseline=baseline["mdd"],
+                    candidate_a=c1.mdd if c1 else 0.0,
+                    candidate_b=c2.mdd if c2 else 0.0,
+                    candidate_c=c3.mdd if c3 else 0.0,
+                ),
+                BacktestCompareRow(
+                    metric="Calmar",
+                    category="risk",
+                    baseline=baseline["calmar"],
+                    candidate_a=c1.calmar if c1 else 0.0,
+                    candidate_b=c2.calmar if c2 else 0.0,
+                    candidate_c=c3.calmar if c3 else 0.0,
+                ),
+                BacktestCompareRow(
+                    metric="年化换手",
+                    category="trade",
+                    baseline=baseline["turnover"],
+                    candidate_a=c1.turnover if c1 else 0.0,
+                    candidate_b=c2.turnover if c2 else 0.0,
+                    candidate_c=c3.turnover if c3 else 0.0,
+                ),
+                BacktestCompareRow(
+                    metric="胜率",
+                    category="trade",
+                    baseline=baseline["win_rate"] / 100.0,
+                    candidate_a=(c1.win_rate / 100.0) if c1 else 0.0,
+                    candidate_b=(c2.win_rate / 100.0) if c2 else 0.0,
+                    candidate_c=(c3.win_rate / 100.0) if c3 else 0.0,
+                ),
+            ]
+
+    def _refresh_candidate_status(self, combo_id: str) -> None:
+        with self._lock:
+            combo_jobs = [row for row in self._jobs if row.combo_id == combo_id]
+            if not combo_jobs:
+                return
+
+            total = len(combo_jobs)
+            finished = sum(1 for row in combo_jobs if row.status == "finished")
+            failed = sum(1 for row in combo_jobs if row.status == "failed")
+            running = sum(1 for row in combo_jobs if row.status == "running")
+            queued = sum(1 for row in combo_jobs if row.status == "queued")
+
+            done = finished + failed
+            has_running = running > 0 or queued > 0
+            combo_rows = [
+                row
+                for row in self._leaderboard
+                if row.combo_id == combo_id
+            ]
+            pass_count = sum(1 for row in combo_rows if row.cagr >= 0.20 and row.mdd <= 0.30)
+            pass_rate = (pass_count / max(1, len(combo_rows))) if combo_rows else None
+            if has_running:
+                status = "running_backtest"
+            elif failed > 0 and finished == 0:
+                status = "backtest_failed"
+            elif done >= total and finished > 0:
+                status = "backtested"
+            else:
+                status = "pending_backtest"
+
+            self._candidates = [
+                row.model_copy(
+                    update={
+                        "status": status if row.combo_id == combo_id else row.status,
+                        "pass_rate": pass_rate if row.combo_id == combo_id else row.pass_rate,
+                    }
+                )
+                for row in self._candidates
+            ]
+
+    def _rebuild_candidate_settings(self) -> None:
+        settings: dict[str, dict[str, Any]] = {}
+        for candidate in self._candidates:
+            if candidate.combo_id in settings:
+                continue
+            template_id = candidate.template_id
+            if not template_id:
+                for row in self._templates:
+                    if row.name == candidate.template:
+                        template_id = row.id
+                        break
+            if not template_id:
+                settings[candidate.combo_id] = self._adapter.default_setting()
+                continue
+            settings[candidate.combo_id] = self._build_candidate_setting(
+                template_id=template_id,
+                combo_id=candidate.combo_id,
+            )
+        self._candidate_settings = settings
+
+    # ---------- helpers ----------
     def _find_candidate(self, combo_id: str) -> CandidateRow | None:
         for row in self._candidates:
             if row.combo_id == combo_id:
                 return row
         return None
+
+    def _find_template(self, template_id: str) -> StrategyTemplateRow | None:
+        for row in self._templates:
+            if row.id == template_id:
+                return row
+        return None
+
+    def _default_config(self, template_id: str, updated_at: str) -> StrategyTemplateConfigResponse:
+        factor_keys = ["dblow", "conv_prem", "turnover", "remain_size", "rating"]
+        parameter_space = self._normalize_parameter_space(
+            factor_keys=factor_keys,
+            parameter_space=[],
+        )
+        return StrategyTemplateConfigResponse(
+            template_id=template_id,
+            factor_keys=factor_keys,
+            expression_draft="",
+            parameter_space=parameter_space,
+            combo_size=self._calculate_combo_size(factor_keys=factor_keys, parameter_space=parameter_space),
+            updated_at=updated_at,
+        )
+
+    def _sync_template_metrics(
+        self,
+        templates: list[StrategyTemplateRow],
+        configs: dict[str, StrategyTemplateConfigResponse],
+    ) -> list[StrategyTemplateRow]:
+        synced: list[StrategyTemplateRow] = []
+        for template in templates:
+            config = configs.get(template.id)
+            if not config:
+                synced.append(template)
+                continue
+            synced.append(
+                StrategyTemplateRow(
+                    id=template.id,
+                    name=template.name,
+                    version=template.version,
+                    status=template.status,
+                    factor_count=len(config.factor_keys),
+                    rebalance=template.rebalance,
+                    risk_preset=template.risk_preset,
+                    combo_size=config.combo_size,
+                    owner=template.owner,
+                    updated_at=template.updated_at,
+                )
+            )
+        return synced
+
+    def _normalize_parameter_space(
+        self,
+        *,
+        factor_keys: list[str],
+        parameter_space: list[StrategyParamSpaceRow],
+    ) -> list[StrategyParamSpaceRow]:
+        keyed: dict[str, StrategyParamSpaceRow] = {row.factor_key: row for row in parameter_space}
+        normalized: list[StrategyParamSpaceRow] = []
+
+        for factor_key in factor_keys:
+            row = keyed.get(factor_key) or self._default_param_space_row(factor_key)
+            if row.value_type == "number":
+                min_value = row.min_value
+                max_value = row.max_value
+                step = row.step
+                if min_value is None or max_value is None or step is None or step <= 0 or max_value < min_value:
+                    fallback = self._default_param_space_row(factor_key)
+                    min_value = fallback.min_value
+                    max_value = fallback.max_value
+                    step = fallback.step
+                normalized.append(
+                    StrategyParamSpaceRow(
+                        factor_key=factor_key,
+                        value_type="number",
+                        enabled=row.enabled,
+                        min_value=min_value,
+                        max_value=max_value,
+                        step=step,
+                        enum_values=[],
+                    )
+                )
+            else:
+                values = [value.strip() for value in row.enum_values if value.strip()]
+                if not values:
+                    fallback = self._default_param_space_row(factor_key)
+                    values = fallback.enum_values or ["default"]
+                normalized.append(
+                    StrategyParamSpaceRow(
+                        factor_key=factor_key,
+                        value_type="enum",
+                        enabled=row.enabled,
+                        min_value=None,
+                        max_value=None,
+                        step=None,
+                        enum_values=values,
+                    )
+                )
+        return normalized
+
+    def _default_param_space_row(self, factor_key: str) -> StrategyParamSpaceRow:
+        numeric_defaults: dict[str, tuple[float, float, float]] = {
+            "dblow": (100, 180, 5),
+            "conv_prem": (0, 30, 1),
+            "turnover": (0.2, 8.0, 0.2),
+            "remain_size": (1, 80, 1),
+            "price_max": (105, 150, 1),
+            "premium_max": (5, 35, 0.5),
+        }
+        enum_defaults: dict[str, list[str]] = {
+            "rating": ["AA", "AA+", "AAA"],
+        }
+        if factor_key in enum_defaults:
+            return StrategyParamSpaceRow(
+                factor_key=factor_key,
+                value_type="enum",
+                enabled=True,
+                enum_values=enum_defaults[factor_key],
+            )
+        min_value, max_value, step = numeric_defaults.get(factor_key, (0, 10, 1))
+        return StrategyParamSpaceRow(
+            factor_key=factor_key,
+            value_type="number",
+            enabled=True,
+            min_value=min_value,
+            max_value=max_value,
+            step=step,
+        )
+
+    def _calculate_combo_size(
+        self,
+        *,
+        factor_keys: list[str],
+        parameter_space: list[StrategyParamSpaceRow],
+    ) -> int:
+        if not factor_keys:
+            return 0
+        row_map: dict[str, StrategyParamSpaceRow] = {row.factor_key: row for row in parameter_space}
+        combo_size = 1
+        for factor_key in factor_keys:
+            row = row_map.get(factor_key) or self._default_param_space_row(factor_key)
+            if not row.enabled:
+                continue
+            combo_size *= self._count_choices(row)
+        return max(combo_size, 1)
+
+    @staticmethod
+    def _count_choices(row: StrategyParamSpaceRow) -> int:
+        if row.value_type == "enum":
+            return max(1, len([value for value in row.enum_values if value.strip()]))
+
+        if row.min_value is None or row.max_value is None or row.step is None:
+            return 1
+        if row.step <= 0 or row.max_value < row.min_value:
+            return 1
+
+        span = row.max_value - row.min_value
+        count = int((span + 1e-12) // row.step) + 1
+        return max(1, count)
 
     def _build_rule_pack_id(self, request: BacktestCreateJobsRequest) -> str:
         mode_prefix = {
@@ -260,3 +1698,89 @@ class CbQuantService:
         if window_name == "3y":
             return "近3年"
         return "近1年"
+
+    @staticmethod
+    def _hash(value: str) -> int:
+        state = 0
+        for char in value:
+            state = (state * 131 + ord(char)) & 0xFFFFFFFF
+        return state
+
+    @staticmethod
+    def _make_random(seed: int):
+        state = seed & 0xFFFFFFFF
+
+        def _next() -> float:
+            nonlocal state
+            state = (1664525 * state + 1013904223) & 0xFFFFFFFF
+            return state / 0x100000000
+
+        return _next
+
+    def _load_templates_and_configs(
+        self,
+    ) -> tuple[list[StrategyTemplateRow], dict[str, StrategyTemplateConfigResponse]]:
+        if self._templates_file.exists():
+            try:
+                payload = json.loads(self._templates_file.read_text(encoding="utf-8"))
+                templates = [StrategyTemplateRow.model_validate(item) for item in payload.get("templates", [])]
+                configs = {
+                    template_id: StrategyTemplateConfigResponse.model_validate(config)
+                    for template_id, config in (payload.get("configs", {}) or {}).items()
+                }
+                if templates:
+                    return templates, configs
+            except Exception:
+                pass
+
+        now = _now_readable()
+        template = StrategyTemplateRow(
+            id="TPL-001",
+            name="双低稳健A",
+            version="v1.0.0",
+            status="active",
+            factor_count=5,
+            rebalance="weekly",
+            risk_preset="balanced",
+            combo_size=0,
+            owner="system",
+            updated_at=now,
+        )
+        config = self._default_config(template_id=template.id, updated_at=now)
+        template = template.model_copy(
+            update={"factor_count": len(config.factor_keys), "combo_size": config.combo_size}
+        )
+        self._templates_file.write_text(
+            json.dumps(
+                {
+                    "templates": [template.model_dump()],
+                    "configs": {template.id: config.model_dump()},
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return [template], {template.id: config}
+
+    def _save_templates_and_configs(self) -> None:
+        payload = {
+            "templates": [row.model_dump() for row in self._templates],
+            "configs": {key: value.model_dump() for key, value in self._template_configs.items()},
+        }
+        self._templates_file.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _derive_template_seq(templates: list[StrategyTemplateRow]) -> int:
+        max_seq = 0
+        for item in templates:
+            if not item.id.startswith("TPL-"):
+                continue
+            try:
+                max_seq = max(max_seq, int(item.id.split("-", 1)[1]))
+            except Exception:
+                continue
+        return max_seq

@@ -1,768 +1,582 @@
 "use client";
 
-import BacktestConfigPanel, {
-  BacktestQueuePayload,
-  EvalWindow,
-} from "@/components/cb-quant/BacktestConfigPanel";
+import {
+  createStrategyOptimizeTask,
+  getHistoryDataSummary,
+  getHistorySyncStatus,
+  getStrategyOptimizeTaskDetail,
+  listStrategyOptimizeTasks,
+  listStrategyTemplates,
+  triggerHistorySync,
+  type HistoryDataSummary,
+  type HistorySyncStatus,
+  type StrategyOptimizeTask,
+  type StrategyOptimizeTaskDetail,
+  type StrategyTemplate,
+  type WindowName,
+} from "@/components/cb-quant/api";
 import CbQuantPageShell from "@/components/cb-quant/CbQuantPageShell";
 import ScrollableDataTable from "@/components/cb-quant/ScrollableDataTable";
 import StatusTag from "@/components/cb-quant/StatusTag";
 import TablePaginationBar from "@/components/cb-quant/TablePaginationBar";
-import WorkbenchHeader from "@/components/cb-quant/WorkbenchHeader";
-import {
-  backtestCompareRows,
-  backtestJobs,
-  backtestLeaderboard,
-  strategyCandidates,
-  type BacktestJobRow,
-} from "@/components/cb-quant/mockData";
-import {
-  downloadCsv,
-  getPagedRows,
-  getTotalPages,
-} from "@/components/cb-quant/tableUtils";
+import { getTotalPages } from "@/components/cb-quant/tableUtils";
 import { TableCell, TableRow } from "@/components/ui/table";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import React, { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 
-const sectionTabs = [
-  {
-    key: "config",
-    title: "回测配置",
-    subtitle: "选择候选组合与规则来源，仅配置实验参数并入队",
-    icon: (
-      <svg
-        width="20"
-        height="20"
-        viewBox="0 0 20 20"
-        fill="none"
-        xmlns="http://www.w3.org/2000/svg"
-      >
-        <path
-          fillRule="evenodd"
-          clipRule="evenodd"
-          d="M4.83203 2.5835C3.58939 2.5835 2.58203 3.59085 2.58203 4.83349V7.25015C2.58203 8.49279 3.58939 9.50015 4.83203 9.50015H7.2487C8.49134 9.50015 9.4987 8.49279 9.4987 7.25015V4.8335C9.4987 3.59086 8.49134 2.5835 7.2487 2.5835H4.83203ZM4.08203 4.83349C4.08203 4.41928 4.41782 4.0835 4.83203 4.0835H7.2487C7.66291 4.0835 7.9987 4.41928 7.9987 4.8335V7.25015C7.9987 7.66436 7.66291 8.00015 7.2487 8.00015H4.83203C4.41782 8.00015 4.08203 7.66436 4.08203 7.25015V4.83349ZM10.4987 4.83349C10.4987 3.59085 11.5061 2.5835 12.7487 2.5835H15.1654C16.408 2.5835 17.4154 3.59086 17.4154 4.8335V7.25015C17.4154 8.49279 16.408 9.50015 15.1654 9.50015H12.7487C11.5061 9.50015 10.4987 8.49279 10.4987 7.25015V4.83349ZM12.7487 4.0835C12.3345 4.0835 11.9987 4.41928 11.9987 4.83349V7.25015C11.9987 7.66436 12.3345 8.00015 12.7487 8.00015H15.1654C15.5796 8.00015 15.9154 7.66436 15.9154 7.25015V4.8335C15.9154 4.41928 15.5796 4.0835 15.1654 4.0835H12.7487ZM4.83203 10.5002C3.58939 10.5002 2.58203 11.5075 2.58203 12.7502V15.1668C2.58203 16.4095 3.58939 17.4168 4.83203 17.4168H7.2487C8.49134 17.4168 9.4987 16.4095 9.4987 15.1668V12.7502C9.4987 11.5075 8.49134 10.5002 7.2487 10.5002H4.83203ZM4.08203 12.7502C4.08203 12.336 4.41782 12.0002 4.83203 12.0002H7.2487C7.66291 12.0002 7.9987 12.336 7.9987 12.7502V15.1668C7.9987 15.5811 7.66291 15.9168 7.2487 15.9168H4.83203C4.41782 15.9168 4.08203 15.5811 4.08203 15.1668V12.7502ZM12.7487 10.5002C11.5061 10.5002 10.4987 11.5075 10.4987 12.7502V15.1668C10.4987 16.4095 11.5061 17.4168 12.7487 17.4168H15.1654C16.408 17.4168 17.4154 16.4095 17.4154 15.1668V12.7502C17.4154 11.5075 16.408 10.5002 15.1654 10.5002H12.7487ZM11.9987 12.7502C11.9987 12.336 12.3345 12.0002 12.7487 12.0002H15.1654C15.5796 12.0002 15.9154 12.336 15.9154 12.7502V15.1668C15.9154 15.5811 15.5796 15.9168 15.1654 15.9168H12.7487C12.3345 15.9168 11.9987 15.5811 11.9987 15.1668V12.7502Z"
-          fill="currentColor"
-        />
-      </svg>
-    ),
-  },
-  {
-    key: "tasks",
-    title: "回测任务",
-    subtitle: "查看任务队列、结果榜单和策略横向对比",
-    icon: (
-      <svg
-        width="20"
-        height="20"
-        viewBox="0 0 20 20"
-        fill="none"
-        xmlns="http://www.w3.org/2000/svg"
-      >
-        <path
-          fillRule="evenodd"
-          clipRule="evenodd"
-          d="M10.7487 2.29248C10.7487 1.87827 10.4129 1.54248 9.9987 1.54248C9.58448 1.54248 9.2487 1.87827 9.2487 2.29248V2.83613C6.08132 3.20733 3.6237 5.9004 3.6237 9.16748V14.4591H3.33203C2.91782 14.4591 2.58203 14.7949 2.58203 15.2091C2.58203 15.6234 2.91782 15.9591 3.33203 15.9591H4.3737H15.6237H16.6654C17.0796 15.9591 17.4154 15.6234 17.4154 15.2091C17.4154 14.7949 17.0796 14.4591 16.6654 14.4591H16.3737V9.16748C16.3737 5.9004 13.9161 3.20733 10.7487 2.83613V2.29248ZM14.8737 14.4591V9.16748C14.8737 6.47509 12.6911 4.29248 9.9987 4.29248C7.30631 4.29248 5.1237 6.47509 5.1237 9.16748V14.4591H14.8737ZM7.9987 17.7085C7.9987 18.1228 8.33448 18.4585 8.7487 18.4585H11.2487C11.6629 18.4585 11.9987 18.1228 11.9987 17.7085C11.9987 17.2943 11.6629 16.9585 11.2487 16.9585H8.7487C8.33448 16.9585 7.9987 17.2943 7.9987 17.7085Z"
-          fill="currentColor"
-        />
-      </svg>
-    ),
-  },
-] as const;
+export const dynamic = "force-dynamic";
 
-const taskTabs = [
-  { key: "jobs", title: "任务队列" },
-  { key: "leaderboard", title: "结果榜单" },
-  { key: "compare", title: "策略对比" },
-] as const;
-
-const pageSizeOptions = [5, 10, 20];
-const workers = ["wk-01", "wk-02", "wk-03", "wk-04", "wk-05"];
-
-function getJobTone(status: "queued" | "running" | "finished" | "failed") {
+function statusTone(status: StrategyOptimizeTask["status"]) {
   if (status === "queued") return "yellow" as const;
   if (status === "running") return "blue" as const;
   if (status === "finished") return "green" as const;
   return "red" as const;
 }
 
-function getWindowTone(windowName: "full" | "3y" | "1y") {
-  if (windowName === "full") return "blue" as const;
-  if (windowName === "3y") return "green" as const;
-  return "yellow" as const;
-}
-
 function toPercent(value: number): string {
   return `${(value * 100).toFixed(2)}%`;
 }
 
-function mapEvalWindow(windowName: EvalWindow): string {
-  if (windowName === "full") return "2018-2025";
-  if (windowName === "3y") return "近3年";
-  return "近1年";
+function dateToInput(value: Date): string {
+  return value.toISOString().slice(0, 10);
 }
 
-function getNowTimeLabel(date: Date): string {
-  return date.toTimeString().slice(0, 8);
-}
-
-function getDateStamp(date: Date): string {
-  return date.toISOString().slice(0, 10).replace(/-/g, "");
-}
-
-export default function CbQuantBacktestEvaluationPage() {
-  const [jobs, setJobs] = useState<BacktestJobRow[]>(backtestJobs);
-  const [activeSection, setActiveSection] = useState<
-    (typeof sectionTabs)[number]["key"]
-  >("config");
-  const [activeTaskTab, setActiveTaskTab] = useState<
-    (typeof taskTabs)[number]["key"]
-  >("jobs");
-
-  const [search, setSearch] = useState<string>("");
-  const [showFilter, setShowFilter] = useState<boolean>(false);
-  const [jobStatus, setJobStatus] = useState<string>("all");
-  const [leaderboardWindow, setLeaderboardWindow] = useState<string>("all");
-  const [compareCategory, setCompareCategory] = useState<string>("all");
-  const [pageSize, setPageSize] = useState<number>(5);
-  const [jobPage, setJobPage] = useState<number>(1);
-  const [leaderboardPage, setLeaderboardPage] = useState<number>(1);
-  const [comparePage, setComparePage] = useState<number>(1);
-  const filterRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const onClickOutside = (event: MouseEvent) => {
-      if (filterRef.current && !filterRef.current.contains(event.target as Node)) {
-        setShowFilter(false);
-      }
-    };
-    document.addEventListener("click", onClickOutside);
-    return () => document.removeEventListener("click", onClickOutside);
-  }, []);
-
-  useEffect(() => {
-    setShowFilter(false);
-  }, [activeTaskTab, activeSection]);
-
-  const keyword = search.trim().toLowerCase();
-
-  const filteredJobs = useMemo(() => {
-    return jobs.filter((row) => {
-      const hitKeyword =
-        !keyword ||
-        row.jobId.toLowerCase().includes(keyword) ||
-        row.strategyId.toLowerCase().includes(keyword) ||
-        row.comboId.toLowerCase().includes(keyword) ||
-        row.rulePackId.toLowerCase().includes(keyword) ||
-        row.template.toLowerCase().includes(keyword) ||
-        row.worker.toLowerCase().includes(keyword);
-      const hitStatus = jobStatus === "all" || row.status === jobStatus;
-      return hitKeyword && hitStatus;
-    });
-  }, [jobs, keyword, jobStatus]);
-
-  const filteredLeaderboard = useMemo(() => {
-    return backtestLeaderboard.filter((row) => {
-      const hitKeyword =
-        !keyword ||
-        row.strategyId.toLowerCase().includes(keyword) ||
-        row.comboId.toLowerCase().includes(keyword) ||
-        row.rulePackId.toLowerCase().includes(keyword) ||
-        row.template.toLowerCase().includes(keyword);
-      const hitWindow = leaderboardWindow === "all" || row.window === leaderboardWindow;
-      return hitKeyword && hitWindow;
-    });
-  }, [keyword, leaderboardWindow]);
-
-  const filteredCompare = useMemo(() => {
-    return backtestCompareRows.filter((row) => {
-      const hitKeyword = !keyword || row.metric.toLowerCase().includes(keyword);
-      const hitCategory = compareCategory === "all" || row.category === compareCategory;
-      return hitKeyword && hitCategory;
-    });
-  }, [keyword, compareCategory]);
-
-  const jobTotalPages = getTotalPages(filteredJobs.length, pageSize);
-  const leaderboardTotalPages = getTotalPages(filteredLeaderboard.length, pageSize);
-  const compareTotalPages = getTotalPages(filteredCompare.length, pageSize);
-
-  useEffect(() => {
-    if (jobPage > jobTotalPages) setJobPage(jobTotalPages);
-  }, [jobPage, jobTotalPages]);
-
-  useEffect(() => {
-    if (leaderboardPage > leaderboardTotalPages) setLeaderboardPage(leaderboardTotalPages);
-  }, [leaderboardPage, leaderboardTotalPages]);
-
-  useEffect(() => {
-    if (comparePage > compareTotalPages) setComparePage(compareTotalPages);
-  }, [comparePage, compareTotalPages]);
-
-  const pagedJobs = getPagedRows(filteredJobs, jobPage, pageSize);
-  const pagedLeaderboard = getPagedRows(filteredLeaderboard, leaderboardPage, pageSize);
-  const pagedCompare = getPagedRows(filteredCompare, comparePage, pageSize);
-
-  const runningJobs = jobs.filter((row) => row.status === "running").length;
-  const queuedJobs = jobs.filter((row) => row.status === "queued").length;
-  const finishedJobs = jobs.filter((row) => row.status === "finished").length;
-  const rulePackCount = new Set(jobs.map((row) => row.rulePackId)).size;
-  const topCagr = Math.max(...backtestLeaderboard.map((row) => row.cagr));
-
-  const searchPlaceholder =
-    activeTaskTab === "jobs"
-      ? "Search job/strategy/combo/rulePack..."
-      : activeTaskTab === "leaderboard"
-      ? "Search strategy/combo/rulePack..."
-      : "Search metric name...";
-
-  const onExport = () => {
-    const date = new Date().toISOString().slice(0, 10);
-
-    if (activeTaskTab === "jobs") {
-      downloadCsv(
-        `cb-quant-backtest-jobs-${date}.csv`,
-        [
-          "任务ID",
-          "策略ID",
-          "组合ID",
-          "规则包",
-          "模板",
-          "窗口",
-          "状态",
-          "进度",
-          "开始时间",
-          "ETA",
-          "Worker",
-        ],
-        filteredJobs.map((row) => [
-          row.jobId,
-          row.strategyId,
-          row.comboId,
-          row.rulePackId,
-          row.template,
-          row.window,
-          row.status,
-          `${row.progress}%`,
-          row.startedAt,
-          row.eta,
-          row.worker,
-        ])
-      );
-      return;
-    }
-
-    if (activeTaskTab === "leaderboard") {
-      downloadCsv(
-        `cb-quant-backtest-leaderboard-${date}.csv`,
-        [
-          "排名",
-          "策略ID",
-          "组合ID",
-          "规则包",
-          "模板",
-          "CAGR",
-          "MDD",
-          "Calmar",
-          "胜率",
-          "换手",
-          "近1年",
-          "稳健分",
-          "窗口",
-        ],
-        filteredLeaderboard.map((row) => [
-          row.rank,
-          row.strategyId,
-          row.comboId,
-          row.rulePackId,
-          row.template,
-          toPercent(row.cagr),
-          toPercent(row.mdd),
-          row.calmar,
-          `${row.winRate.toFixed(1)}%`,
-          `${(row.turnover * 100).toFixed(1)}%`,
-          toPercent(row.recent1y),
-          row.robustScore.toFixed(1),
-          row.window,
-        ])
-      );
-      return;
-    }
-
-    downloadCsv(
-      `cb-quant-backtest-compare-${date}.csv`,
-      ["指标", "分类", "Baseline", "Candidate A", "Candidate B", "Candidate C"],
-      filteredCompare.map((row) => [
-        row.metric,
-        row.category,
-        row.baseline,
-        row.candidateA,
-        row.candidateB,
-        row.candidateC,
-      ])
-    );
-  };
-
-  const handleQueueBacktest = (payload: BacktestQueuePayload): void => {
-    const now = new Date();
-    const timestamp = getNowTimeLabel(now);
-    const dateStamp = getDateStamp(now);
-
-    setJobs((previousRows) => {
-      const startSeq = previousRows.length + 1;
-      const nextRows: BacktestJobRow[] = payload.windows.map((windowName, index) => {
-        const seq = startSeq + index;
-        return {
-          jobId: `BT-${dateStamp}-${String(seq).padStart(3, "0")}`,
-          strategyId: `STR-${String(seq).padStart(3, "0")}`,
-          comboId: payload.comboId,
-          rulePackId: payload.rulePackId,
-          template: payload.template,
-          window: mapEvalWindow(windowName),
-          status: "queued",
-          progress: 0,
-          startedAt: timestamp,
-          eta: "--",
-          worker: workers[seq % workers.length],
-        };
-      });
-
-      return [...nextRows, ...previousRows];
-    });
-
-    setActiveSection("tasks");
-    setActiveTaskTab("jobs");
-    setSearch(payload.rulePackId);
-    setJobStatus("all");
-    setJobPage(1);
-  };
-
-  const filterPanel = (
-    <div className="absolute right-0 z-20 mt-2 w-72 rounded-lg border border-gray-200 bg-white p-4 shadow-lg dark:border-gray-700 dark:bg-gray-800">
-      <div className="space-y-4">
-        {activeTaskTab === "jobs" && (
-          <div>
-            <label className="mb-2 block text-xs font-medium text-gray-700 dark:text-gray-300">
-              任务状态
-            </label>
-            <select
-              value={jobStatus}
-              onChange={(event) => {
-                setJobStatus(event.target.value);
-                setJobPage(1);
-              }}
-              className="h-10 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-800 dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
-            >
-              <option value="all">全部</option>
-              <option value="queued">queued</option>
-              <option value="running">running</option>
-              <option value="finished">finished</option>
-              <option value="failed">failed</option>
-            </select>
-          </div>
-        )}
-
-        {activeTaskTab === "leaderboard" && (
-          <div>
-            <label className="mb-2 block text-xs font-medium text-gray-700 dark:text-gray-300">
-              评估窗口
-            </label>
-            <select
-              value={leaderboardWindow}
-              onChange={(event) => {
-                setLeaderboardWindow(event.target.value);
-                setLeaderboardPage(1);
-              }}
-              className="h-10 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-800 dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
-            >
-              <option value="all">全部</option>
-              <option value="full">full</option>
-              <option value="3y">3y</option>
-              <option value="1y">1y</option>
-            </select>
-          </div>
-        )}
-
-        {activeTaskTab === "compare" && (
-          <div>
-            <label className="mb-2 block text-xs font-medium text-gray-700 dark:text-gray-300">
-              指标分类
-            </label>
-            <select
-              value={compareCategory}
-              onChange={(event) => {
-                setCompareCategory(event.target.value);
-                setComparePage(1);
-              }}
-              className="h-10 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-800 dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
-            >
-              <option value="all">全部</option>
-              <option value="return">return</option>
-              <option value="risk">risk</option>
-              <option value="trade">trade</option>
-            </select>
-          </div>
-        )}
-
-        <div>
-          <label className="mb-2 block text-xs font-medium text-gray-700 dark:text-gray-300">
-            每页条数
-          </label>
-          <select
-            value={String(pageSize)}
-            onChange={(event) => {
-              const nextPageSize = Number(event.target.value);
-              setPageSize(nextPageSize);
-              setJobPage(1);
-              setLeaderboardPage(1);
-              setComparePage(1);
-            }}
-            className="h-10 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-800 dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
-          >
-            {pageSizeOptions.map((size) => (
-              <option key={size} value={size}>{`每页 ${size} 条`}</option>
-            ))}
-          </select>
-        </div>
-      </div>
-      <button
-        type="button"
-        onClick={() => setShowFilter(false)}
-        className="bg-brand-500 hover:bg-brand-600 mt-4 h-10 w-full rounded-lg text-sm font-medium text-white"
-      >
-        Apply
-      </button>
-    </div>
+function CbQuantBacktestEvaluationContent() {
+  const searchParams = useSearchParams();
+  const strategyIdFromQuery = searchParams.get("strategyId") ?? "";
+  const strategyIdsFromQueryRaw = searchParams.get("strategyIds") ?? "";
+  const strategyIdsFromQuery = useMemo(
+    () =>
+      strategyIdsFromQueryRaw
+        .split(",")
+        .map((id) => id.trim())
+        .filter((id) => id.length > 0),
+    [strategyIdsFromQueryRaw],
   );
+
+  const [strategies, setStrategies] = useState<StrategyTemplate[]>([]);
+  const [selectedStrategyIds, setSelectedStrategyIds] = useState<string[]>([]);
+
+  const [startDate, setStartDate] = useState<string>("");
+  const [endDate, setEndDate] = useState<string>("");
+  const [topN, setTopN] = useState<number>(20);
+  const [currentTopN, setCurrentTopN] = useState<number>(20);
+  const [windows, setWindows] = useState<Record<WindowName, boolean>>({ full: true, "3y": true, "1y": true });
+
+  const [tasks, setTasks] = useState<StrategyOptimizeTask[]>([]);
+  const [tasksPage, setTasksPage] = useState<number>(1);
+  const [tasksTotal, setTasksTotal] = useState<number>(0);
+  const [tasksTotalPages, setTasksTotalPages] = useState<number>(1);
+  const [selectedTaskId, setSelectedTaskId] = useState<string>("");
+  const [detail, setDetail] = useState<StrategyOptimizeTaskDetail | null>(null);
+
+  const [loadingTasks, setLoadingTasks] = useState<boolean>(false);
+  const [syncingHistory, setSyncingHistory] = useState<boolean>(false);
+  const [historySummary, setHistorySummary] = useState<HistoryDataSummary | null>(null);
+  const [historySyncStatus, setHistorySyncStatus] = useState<HistorySyncStatus | null>(null);
+  const [creating, setCreating] = useState<boolean>(false);
+  const [error, setError] = useState<string>("");
+  const [hint, setHint] = useState<string>("");
+
+  const selectedStrategySet = useMemo(() => new Set(selectedStrategyIds), [selectedStrategyIds]);
+  const selectedStrategies = useMemo(
+    () => strategies.filter((row) => selectedStrategySet.has(row.id)),
+    [selectedStrategySet, strategies],
+  );
+  const strategyById = useMemo(() => new Map(strategies.map((row) => [row.id, row])), [strategies]);
+  const totalCombinations = useMemo(
+    () => selectedStrategies.reduce((sum, row) => sum + row.comboSize, 0),
+    [selectedStrategies],
+  );
+
+  const activeWindows = useMemo(
+    () => (Object.entries(windows).filter(([, checked]) => checked).map(([key]) => key) as WindowName[]),
+    [windows],
+  );
+
+  const loadBootstrap = useCallback(async () => {
+    try {
+      const [strategyResp, summary] = await Promise.all([
+        listStrategyTemplates({ page: 1, pageSize: 500 }),
+        getHistoryDataSummary(),
+      ]);
+      setStrategies(strategyResp.items);
+      setHistorySummary(summary);
+
+      const syncStatus = await getHistorySyncStatus();
+      setHistorySyncStatus(syncStatus);
+
+      if (strategyResp.items.length) {
+        const validIdSet = new Set(strategyResp.items.map((item) => item.id));
+        const queryIds = strategyIdsFromQuery.filter((id) => validIdSet.has(id));
+        const querySingle = validIdSet.has(strategyIdFromQuery) ? strategyIdFromQuery : "";
+        setSelectedStrategyIds((prev) => {
+          if (prev.length) return prev;
+          if (queryIds.length) return Array.from(new Set(queryIds));
+          if (querySingle) return [querySingle];
+          return [strategyResp.items[0].id];
+        });
+      }
+
+      if (summary.dateStart && summary.dateEnd) {
+        setStartDate(summary.dateStart);
+        setEndDate(summary.dateEnd);
+      } else {
+        const now = new Date();
+        const prev = new Date(now.getTime());
+        prev.setFullYear(prev.getFullYear() - 3);
+        setStartDate(dateToInput(prev));
+        setEndDate(dateToInput(now));
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "初始化失败");
+    }
+  }, [strategyIdFromQuery, strategyIdsFromQuery]);
+
+  const loadTasks = useCallback(async () => {
+    setLoadingTasks(true);
+    try {
+      const response = await listStrategyOptimizeTasks({
+        templateId: selectedStrategyIds.length === 1 ? selectedStrategyIds[0] : "all",
+        page: tasksPage,
+        pageSize: 10,
+      });
+      setTasks(response.items);
+      setTasksTotal(response.total);
+      setTasksTotalPages(getTotalPages(response.total, 10));
+      if (!selectedTaskId && response.items.length) {
+        setSelectedTaskId(response.items[0].taskId);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "任务列表加载失败");
+      setTasks([]);
+      setTasksTotal(0);
+      setTasksTotalPages(1);
+    } finally {
+      setLoadingTasks(false);
+    }
+  }, [selectedStrategyIds, tasksPage, selectedTaskId]);
+
+  const loadDetail = useCallback(async () => {
+    if (!selectedTaskId) {
+      setDetail(null);
+      return;
+    }
+    try {
+      const response = await getStrategyOptimizeTaskDetail(selectedTaskId);
+      setDetail(response);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "任务详情加载失败");
+      setDetail(null);
+    }
+  }, [selectedTaskId]);
+
+  useEffect(() => {
+    void loadBootstrap();
+  }, [loadBootstrap]);
+
+  useEffect(() => {
+    if (!selectedStrategyIds.length) return;
+    void loadTasks();
+  }, [selectedStrategyIds, tasksPage, loadTasks]);
+
+  useEffect(() => {
+    void loadDetail();
+  }, [loadDetail]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void loadTasks();
+      void loadDetail();
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [loadTasks, loadDetail]);
+
+  const handleCreateTask = async () => {
+    if (!selectedStrategyIds.length) {
+      setError("请先勾选至少一个策略");
+      return;
+    }
+    if (!activeWindows.length) {
+      setError("至少选择一个回测窗口");
+      return;
+    }
+
+    setCreating(true);
+    setError("");
+    setHint("");
+    try {
+      const createdTaskIds: string[] = [];
+      const failedStrategyIds: string[] = [];
+
+      for (const strategyId of selectedStrategyIds) {
+        try {
+          const strategy = strategyById.get(strategyId);
+          const result = await createStrategyOptimizeTask({
+            templateId: strategyId,
+            windows: activeWindows,
+            startDate,
+            endDate,
+            topN,
+            maxCombinations: strategy?.comboSize ?? undefined,
+            currentTopN,
+          });
+          createdTaskIds.push(result.task.taskId);
+        } catch {
+          failedStrategyIds.push(strategyId);
+        }
+      }
+
+      const createdCount = createdTaskIds.length;
+      const totalTasks = createdCount * activeWindows.length;
+      if (!createdCount) {
+        setError("任务创建失败，请检查策略配置与历史数据。");
+        return;
+      }
+
+      setHint(
+        `已创建 ${createdCount} 个策略的回测任务，共 ${totalTasks} 个窗口任务。${
+          failedStrategyIds.length ? `失败 ${failedStrategyIds.length} 个策略：${failedStrategyIds.join("、")}` : ""
+        }`,
+      );
+      setSelectedTaskId(createdTaskIds[0]);
+      setTasksPage(1);
+      await loadTasks();
+      await loadDetail();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "创建优化任务失败");
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleSyncHistory = async () => {
+    setSyncingHistory(true);
+    setError("");
+    try {
+      const result = await triggerHistorySync();
+      setHint(result.message);
+      const [summary, syncStatus] = await Promise.all([getHistoryDataSummary(), getHistorySyncStatus()]);
+      setHistorySummary(summary);
+      setHistorySyncStatus(syncStatus);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "历史快照同步失败");
+    } finally {
+      setSyncingHistory(false);
+    }
+  };
 
   return (
     <CbQuantPageShell
       title="回测评估行动页"
-      subtitle="业务动线清晰化：策略规则在“策略生成”维护；本页只做回测入队与结果评估。"
+      subtitle="多选策略后批量创建回测任务，系统轮询进度并输出最优策略与当前Top20。"
     >
-      <div className="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]">
-        <h3 className="text-base font-semibold text-gray-800 dark:text-white/90">用户动线</h3>
-        <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-4">
-          <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-900/40">
-            <p className="text-xs font-semibold text-brand-500">Step 1</p>
-            <p className="mt-1 text-sm font-medium text-gray-900 dark:text-white">策略生成</p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">在参数空间定义规则，产出候选组合</p>
-          </div>
-          <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-900/40">
-            <p className="text-xs font-semibold text-brand-500">Step 2</p>
-            <p className="mt-1 text-sm font-medium text-gray-900 dark:text-white">候选预览</p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">选中 combo，并带入 rulePack 来源</p>
-          </div>
-          <div
-            className={`rounded-lg border p-3 ${
-              activeSection === "config"
-                ? "border-brand-500 bg-brand-50 dark:border-brand-400 dark:bg-brand-500/10"
-                : "border-gray-200 bg-gray-50 dark:border-gray-800 dark:bg-gray-900/40"
-            }`}
-          >
-            <p className="text-xs font-semibold text-brand-500">Step 3</p>
-            <p className="mt-1 text-sm font-medium text-gray-900 dark:text-white">回测配置</p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">仅填写实验参数：窗口、资金、费用、基准</p>
-          </div>
-          <div
-            className={`rounded-lg border p-3 ${
-              activeSection === "tasks"
-                ? "border-brand-500 bg-brand-50 dark:border-brand-400 dark:bg-brand-500/10"
-                : "border-gray-200 bg-gray-50 dark:border-gray-800 dark:bg-gray-900/40"
-            }`}
-          >
-            <p className="text-xs font-semibold text-brand-500">Step 4</p>
-            <p className="mt-1 text-sm font-medium text-gray-900 dark:text-white">回测任务</p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">看队列进度、榜单排序和策略对比</p>
-          </div>
-        </div>
-      </div>
-
-      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
-        <div className="border-b border-gray-200 px-5 pt-4 dark:border-gray-800">
-          <nav className="flex space-x-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {sectionTabs.map((tab) => (
+      <div className="space-y-6">
+        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
+          <div className="border-b border-gray-200 px-5 py-4 dark:border-gray-800">
+            <h3 className="text-lg font-semibold text-gray-800 dark:text-white/90">回测任务创建</h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400">用户动线：选策略与窗口 → 启动回测搜索 → 轮询进度 → 查看最优策略与当前Top20。</p>
+            <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-gray-600 dark:text-gray-300">
+              <span>
+                历史快照：
+                {historySummary
+                  ? `${historySummary.snapshotCount} 天，${historySummary.dateStart ?? "--"} ~ ${historySummary.dateEnd ?? "--"}`
+                  : "--"}
+              </span>
+              <span>
+                最新同步：
+                {historySyncStatus?.hasLog
+                  ? `${historySyncStatus.syncAt ?? "--"}（${historySyncStatus.mode ?? "--"}，${historySyncStatus.upserted}条）`
+                  : "暂无"}
+              </span>
               <button
-                key={tab.key}
                 type="button"
-                onClick={() => setActiveSection(tab.key)}
-                className={`inline-flex items-center gap-2 border-b-2 px-2.5 py-2 text-sm font-medium transition-colors duration-200 ${
-                  activeSection === tab.key
-                    ? "text-brand-500 border-brand-500 dark:text-brand-400 dark:border-brand-400"
-                    : "text-gray-500 border-transparent hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
-                }`}
+                onClick={handleSyncHistory}
+                disabled={syncingHistory}
+                className="rounded-lg border border-brand-500 px-3 py-1 text-xs font-medium text-brand-600 hover:bg-brand-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-brand-400 dark:text-brand-300"
               >
-                {tab.icon}
-                {tab.title}
+                {syncingHistory ? "同步中..." : "立即同步历史快照"}
               </button>
-            ))}
-          </nav>
+            </div>
+          </div>
+          <div className="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-4">
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400">策略（可多选）</label>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedStrategyIds(strategies.map((row) => row.id));
+                      setTasksPage(1);
+                    }}
+                    disabled={!strategies.length}
+                    className="rounded border border-gray-300 px-2 py-0.5 text-[11px] text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:text-gray-300"
+                  >
+                    全选
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedStrategyIds([]);
+                      setTasksPage(1);
+                    }}
+                    disabled={!selectedStrategyIds.length}
+                    className="rounded border border-gray-300 px-2 py-0.5 text-[11px] text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:text-gray-300"
+                  >
+                    清空
+                  </button>
+                </div>
+              </div>
+              <div className="h-[128px] space-y-1 overflow-y-auto rounded-lg border border-gray-300 bg-transparent px-3 py-2 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white">
+                {strategies.map((row) => (
+                  <label key={row.id} className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={selectedStrategySet.has(row.id)}
+                      onChange={() => {
+                        setSelectedStrategyIds((prev) => {
+                          if (prev.includes(row.id)) {
+                            return prev.filter((id) => id !== row.id);
+                          }
+                          return [...prev, row.id];
+                        });
+                        setTasksPage(1);
+                      }}
+                    />
+                    <span className="truncate text-xs">
+                      {row.id} · {row.name}
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">已选 {selectedStrategyIds.length} 个策略</p>
+            </div>
+            <div>
+              <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">回测开始日期</label>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(event) => setStartDate(event.target.value)}
+                className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+              />
+            </div>
+            <div>
+              <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">回测结束日期</label>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(event) => setEndDate(event.target.value)}
+                className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+              />
+            </div>
+            <div>
+              <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">窗口</label>
+              <div className="flex h-11 items-center gap-2 rounded-lg border border-gray-300 px-3 text-sm dark:border-gray-700">
+                <label className="flex items-center gap-1">
+                  <input type="checkbox" checked={windows.full} onChange={() => setWindows((prev) => ({ ...prev, full: !prev.full }))} />
+                  全周期
+                </label>
+                <label className="flex items-center gap-1">
+                  <input type="checkbox" checked={windows["3y"]} onChange={() => setWindows((prev) => ({ ...prev, "3y": !prev["3y"] }))} />
+                  近3年
+                </label>
+                <label className="flex items-center gap-1">
+                  <input type="checkbox" checked={windows["1y"]} onChange={() => setWindows((prev) => ({ ...prev, "1y": !prev["1y"] }))} />
+                  近1年
+                </label>
+              </div>
+            </div>
+            <div>
+              <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">TopN策略</label>
+              <input
+                type="number"
+                min={1}
+                max={200}
+                value={topN}
+                onChange={(event) => setTopN(Number(event.target.value))}
+                className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+              />
+            </div>
+            <div>
+              <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">待评估组合数</label>
+              <input
+                type="text"
+                readOnly
+                value={totalCombinations > 0 ? totalCombinations.toLocaleString() : "--"}
+                className="h-11 w-full rounded-lg border border-gray-300 bg-gray-50 px-3 text-sm text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200"
+              />
+            </div>
+            <div>
+              <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">当前推荐数量</label>
+              <input
+                type="number"
+                min={1}
+                max={200}
+                value={currentTopN}
+                onChange={(event) => setCurrentTopN(Number(event.target.value))}
+                className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+              />
+            </div>
+            <div className="flex items-end">
+              <button
+                type="button"
+                disabled={creating}
+                onClick={handleCreateTask}
+                className="inline-flex h-11 w-full items-center justify-center rounded-lg bg-brand-500 px-4 text-sm font-medium text-white hover:bg-brand-600 disabled:opacity-60"
+              >
+                {creating ? "任务创建中..." : "开始回测搜索"}
+              </button>
+            </div>
+          </div>
+          {error ? (
+            <p className="mx-5 mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600 dark:border-red-900/50 dark:bg-red-500/10 dark:text-red-300">
+              {error}
+            </p>
+          ) : null}
+          {hint ? (
+            <p className="mx-5 mb-4 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700 dark:border-green-900/50 dark:bg-green-500/10 dark:text-green-300">
+              {hint}
+            </p>
+          ) : null}
         </div>
-        <div className="px-5 py-3">
-          <p className="text-sm text-gray-500 dark:text-gray-400">
-            {sectionTabs.find((tab) => tab.key === activeSection)?.subtitle}
-          </p>
+
+        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
+          <div className="border-b border-gray-200 px-5 py-4 dark:border-gray-800">
+            <h3 className="text-lg font-semibold text-gray-800 dark:text-white/90">回测任务队列（轮询刷新）</h3>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              {selectedStrategyIds.length === 1 ? "当前按单策略过滤任务队列。" : "当前显示全量任务队列（多策略模式）。"}
+            </p>
+          </div>
+          <div className="p-5">
+            <ScrollableDataTable
+              headers={["任务ID", "策略", "状态", "进度", "已评估/总组合", "窗口", "ETA", "更新时间", "操作"]}
+              minTableWidthClass="min-w-[1280px]"
+              colSpan={9}
+              isEmpty={!loadingTasks && tasks.length === 0}
+              emptyText="暂无任务，请先创建回测搜索任务"
+            >
+              {tasks.map((row) => (
+                <TableRow key={row.taskId} className="border-b border-gray-100 dark:border-gray-800">
+                  <TableCell className="px-4 py-3 text-sm font-semibold text-gray-900 dark:text-white">{row.taskId}</TableCell>
+                  <TableCell className="px-4 py-3 text-sm text-gray-900 dark:text-white">{row.templateName}</TableCell>
+                  <TableCell className="px-4 py-3">
+                    <StatusTag label={row.status} tone={statusTone(row.status)} />
+                  </TableCell>
+                  <TableCell className="px-4 py-3">
+                    <div className="w-40">
+                      <div className="h-2 rounded bg-gray-200 dark:bg-gray-700">
+                        <div className="h-2 rounded bg-brand-500" style={{ width: `${row.progress}%` }} />
+                      </div>
+                      <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{row.progress}%</p>
+                    </div>
+                  </TableCell>
+                  <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">
+                    {row.evaluatedCombinations.toLocaleString()} / {row.totalCombinations.toLocaleString()}
+                  </TableCell>
+                  <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.windows.join("/")}</TableCell>
+                  <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.eta}</TableCell>
+                  <TableCell className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{row.finishedAt ?? row.startedAt ?? row.createdAt}</TableCell>
+                  <TableCell className="px-4 py-3">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedTaskId(row.taskId)}
+                      className="rounded-lg border border-brand-500 px-3 py-1.5 text-xs font-medium text-brand-600 hover:bg-brand-50 dark:border-brand-400 dark:text-brand-300"
+                    >
+                      查看结果
+                    </button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </ScrollableDataTable>
+            <TablePaginationBar
+              totalItems={tasksTotal}
+              currentPage={tasksPage}
+              totalPages={tasksTotalPages}
+              onPageChange={setTasksPage}
+            />
+          </div>
         </div>
-      </div>
 
-      {activeSection === "config" && (
-        <BacktestConfigPanel
-          candidates={strategyCandidates}
-          onQueueBacktest={handleQueueBacktest}
-        />
-      )}
-
-      {activeSection === "tasks" && (
-        <>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
-            <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]">
-              <p className="text-sm text-gray-500 dark:text-gray-400">运行中任务</p>
-              <p className="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">{runningJobs}</p>
+        <div className="grid gap-6 xl:grid-cols-2">
+          <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
+            <div className="border-b border-gray-200 px-5 py-4 dark:border-gray-800">
+              <h3 className="text-lg font-semibold text-gray-800 dark:text-white/90">最优策略榜单</h3>
             </div>
-            <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]">
-              <p className="text-sm text-gray-500 dark:text-gray-400">排队任务</p>
-              <p className="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">{queuedJobs}</p>
-            </div>
-            <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]">
-              <p className="text-sm text-gray-500 dark:text-gray-400">规则包数量</p>
-              <p className="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">{rulePackCount}</p>
-              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">完成任务：{finishedJobs}</p>
-            </div>
-            <div className="rounded-2xl border border-green-200 bg-green-50 p-5 dark:border-green-700/40 dark:bg-green-500/10">
-              <p className="text-sm text-green-700 dark:text-green-300">当前最高 CAGR</p>
-              <p className="mt-2 text-2xl font-semibold text-green-700 dark:text-green-300">{toPercent(topCagr)}</p>
+            <div className="p-5">
+              <ScrollableDataTable
+                headers={["排名", "组合ID", "稳健分", "CAGR", "MDD", "Calmar", "收益%", "参数"]}
+                minTableWidthClass="min-w-[1100px]"
+                colSpan={8}
+                isEmpty={!detail || detail.topStrategies.length === 0}
+                emptyText="任务完成后展示TopN策略"
+              >
+                {(detail?.topStrategies ?? []).map((row) => (
+                  <TableRow key={row.comboId} className="border-b border-gray-100 dark:border-gray-800">
+                    <TableCell className="px-4 py-3 text-sm font-semibold text-gray-900 dark:text-white">#{row.rank}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm font-semibold text-gray-900 dark:text-white">{row.comboId}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.robustScore.toFixed(2)}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm font-medium text-green-600">{toPercent(row.cagr)}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm font-medium text-red-600">{toPercent(row.mdd)}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.calmar.toFixed(2)}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.totalReturnPct.toFixed(2)}%</TableCell>
+                    <TableCell className="px-4 py-3 text-xs text-gray-500 dark:text-gray-400">
+                      <code>{JSON.stringify(row.params)}</code>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </ScrollableDataTable>
             </div>
           </div>
 
           <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
-            <WorkbenchHeader
-              title="回测任务中心"
-              description="任务筛选、结果导出与策略横向对比"
-              tabs={taskTabs}
-              activeTab={activeTaskTab}
-              onTabChange={(tab) => setActiveTaskTab(tab)}
-              searchPlaceholder={searchPlaceholder}
-              searchValue={search}
-              onSearchChange={(value) => {
-                setSearch(value);
-                setJobPage(1);
-                setLeaderboardPage(1);
-                setComparePage(1);
-              }}
-              filterOpen={showFilter}
-              onToggleFilter={() => setShowFilter((prev) => !prev)}
-              filterPanel={filterPanel}
-              filterRef={filterRef}
-              onExport={onExport}
-            />
-
-            {activeTaskTab === "jobs" && (
-              <div className="p-5">
-                <ScrollableDataTable
-                  headers={[
-                    "任务ID",
-                    "策略ID",
-                    "组合ID",
-                    "规则包",
-                    "模板",
-                    "窗口",
-                    "状态",
-                    "进度",
-                    "开始时间",
-                    "ETA",
-                    "Worker",
-                  ]}
-                  minTableWidthClass="min-w-[1720px]"
-                  colSpan={11}
-                  isEmpty={pagedJobs.length === 0}
-                >
-                  {pagedJobs.map((row) => (
-                    <TableRow
-                      key={row.jobId}
-                      className="border-b border-gray-100 dark:border-gray-800"
-                    >
-                      <TableCell className="px-4 py-3 text-sm font-semibold whitespace-nowrap text-gray-900 dark:text-white">
-                        {row.jobId}
-                      </TableCell>
-                      <TableCell className="px-4 py-3 text-sm font-medium whitespace-nowrap text-gray-900 dark:text-white">
-                        {row.strategyId}
-                      </TableCell>
-                      <TableCell className="px-4 py-3 text-sm font-medium whitespace-nowrap text-gray-900 dark:text-white">
-                        {row.comboId}
-                      </TableCell>
-                      <TableCell className="px-4 py-3 text-sm whitespace-nowrap text-gray-700 dark:text-gray-200">
-                        {row.rulePackId}
-                      </TableCell>
-                      <TableCell className="px-4 py-3 text-sm whitespace-nowrap text-gray-700 dark:text-gray-200">
-                        {row.template}
-                      </TableCell>
-                      <TableCell className="px-4 py-3 text-sm whitespace-nowrap text-gray-700 dark:text-gray-200">
-                        {row.window}
-                      </TableCell>
-                      <TableCell className="px-4 py-3 text-sm whitespace-nowrap">
-                        <StatusTag label={row.status} tone={getJobTone(row.status)} />
-                      </TableCell>
-                      <TableCell className="px-4 py-3 text-sm whitespace-nowrap text-gray-700 dark:text-gray-200">
-                        {row.progress}%
-                      </TableCell>
-                      <TableCell className="px-4 py-3 text-sm whitespace-nowrap text-gray-700 dark:text-gray-200">
-                        {row.startedAt}
-                      </TableCell>
-                      <TableCell className="px-4 py-3 text-sm whitespace-nowrap text-gray-600 dark:text-gray-300">
-                        {row.eta}
-                      </TableCell>
-                      <TableCell className="px-4 py-3 text-sm whitespace-nowrap text-gray-600 dark:text-gray-300">
-                        {row.worker}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </ScrollableDataTable>
-                <TablePaginationBar
-                  totalItems={filteredJobs.length}
-                  currentPage={jobPage}
-                  totalPages={jobTotalPages}
-                  onPageChange={setJobPage}
-                />
-              </div>
-            )}
-
-            {activeTaskTab === "leaderboard" && (
-              <div className="p-5">
-                <ScrollableDataTable
-                  headers={[
-                    "排名",
-                    "策略ID",
-                    "组合ID",
-                    "规则包",
-                    "模板",
-                    "CAGR",
-                    "MDD",
-                    "Calmar",
-                    "胜率",
-                    "换手",
-                    "近1年",
-                    "稳健分",
-                    "窗口",
-                  ]}
-                  minTableWidthClass="min-w-[1860px]"
-                  colSpan={13}
-                  isEmpty={pagedLeaderboard.length === 0}
-                >
-                  {pagedLeaderboard.map((row) => (
-                    <TableRow
-                      key={`${row.strategyId}-${row.rulePackId}`}
-                      className="border-b border-gray-100 dark:border-gray-800"
-                    >
-                      <TableCell className="px-4 py-3 text-sm font-semibold whitespace-nowrap text-gray-900 dark:text-white">
-                        #{row.rank}
-                      </TableCell>
-                      <TableCell className="px-4 py-3 text-sm font-medium whitespace-nowrap text-gray-900 dark:text-white">
-                        {row.strategyId}
-                      </TableCell>
-                      <TableCell className="px-4 py-3 text-sm font-medium whitespace-nowrap text-gray-900 dark:text-white">
-                        {row.comboId}
-                      </TableCell>
-                      <TableCell className="px-4 py-3 text-sm whitespace-nowrap text-gray-700 dark:text-gray-200">
-                        {row.rulePackId}
-                      </TableCell>
-                      <TableCell className="px-4 py-3 text-sm font-medium whitespace-nowrap text-gray-900 dark:text-white">
-                        {row.template}
-                      </TableCell>
-                      <TableCell className="px-4 py-3 text-sm whitespace-nowrap text-green-700 dark:text-green-300">
-                        {toPercent(row.cagr)}
-                      </TableCell>
-                      <TableCell className="px-4 py-3 text-sm whitespace-nowrap text-red-700 dark:text-red-300">
-                        {toPercent(row.mdd)}
-                      </TableCell>
-                      <TableCell className="px-4 py-3 text-sm whitespace-nowrap text-gray-700 dark:text-gray-200">
-                        {row.calmar.toFixed(2)}
-                      </TableCell>
-                      <TableCell className="px-4 py-3 text-sm whitespace-nowrap text-gray-700 dark:text-gray-200">
-                        {row.winRate.toFixed(1)}%
-                      </TableCell>
-                      <TableCell className="px-4 py-3 text-sm whitespace-nowrap text-gray-700 dark:text-gray-200">
-                        {(row.turnover * 100).toFixed(1)}%
-                      </TableCell>
-                      <TableCell className="px-4 py-3 text-sm whitespace-nowrap text-gray-700 dark:text-gray-200">
-                        {toPercent(row.recent1y)}
-                      </TableCell>
-                      <TableCell className="px-4 py-3 text-sm whitespace-nowrap text-gray-700 dark:text-gray-200">
-                        {row.robustScore.toFixed(1)}
-                      </TableCell>
-                      <TableCell className="px-4 py-3 text-sm whitespace-nowrap">
-                        <StatusTag label={row.window} tone={getWindowTone(row.window)} />
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </ScrollableDataTable>
-                <TablePaginationBar
-                  totalItems={filteredLeaderboard.length}
-                  currentPage={leaderboardPage}
-                  totalPages={leaderboardTotalPages}
-                  onPageChange={setLeaderboardPage}
-                />
-              </div>
-            )}
-
-            {activeTaskTab === "compare" && (
-              <div className="p-5">
-                <ScrollableDataTable
-                  headers={[
-                    "指标",
-                    "分类",
-                    "Baseline",
-                    "Candidate A",
-                    "Candidate B",
-                    "Candidate C",
-                  ]}
-                  minTableWidthClass="min-w-[1120px]"
-                  colSpan={6}
-                  isEmpty={pagedCompare.length === 0}
-                >
-                  {pagedCompare.map((row) => (
-                    <TableRow
-                      key={row.metric}
-                      className="border-b border-gray-100 dark:border-gray-800"
-                    >
-                      <TableCell className="px-4 py-3 text-sm font-semibold whitespace-nowrap text-gray-900 dark:text-white">
-                        {row.metric}
-                      </TableCell>
-                      <TableCell className="px-4 py-3 text-sm whitespace-nowrap">
-                        <StatusTag
-                          label={row.category}
-                          tone={
-                            row.category === "risk"
-                              ? "red"
-                              : row.category === "return"
-                                ? "green"
-                                : "slate"
-                          }
-                        />
-                      </TableCell>
-                      <TableCell className="px-4 py-3 text-sm whitespace-nowrap text-gray-600 dark:text-gray-300">
-                        {row.baseline.toFixed(3)}
-                      </TableCell>
-                      <TableCell className="px-4 py-3 text-sm whitespace-nowrap text-gray-700 dark:text-gray-200">
-                        {row.candidateA.toFixed(3)}
-                      </TableCell>
-                      <TableCell className="px-4 py-3 text-sm whitespace-nowrap text-gray-700 dark:text-gray-200">
-                        {row.candidateB.toFixed(3)}
-                      </TableCell>
-                      <TableCell className="px-4 py-3 text-sm whitespace-nowrap text-gray-700 dark:text-gray-200">
-                        {row.candidateC.toFixed(3)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </ScrollableDataTable>
-                <TablePaginationBar
-                  totalItems={filteredCompare.length}
-                  currentPage={comparePage}
-                  totalPages={compareTotalPages}
-                  onPageChange={setComparePage}
-                />
-              </div>
-            )}
+            <div className="border-b border-gray-200 px-5 py-4 dark:border-gray-800">
+              <h3 className="text-lg font-semibold text-gray-800 dark:text-white/90">当前市场 Top20 可转债</h3>
+            </div>
+            <div className="p-5">
+              <ScrollableDataTable
+                headers={["排名", "转债代码", "转债名称", "现价", "转股溢价率", "双低", "成交额(万)", "评分"]}
+                minTableWidthClass="min-w-[980px]"
+                colSpan={8}
+                isEmpty={!detail || detail.topBonds.length === 0}
+                emptyText="任务完成后按最优策略实时计算Top20"
+              >
+                {(detail?.topBonds ?? []).map((row) => (
+                  <TableRow key={`${row.bondId}-${row.rank}`} className="border-b border-gray-100 dark:border-gray-800">
+                    <TableCell className="px-4 py-3 text-sm font-semibold text-gray-900 dark:text-white">#{row.rank}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm font-semibold text-gray-900 dark:text-white">{row.bondId}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-900 dark:text-white">{row.bondName}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.price.toFixed(3)}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.premiumRt.toFixed(2)}%</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.dblow.toFixed(3)}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{(row.amountWan ?? 0).toLocaleString()}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm font-medium text-brand-600">{row.score.toFixed(4)}</TableCell>
+                  </TableRow>
+                ))}
+              </ScrollableDataTable>
+            </div>
           </div>
-        </>
-      )}
+        </div>
+      </div>
     </CbQuantPageShell>
+  );
+}
+
+export default function CbQuantBacktestEvaluationPage() {
+  return (
+    <Suspense
+      fallback={
+        <CbQuantPageShell
+          title="回测评估行动页"
+          subtitle="多选策略后批量创建回测任务，系统轮询进度并输出最优策略与当前Top20。"
+        >
+          <div className="rounded-xl border border-gray-200 bg-white px-5 py-10 text-sm text-gray-500 dark:border-gray-800 dark:bg-white/[0.03] dark:text-gray-400">
+            加载中...
+          </div>
+        </CbQuantPageShell>
+      }
+    >
+      <CbQuantBacktestEvaluationContent />
+    </Suspense>
   );
 }

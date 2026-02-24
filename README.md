@@ -268,68 +268,63 @@ bash install_osx.sh
 
 ## 可转债集成技术规划（CB Quant）
 
-针对“可转债参数化策略（几十万组合）-> 回测筛选 -> 实盘交易”的需求，推荐采用分阶段集成方式：
+目标：支持“因子组合策略穷举 -> 历史回测择优 -> 当前市场 Top20 推荐”的生产链路。
 
-### Phase A（当前阶段，已落地）
+### 当前落地架构
 
-目标：保留 `convertible-bond-crawler` 的回测逻辑，将参数空间交给 `vnpy.trader.optimize` 批量搜索并输出 TopN。
+* **策略中心（Strategy）**
+  * 策略定义、参数空间（上下限/步长/枚举）持久化
+  * 一键展开单因子~全因子策略组合（组合爆炸可控）
+* **历史快照中心（History Snapshot）**
+  * SQLite 表：`cb_daily_snapshot`（按 `trade_date + bond_id` 主键）
+  * 同步日志表：`cb_sync_log`
+  * 数据源优先级：`eastmoney` 实时接口 -> 本地历史快照回退（禁用默认 mock）
+  * 启动时自动执行：
+    1. 首次从本地 crawler 历史快照做 bootstrap（仅一次）
+    2. 拉取当日实时全市场快照入库
+    3. 启动定时增量同步线程（默认 30 分钟）
+* **回测评估中心（Backtest Optimize）**
+  * 以策略真实参数空间组合数为评估规模（不再固定 5000）
+  * 异步任务执行 + 轮询进度
+  * 输出最优策略榜单 + 当前市场 Top20 可转债
 
-实现位置：
+### 关键代码位置
 
-* `convertible-bond-crawler/scripts/phase_a_optimize.py`
+* Web 入口与生命周期
+  * `vnpy/web/app.py`
+* API
+  * `vnpy/web/api/cb_quant.py`
+* 历史快照入库与调度
+  * `vnpy/web/services/cb_history_service.py`
+  * `vnpy/web/domain/cb_quant/history_store.py`
+* 回测服务与策略优化
+  * `vnpy/web/services/cb_quant_service.py`
+* 回测适配器（优先读取快照库）
+  * `vnpy/web/adapters/crawler_phase_a_adapter.py`
+* 前端页面
+  * `frontend/src/app/(admin)/cb-quant/strategy-generation/page.tsx`
+  * `frontend/src/app/(admin)/cb-quant/backtest-evaluation/page.tsx`
 
-执行示例（默认参数空间约为几十万级）：
+### API（策略 + 历史 + 回测）
 
-```bash
-python convertible-bond-crawler/scripts/phase_a_optimize.py \
-  --data-dir convertible-bond-crawler/out \
-  --output-dir convertible-bond-crawler/out/phase_a \
-  --top-n 50 \
-  --max-workers 4 \
-  --target return_drawdown_ratio
-```
+* `GET /api/v1/system/health`
+* `GET /api/v1/cb-quant/strategy/templates`
+* `POST /api/v1/cb-quant/strategy/templates`
+* `PUT /api/v1/cb-quant/strategy/templates/{template_id}`
+* `DELETE /api/v1/cb-quant/strategy/templates/{template_id}`
+* `GET /api/v1/cb-quant/strategy/templates/{template_id}`
+* `GET /api/v1/cb-quant/strategy/templates/{template_id}/config`
+* `PUT /api/v1/cb-quant/strategy/templates/{template_id}/config`
+* `POST /api/v1/cb-quant/strategy/templates/{template_id}/expand-factor-combos`
+* `GET /api/v1/cb-quant/strategy/history-summary`
+* `POST /api/v1/cb-quant/strategy/history-sync`
+* `GET /api/v1/cb-quant/strategy/history-sync/status`
+* `POST /api/v1/cb-quant/strategy/optimize-tasks`
+* `GET /api/v1/cb-quant/strategy/optimize-tasks`
+* `GET /api/v1/cb-quant/strategy/optimize-tasks/{task_id}`
+* `GET /api/v1/cb-quant/market/bonds`
 
-产出：
-
-* `phase_a_top_*.json`：完整参数与绩效指标
-* `phase_a_top_*.csv`：TopN 策略清单（便于人工复核/导入后续流程）
-
-### Phase B（推荐下一阶段）
-
-目标：将 `easyquotation` 数据接入标准化为统一快照与版本化存储，回测统一读取离线数据，提升可复现性与稳定性。
-
-核心动作：
-
-* 建立字段映射与数据质量校验（缺失、异常值、时间戳）
-* 固化“交易日快照版本”，避免在线抓取波动影响回测结果
-* 回测和研究任务全部改为读取同一份标准化数据
-
-### Phase C（执行闭环）
-
-目标：将 TopN 中筛选后的策略接入实盘执行（券商 Gateway）与风控，形成自动复盘与迭代。
-
-核心动作：
-
-* 将策略输出转为目标持仓/调仓指令
-* 接入交易前风控（流动性、强赎、仓位上限）
-* 记录成交偏差，按月滚动重跑 Phase A/B
-
-### Phase D（Web层建设，推荐并行推进）
-
-目标：提供 `REST + WebSocket` 服务，优先打通 CB Quant 前后端联调。
-
-当前已落地（MVP，可联调）：
-
-* 目录结构
-  * `vnpy/web/app.py`：FastAPI 入口
-  * `vnpy/web/api/router.py`：`/api/v1` 总路由
-  * `vnpy/web/api/system.py`：系统健康检查
-  * `vnpy/web/api/cb_quant.py`：CB Quant 回测联调接口
-  * `vnpy/web/ws/router.py`：`/ws/events` 事件推送
-  * `vnpy/web/services/cb_quant_service.py`：内存版服务（后续替换数据库和引擎调用）
-  * `vnpy/web/adapters/main_engine_adapter.py`：引擎适配占位
-
-安装与启动：
+### 运行方式
 
 ```bash
 pip install -e ".[web]"
@@ -338,88 +333,33 @@ python -m vnpy.web.app
 
 默认地址：
 
-* HTTP: `http://127.0.0.1:9000`
-* OpenAPI: `http://127.0.0.1:9000/docs`
-* WebSocket: `ws://127.0.0.1:9000/ws/events`
+* HTTP: `http://127.0.0.1:8000`
+* OpenAPI: `http://127.0.0.1:8000/docs`
 
-已提供 API（CB Quant 联调优先）：
+### 历史数据源建议（开源）
 
-* `GET /api/v1/system/health`
-  * 返回：`status/service/version`
-* `GET /api/v1/cb-quant/strategy/candidates?keyword=&window=all`
-  * 返回：候选策略列表（`combo_id/template/est_combos/pass_rate/window`）
-* `GET /api/v1/cb-quant/market/bonds?min_volume_wan=0`
-  * 返回：可转债二级市场实时列表（东财实时：`bond_id/bond_name/price/increase_rt/premium_rt/convert_value/dblow/volume_wan/...`）
-* `GET /api/v1/cb-quant/backtest/stats`
-  * 返回：任务统计（运行中/排队/完成/失败/规则包数量/最高 CAGR）
-* `GET /api/v1/cb-quant/backtest/jobs?keyword=&status=all&page=1&page_size=20`
-  * 返回：任务队列（`job_id/strategy_id/combo_id/rule_pack_id/status/progress/...`）
-* `POST /api/v1/cb-quant/backtest/jobs`
-  * 入参：`combo_id + rule_pack_id(可选) + source_mode + windows + 回测参数`
-  * 出参：本次批次 `created_count`、`jobs`、`message`
-* `GET /api/v1/cb-quant/backtest/leaderboard?keyword=&window=all&page=1&page_size=20`
-  * 返回：结果榜单（策略维度，含 `rule_pack_id`）
-* `GET /api/v1/cb-quant/backtest/compare?keyword=&category=all`
-  * 返回：策略对比指标（return/risk/trade）
+生产建议使用“多源采集 + 统一落库”的方式，避免单源中断：
 
-WebSocket 事件（MVP）：
+* Eastmoney（当前已接入）：实时可转债主表、正股补充字段
+* `convertible-bond-crawler`：本地历史快照回填与兜底
+* AKShare（可选补充源）：用于历史数据校验与字段补齐
+* efinance（可选补充源）：东财系接口的另一套封装，便于双通道容灾
 
-* `connected`：连接成功
-* `cb_quant.stats`：5 秒推送一次回测统计
-* `heartbeat`：心跳
+### 可配置项
 
-联调示例（创建回测任务）：
+* `VNPY_CB_SYNC_INTERVAL_SECONDS`
+  * 历史快照增量同步间隔（秒），默认 `1800`
+* `VNPY_CB_HTTP_TRUST_ENV`
+  * 是否继承系统代理（`0/1`），默认 `0`
+* `VNPY_CB_ALLOW_FALLBACK_MOCK`
+  * 实时行情失败时是否允许 mock 回退（`0/1`），默认 `0`
 
-```bash
-curl -X POST "http://127.0.0.1:9000/api/v1/cb-quant/backtest/jobs" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "combo_id": "CMB-102883",
-    "source_mode": "candidate",
-    "windows": ["full", "3y", "1y"],
-    "start_date": "2025-02-13",
-    "end_date": "2026-02-13",
-    "capital_wan": 100,
-    "fee_permille": 1,
-    "benchmark": "沪深300",
-    "est_strategies": 199455
-  }'
-```
+### 下一步（生产化）
 
-实施节奏（建议）：
-
-1. `P0`（当前）：完成 CB Quant 联调 API（mock service + 稳定契约）。
-2. `P1`：`services` 从内存迁移到数据库（任务、结果、规则包持久化）。
-3. `P2`：`adapters` 对接 `MainEngine`/`EventEngine`，接入真实回测与优化任务。
-4. `P3`：补齐鉴权、审计、限流、告警、灰度发布等生产能力。
-
-工程原则：
-
-* 不修改 `vnpy/trader` 核心引擎；通过 `adapters` 调用现有能力。
-* REST 负责请求响应；WebSocket 负责事件广播，避免轮询。
-* 回测/优化等长任务必须异步化（`job_id` + 状态查询），防止阻塞 Web 进程。
-* 统一策略主键：`strategy_id = combo_id + rule_pack_id + window`（逻辑上唯一）。
-
-### 目录收口规划（移除 `convertible-bond-crawler`）
-
-为减少多仓库/多目录维护成本，后续建议将 `convertible-bond-crawler` 逻辑逐步收口到 `vnpy` 主目录内。收口方式不是“只做策略”或“只做回测”，而是采用 **策略模块 + 回测扩展** 的组合：
-
-* 策略模块：承载可转债多因子评分、过滤、调仓规则（可复用到回测和实盘）。
-* 回测扩展：承载组合持仓仿真、绩效统计、参数批量评估入口。
-* 优化引擎：继续复用 `vnpy.trader.optimize`，只替换 `evaluate_func` 到可转债回测扩展。
-
-推荐目录（示例）：
-
-* `vnpy/cbquant/strategy/multi_factor.py`
-* `vnpy/cbquant/backtesting/engine.py`
-* `vnpy/cbquant/optimize/phase_a.py`
-* `vnpy/cbquant/data/loader.py`
-
-迁移顺序：
-
-1. 先迁策略规则（纯函数化，保证输入输出稳定）。
-2. 再迁回测引擎（复用现有持仓和收益计算逻辑）。
-3. 最后迁优化入口（接入 `OptimizationSetting` 和 `run_bf_optimization`）。
+1. 将策略/任务/结果从内存迁移到统一数据库（PostgreSQL）。
+2. 为历史快照补充数据质量规则（字段缺失、口径漂移、异常波动）。
+3. 接入 Worker 队列（Celery/RQ）替代进程内线程池，支持横向扩展。
+4. 增加权限、审计、告警与失败自动重试。
 
 ## 脚本运行
 

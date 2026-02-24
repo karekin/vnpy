@@ -287,7 +287,12 @@ export default function CbQuantInfoMiningPage() {
 
   useEffect(() => {
     const controller = new AbortController();
-    const apiBase = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ?? "";
+    const configuredApiBase = [
+      process.env.NEXT_PUBLIC_CB_QUANT_API_URL,
+      process.env.NEXT_PUBLIC_API_URL,
+      "http://127.0.0.1:8000",
+    ].find((item) => typeof item === "string" && item.trim().length > 0);
+    const apiBase = (configuredApiBase ?? "http://127.0.0.1:8000").replace(/\/$/, "");
     const url = `${apiBase}/api/v1/cb-quant/market/bonds`;
 
     const loadBondMarket = async () => {

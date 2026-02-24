@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from math import ceil
 
 import requests
 
+from vnpy.web.adapters import CrawlerPhaseABacktestAdapter
 from vnpy.web.schemas import BondMarketResponse, BondMarketRow
 
 EM_BOND_LIST_URL = "https://16.push2.eastmoney.com/api/qt/clist/get"
@@ -22,6 +24,33 @@ def _to_float(value: object) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _safe_text(value: object) -> str | None:
+    if value in (None, "", "-"):
+        return None
+    text = str(value).strip()
+    if not text or text.lower() == "nan":
+        return None
+    return text
+
+
+def _to_code6(value: object) -> str:
+    text = _safe_text(value) or ""
+    if not text:
+        return ""
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if not digits:
+        return text
+    return digits.zfill(6)
+
+
+def _parse_year_text(value: object) -> float | None:
+    text = _safe_text(value)
+    if not text:
+        return None
+    text = text.replace("年", "").strip()
+    return _to_float(text)
 
 
 def _now_time() -> str:
@@ -80,8 +109,18 @@ def _chunks(values: list[str], size: int) -> list[list[str]]:
 class CbMarketService:
     """Convertible-bond market data service with Eastmoney realtime source."""
 
+    def __init__(self) -> None:
+        self._session = requests.Session()
+        # In many desktop/dev environments HTTP(S)_PROXY points to an unavailable local proxy.
+        # Disable implicit proxy usage by default; can be re-enabled via env when needed.
+        self._session.trust_env = os.getenv("VNPY_CB_HTTP_TRUST_ENV", "0") == "1"
+
+    def _http_get(self, url: str, *, params: dict[str, str]) -> requests.Response:
+        return self._session.get(url, params=params, timeout=EM_TIMEOUT)
+
     def list_bonds(self, min_volume_wan: float = 0.0) -> BondMarketResponse:
         snapshot_time = _now_time()
+        allow_fallback = os.getenv("VNPY_CB_ALLOW_FALLBACK_MOCK", "0") == "1"
 
         try:
             raw_rows = self._fetch_realtime_rows()
@@ -104,6 +143,22 @@ class CbMarketService:
                 )
             raise RuntimeError("no bond rows returned from eastmoney")
         except Exception as exc:  # noqa: BLE001
+            snapshot_rows, snapshot_date = self._load_rows_from_local_snapshot(
+                snapshot_time=snapshot_time,
+                min_volume_wan=min_volume_wan,
+            )
+            if snapshot_rows:
+                return BondMarketResponse(
+                    items=snapshot_rows,
+                    total=len(snapshot_rows),
+                    source=f"snapshot.local({snapshot_date})" if snapshot_date else "snapshot.local",
+                    snapshot_time=snapshot_time,
+                    fallback_used=True,
+                    fallback_reason=f"eastmoney unavailable: {str(exc)[:160]}",
+                )
+
+            if not allow_fallback:
+                raise RuntimeError(f"failed to load realtime bonds: {exc}") from exc
             fallback_rows = self._fallback_rows(snapshot_time)
             return BondMarketResponse(
                 items=fallback_rows,
@@ -113,6 +168,84 @@ class CbMarketService:
                 fallback_used=True,
                 fallback_reason=str(exc),
             )
+
+    def _load_rows_from_local_snapshot(
+        self,
+        *,
+        snapshot_time: str,
+        min_volume_wan: float,
+    ) -> tuple[list[BondMarketRow], str | None]:
+        try:
+            adapter = CrawlerPhaseABacktestAdapter()
+            module = adapter._load_module()
+            dataset = module.load_market_data(adapter.data_dir)
+            if not dataset:
+                return [], None
+
+            latest_date, frame = sorted(dataset, key=lambda item: item[0])[-1]
+            rows: list[BondMarketRow] = []
+
+            for _, row in frame.iterrows():
+                price = _to_float(row.get("price"))
+                if price is None or price <= 0:
+                    continue
+
+                amount_wan = _to_float(row.get("market_cap"))
+                if amount_wan is not None and amount_wan < min_volume_wan:
+                    continue
+
+                premium = _to_float(row.get("premium_rate")) or 0.0
+                convert_value = price / (1 + premium / 100) if premium > -99 else None
+                remain_years = _parse_year_text(row.get("date_remain_distance"))
+                remain_scale_yi = _to_float(row.get("remain_amount"))
+                expiry_ytm_pre_tax = _to_float(row.get("rate_expire_aftertax")) or _to_float(row.get("rate_expire"))
+                put_ytm = _to_float(row.get("rate_return"))
+                stock_market = (_safe_text(row.get("market")) or "").lower()
+
+                rows.append(
+                    BondMarketRow(
+                        bond_id=_to_code6(row.get("cb_code")),
+                        bond_name=_safe_text(row.get("cb_name")) or "",
+                        price=round(price, 3),
+                        increase_rt=round(_to_float(row.get("cb_percent")) or 0.0, 2),
+                        stock_id=f"{stock_market}{_to_code6(row.get('stock_code'))}" if stock_market else _to_code6(row.get("stock_code")),
+                        stock_name=_safe_text(row.get("stock_name")) or "",
+                        stock_price=_to_float(row.get("stock_price")),
+                        stock_increase_rt=_to_float(row.get("stock_percent")),
+                        stock_pb=_to_float(row.get("pb")),
+                        convert_price=_to_float(row.get("convert_stock_price")),
+                        pure_bond_value=_to_float(row.get("new_style")),
+                        premium_rt=round(premium, 2),
+                        convert_value=round(convert_value, 3) if convert_value is not None else 0.0,
+                        dblow=round(price + premium, 3),
+                        option_value=_to_float(row.get("old_style")),
+                        stock_volatility=_to_float(row.get("stock_stdevry")),
+                        put_trigger_price=None,
+                        redeem_trigger_price=None,
+                        float_mv_ratio=_to_float(row.get("remain_to_cap")),
+                        fund_holding_ratio=None,
+                        maturity_date=None,
+                        remain_years=remain_years,
+                        remain_scale_yi=remain_scale_yi,
+                        amount_wan=round(amount_wan, 1) if amount_wan is not None else None,
+                        turnover_rt=None,
+                        expiry_ytm_pre_tax=expiry_ytm_pre_tax,
+                        put_ytm=put_ytm,
+                        volume_wan=round(amount_wan, 1) if amount_wan is not None else 0.0,
+                        issue_scale_yi=remain_scale_yi,
+                        rating=_safe_text(row.get("rating")),
+                        listed_date=_to_date_str(row.get("issue_date")),
+                        convert_start_date=None,
+                        subscribe_date=None,
+                        source="snapshot.local",
+                        update_time=snapshot_time,
+                    )
+                )
+
+            rows.sort(key=lambda item: item.amount_wan or 0.0, reverse=True)
+            return rows, latest_date
+        except Exception:  # noqa: BLE001
+            return [], None
 
     def _fetch_realtime_rows(self) -> list[dict]:
         params = {
@@ -132,7 +265,7 @@ class CbMarketService:
             ),
         }
 
-        first = requests.get(EM_BOND_LIST_URL, params=params, timeout=EM_TIMEOUT)
+        first = self._http_get(EM_BOND_LIST_URL, params=params)
         first.raise_for_status()
         first_json = first.json()
         first_data = first_json.get("data") or {}
@@ -146,7 +279,7 @@ class CbMarketService:
         pages = ceil(total / actual_page_size)
         for page in range(2, pages + 1):
             params["pn"] = str(page)
-            resp = requests.get(EM_BOND_LIST_URL, params=params, timeout=EM_TIMEOUT)
+            resp = self._http_get(EM_BOND_LIST_URL, params=params)
             resp.raise_for_status()
             data = resp.json().get("data") or {}
             rows.extend(data.get("diff") or [])
@@ -164,7 +297,7 @@ class CbMarketService:
             "client": "WEB",
         }
 
-        resp = requests.get(EM_BOND_META_URL, params=params, timeout=EM_TIMEOUT)
+        resp = self._http_get(EM_BOND_META_URL, params=params)
         resp.raise_for_status()
         payload = resp.json().get("result") or {}
         pages = int(payload.get("pages") or 1)
@@ -172,7 +305,7 @@ class CbMarketService:
 
         for page in range(2, pages + 1):
             params["pageNumber"] = str(page)
-            page_resp = requests.get(EM_BOND_META_URL, params=params, timeout=EM_TIMEOUT)
+            page_resp = self._http_get(EM_BOND_META_URL, params=params)
             page_resp.raise_for_status()
             page_rows = (page_resp.json().get("result") or {}).get("data") or []
             rows.extend(page_rows)
@@ -203,7 +336,7 @@ class CbMarketService:
                 "secids": ",".join(secid_chunk),
                 "fields": "f2,f3,f7,f8,f12,f13,f14,f20,f21,f23",
             }
-            resp = requests.get(EM_STOCK_BATCH_URL, params=params, timeout=EM_TIMEOUT)
+            resp = self._http_get(EM_STOCK_BATCH_URL, params=params)
             resp.raise_for_status()
             diff = ((resp.json().get("data") or {}).get("diff")) or []
             for item in diff:

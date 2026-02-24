@@ -1,7 +1,7 @@
 "use client";
 
-import type { StrategyCandidateRow } from "@/components/cb-quant/mockData";
-import React, { useMemo, useState } from "react";
+import type { CandidateRow } from "@/components/cb-quant/api";
+import React, { useEffect, useMemo, useState } from "react";
 
 export type EvalWindow = "full" | "3y" | "1y";
 export type RuleSourceMode = "inherit" | "candidate" | "custom";
@@ -21,8 +21,8 @@ export type BacktestQueuePayload = {
 };
 
 type BacktestConfigPanelProps = {
-  candidates: StrategyCandidateRow[];
-  onQueueBacktest: (payload: BacktestQueuePayload) => void;
+  candidates: CandidateRow[];
+  onQueueBacktest: (payload: BacktestQueuePayload) => Promise<string>;
 };
 
 type RuleTab = "base" | "intraday" | "postclose" | "bucket";
@@ -144,34 +144,44 @@ function getSourceModeShort(mode: RuleSourceMode): string {
   return "CUS";
 }
 
-export default function BacktestConfigPanel({
-  candidates,
-  onQueueBacktest,
-}: BacktestConfigPanelProps) {
+function toDateInputValue(value: Date): string {
+  return value.toISOString().slice(0, 10);
+}
+
+export default function BacktestConfigPanel({ candidates, onQueueBacktest }: BacktestConfigPanelProps) {
   const [activeRuleTab, setActiveRuleTab] = useState<RuleTab>("base");
   const [sourceMode, setSourceMode] = useState<RuleSourceMode>("candidate");
-  const [selectedComboId, setSelectedComboId] = useState<string>(
-    candidates[0]?.comboId ?? "",
-  );
+  const [selectedComboId, setSelectedComboId] = useState<string>(candidates[0]?.comboId ?? "");
 
-  const [startDate, setStartDate] = useState<string>("2025-02-13");
-  const [endDate, setEndDate] = useState<string>("2026-02-13");
+  const [startDate, setStartDate] = useState<string>(() => {
+    const now = new Date();
+    const prev = new Date(now.getTime());
+    prev.setFullYear(prev.getFullYear() - 1);
+    return toDateInputValue(prev);
+  });
+  const [endDate, setEndDate] = useState<string>(() => toDateInputValue(new Date()));
   const [capitalWan, setCapitalWan] = useState<number>(100);
   const [feePermille, setFeePermille] = useState<number>(1);
   const [slippageBp, setSlippageBp] = useState<number>(8);
   const [benchmark, setBenchmark] = useState<string>("沪深300");
   const [workers, setWorkers] = useState<number>(4);
 
-  const [selectedWindows, setSelectedWindows] = useState<EvalWindow[]>([
-    "full",
-    "3y",
-    "1y",
-  ]);
+  const [selectedWindows, setSelectedWindows] = useState<EvalWindow[]>(["full", "3y", "1y"]);
   const [queueHint, setQueueHint] = useState<string>("");
+  const [queueing, setQueueing] = useState<boolean>(false);
 
   const selectedCandidate = useMemo(() => {
+    if (!candidates.length) {
+      return undefined;
+    }
     return candidates.find((item) => item.comboId === selectedComboId) ?? candidates[0];
   }, [candidates, selectedComboId]);
+
+  useEffect(() => {
+    if (!selectedCandidate && candidates.length) {
+      setSelectedComboId(candidates[0].comboId);
+    }
+  }, [selectedCandidate, candidates]);
 
   const selectedSnapshot = useMemo(() => {
     if (!selectedCandidate) return defaultSnapshot;
@@ -186,8 +196,7 @@ export default function BacktestConfigPanel({
 
   const estimatedStrategies = useMemo(() => {
     const base = selectedCandidate?.estCombos ?? 0;
-    const sourceScale =
-      sourceMode === "inherit" ? 1 : sourceMode === "candidate" ? 0.92 : 1.06;
+    const sourceScale = sourceMode === "inherit" ? 1 : sourceMode === "candidate" ? 0.92 : 1.06;
     const perWindow = Math.max(200, Math.round(base * sourceScale));
     return perWindow * selectedWindows.length;
   }, [selectedCandidate, sourceMode, selectedWindows.length]);
@@ -208,31 +217,54 @@ export default function BacktestConfigPanel({
     });
   };
 
-  const handleQueue = (): void => {
-    if (!selectedCandidate || selectedWindows.length === 0) {
+  const handleQueue = async (): Promise<void> => {
+    if (!selectedCandidate || selectedWindows.length === 0 || queueing) {
       return;
     }
 
-    onQueueBacktest({
-      comboId: selectedCandidate.comboId,
-      template: selectedCandidate.template,
-      rulePackId,
-      sourceMode,
-      windows: selectedWindows,
-      estStrategies: estimatedStrategies,
-      startDate,
-      endDate,
-      capitalWan,
-      feePermille,
-      benchmark,
-    });
-
-    setQueueHint(
-      `已入队 ${selectedWindows.length} 条回测任务（每个窗口各 1 条）：combo=${selectedCandidate.comboId}，rulePack=${rulePackId}`,
-    );
+    setQueueing(true);
+    try {
+      const message = await onQueueBacktest({
+        comboId: selectedCandidate.comboId,
+        template: selectedCandidate.template,
+        rulePackId,
+        sourceMode,
+        windows: selectedWindows,
+        estStrategies: estimatedStrategies,
+        startDate,
+        endDate,
+        capitalWan,
+        feePermille,
+        benchmark,
+      });
+      setQueueHint(message);
+    } catch {
+      setQueueHint("回测任务入队失败，请重试。");
+    } finally {
+      setQueueing(false);
+    }
   };
 
   const currentTabRows = selectedSnapshot[activeRuleTab];
+
+  if (!candidates.length) {
+    return (
+      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
+        <div className="border-b border-gray-200 px-5 py-4 dark:border-gray-800">
+          <h3 className="text-lg font-semibold text-gray-800 dark:text-white/90">回测配置中心</h3>
+          <p className="text-sm text-gray-500 dark:text-gray-400">请先在策略生成页产出候选组合，再在此处入队回测。</p>
+        </div>
+        <div className="p-5">
+          <a
+            href="/cb-quant/strategy-generation"
+            className="inline-flex h-10 items-center justify-center rounded-lg border border-brand-500 px-4 text-sm font-medium text-brand-500 hover:bg-brand-50 dark:border-brand-400 dark:text-brand-300 dark:hover:bg-brand-500/10"
+          >
+            去策略生成维护规则
+          </a>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
@@ -259,12 +291,12 @@ export default function BacktestConfigPanel({
               <div>
                 <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">回测对象（Combo）</label>
                 <select
-                  value={selectedComboId}
+                  value={selectedCandidate?.comboId ?? ""}
                   onChange={(event) => setSelectedComboId(event.target.value)}
                   className={inputClassName}
                 >
                   {candidates.map((candidate) => (
-                    <option key={candidate.comboId} value={candidate.comboId}>
+                    <option key={`${candidate.comboId}-${candidate.window}`} value={candidate.comboId}>
                       {candidate.comboId} · {candidate.template}
                     </option>
                   ))}
@@ -400,9 +432,7 @@ export default function BacktestConfigPanel({
             <div className="mt-4 space-y-3">
               <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-900/30">
                 <p className="text-xs text-gray-500 dark:text-gray-400">回测对象</p>
-                <p className="text-sm font-semibold text-gray-900 dark:text-white">
-                  {selectedCandidate?.comboId ?? "--"}
-                </p>
+                <p className="text-sm font-semibold text-gray-900 dark:text-white">{selectedCandidate?.comboId ?? "--"}</p>
                 <p className="text-xs text-gray-500 dark:text-gray-400">{selectedCandidate?.template ?? "--"}</p>
               </div>
               <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-900/30">
@@ -453,11 +483,11 @@ export default function BacktestConfigPanel({
 
               <button
                 type="button"
-                onClick={handleQueue}
-                disabled={selectedWindows.length === 0}
+                onClick={() => void handleQueue()}
+                disabled={selectedWindows.length === 0 || queueing || !selectedCandidate}
                 className="bg-brand-500 hover:bg-brand-600 disabled:bg-brand-300 mt-2 h-11 w-full rounded-lg text-sm font-medium text-white disabled:cursor-not-allowed"
               >
-                加入任务队列
+                {queueing ? "入队中..." : "加入任务队列"}
               </button>
 
               {queueHint && (
