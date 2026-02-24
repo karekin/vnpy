@@ -360,6 +360,71 @@ class StrategyOptimizeSummaryResponse(BaseModel):
     message: str = ""
 
 
+class StrategyBacktestMetricRow(BaseModel):
+    strategy_combo: str
+    total_return_pct: float | None = None
+    cumulative_asset_wan: float | None = None
+    annual_return_pct: float | None = None
+    max_drawdown_pct: float | None = None
+    sharpe: float | None = None
+    sortino: float | None = None
+    calmar: float | None = None
+    avg_turnover_pct: float | None = None
+    trade_cycles: float | None = None
+    profit_cycles: float | None = None
+    loss_cycles: float | None = None
+    win_rate_pct: float | None = None
+    profit_loss_ratio: float | None = None
+    avg_cycle_return_pct: float | None = None
+    max_cycle_profit_pct: float | None = None
+    max_cycle_loss_pct: float | None = None
+    max_drawdown_duration_days: float | None = None
+
+
+class StrategyBacktestCurvePoint(BaseModel):
+    date: str
+    strategy_cum_return_pct: float
+    benchmark_cum_return_pct: float
+    relative_excess_pct: float
+    absolute_excess_pct: float
+    drawdown_pct: float
+    avg_drawdown_pct: float
+
+
+class StrategyBacktestDistributionRow(BaseModel):
+    period: str
+    strategy_return_pct: float
+    benchmark_return_pct: float
+    excess_return_pct: float
+
+
+class StrategyBacktestRotationRow(BaseModel):
+    rebalance_date: str
+    weekday: str
+    holdings: str
+    holding_count: int
+    turnover_pct: float
+    period_return_pct: float
+    cumulative_return_pct: float
+    nav_wan: float
+
+
+class StrategyOptimizeTaskAnalysisResponse(BaseModel):
+    task_id: str
+    template_id: str
+    template_name: str
+    combo_id: str
+    benchmark_name: str
+    window: WindowName
+    metric_rows: list[StrategyBacktestMetricRow]
+    curve: list[StrategyBacktestCurvePoint]
+    yearly_distribution: list[StrategyBacktestDistributionRow]
+    monthly_distribution: list[StrategyBacktestDistributionRow]
+    weekly_distribution: list[StrategyBacktestDistributionRow]
+    rotations: list[StrategyBacktestRotationRow]
+    message: str = ""
+
+
 class WsEvent(BaseModel):
     event: str
     payload: dict

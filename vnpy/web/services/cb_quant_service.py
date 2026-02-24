@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from itertools import combinations, islice, product
 import json
-from math import comb
+from math import ceil, comb, sqrt
 from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Any, Iterable, TypeVar
@@ -26,7 +26,12 @@ from vnpy.web.schemas import (
     CandidateListResponse,
     CandidateRow,
     HistoryDataSummaryResponse,
+    StrategyBacktestCurvePoint,
+    StrategyBacktestDistributionRow,
+    StrategyBacktestMetricRow,
+    StrategyBacktestRotationRow,
     StrategyOptimizeResultRow,
+    StrategyOptimizeTaskAnalysisResponse,
     StrategyOptimizeTaskCreateRequest,
     StrategyOptimizeTaskCreateResponse,
     StrategyOptimizeTaskDetailResponse,
@@ -722,6 +727,160 @@ class CbQuantService:
             top_bonds=self._optimize_top_bonds.get(task_id, []),
         )
 
+    def get_optimize_task_analysis(
+        self,
+        *,
+        task_id: str,
+        combo_id: str | None = None,
+        initial_capital_wan: float = 100.0,
+    ) -> StrategyOptimizeTaskAnalysisResponse | None:
+        task = self._get_optimize_task(task_id)
+        if not task:
+            return None
+
+        ranked_rows = self._optimize_results.get(task_id, [])
+        selected_row = None
+        if combo_id:
+            selected_row = next((row for row in ranked_rows if row.combo_id == combo_id), None)
+        if selected_row is None and ranked_rows:
+            selected_row = ranked_rows[0]
+
+        selected_combo_id = combo_id or (selected_row.combo_id if selected_row else "CMB-000001")
+        if selected_row is not None:
+            setting = dict(selected_row.params)
+        else:
+            setting = self._resolve_setting_for_combo(combo_id=selected_combo_id, template_name=task.template_name)
+
+        window = "full" if "full" in task.windows else (task.windows[0] if task.windows else "full")
+        start_date = self._parse_iso_date(task.start_date)
+        end_date = self._parse_iso_date(task.end_date)
+
+        dataset = self._adapter.load_market_data()
+        sliced = self._adapter._slice_dataset(
+            dataset=dataset,
+            window_name=window,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        message_parts: list[str] = []
+        if not sliced and (start_date or end_date):
+            sliced = self._adapter._slice_dataset(
+                dataset=dataset,
+                window_name=window,
+                start_date=None,
+                end_date=None,
+            )
+            if sliced:
+                message_parts.append(
+                    f"指定区间无可用快照，已回退到 {sliced[0][0]}~{sliced[-1][0]}。"
+                )
+
+        if not sliced:
+            return StrategyOptimizeTaskAnalysisResponse(
+                task_id=task.task_id,
+                template_id=task.template_id,
+                template_name=task.template_name,
+                combo_id=selected_combo_id,
+                benchmark_name="转债等权",
+                window=window,
+                metric_rows=[],
+                curve=[],
+                yearly_distribution=[],
+                monthly_distribution=[],
+                weekly_distribution=[],
+                rotations=[],
+                message="没有可用历史快照，请先同步历史快照后重试。",
+            )
+
+        module = self._adapter._load_module()
+        strategy = self._simulate_detailed_strategy(
+            module=module,
+            dataset=sliced,
+            setting=setting,
+            initial_capital_wan=initial_capital_wan,
+        )
+        benchmark = self._simulate_equal_weight_benchmark(
+            dataset=sliced,
+            initial_capital_wan=initial_capital_wan,
+        )
+
+        strategy_metrics = self._compute_backtest_metrics(
+            daily_returns=strategy["daily_returns"],
+            nav_series=strategy["nav_series"],
+            initial_capital_wan=initial_capital_wan,
+            turnover_pct=strategy["turnover_pct"],
+            trade_pnls_pct=strategy["trade_pnls_pct"],
+        )
+        benchmark_metrics = self._compute_backtest_metrics(
+            daily_returns=benchmark["daily_returns"],
+            nav_series=benchmark["nav_series"],
+            initial_capital_wan=initial_capital_wan,
+            turnover_pct=[0.0 for _ in benchmark["daily_returns"]],
+            trade_pnls_pct=[ret * 100.0 for ret in benchmark["daily_returns"][1:]],
+        )
+        metric_rows = self._build_metric_rows(
+            strategy_metrics=strategy_metrics,
+            benchmark_metrics=benchmark_metrics,
+        )
+
+        curve_rows: list[StrategyBacktestCurvePoint] = []
+        for index, trade_date in enumerate(strategy["dates"]):
+            strategy_cum = strategy["cum_return_pct"][index]
+            benchmark_cum = benchmark["cum_return_pct"][index]
+            drawdown = strategy["drawdown_pct"][index]
+            avg_drawdown = strategy["avg_drawdown_pct"][index]
+            curve_rows.append(
+                StrategyBacktestCurvePoint(
+                    date=trade_date,
+                    strategy_cum_return_pct=round(strategy_cum, 4),
+                    benchmark_cum_return_pct=round(benchmark_cum, 4),
+                    relative_excess_pct=round(strategy_cum - benchmark_cum, 4),
+                    absolute_excess_pct=round(strategy_cum, 4),
+                    drawdown_pct=round(drawdown, 4),
+                    avg_drawdown_pct=round(avg_drawdown, 4),
+                )
+            )
+
+        yearly_distribution = self._build_distribution_rows(
+            dates=strategy["dates"],
+            strategy_daily_returns=strategy["daily_returns"],
+            benchmark_daily_returns=benchmark["daily_returns"],
+            period="yearly",
+        )
+        monthly_distribution = self._build_distribution_rows(
+            dates=strategy["dates"],
+            strategy_daily_returns=strategy["daily_returns"],
+            benchmark_daily_returns=benchmark["daily_returns"],
+            period="monthly",
+        )
+        weekly_distribution = self._build_distribution_rows(
+            dates=strategy["dates"],
+            strategy_daily_returns=strategy["daily_returns"],
+            benchmark_daily_returns=benchmark["daily_returns"],
+            period="weekly",
+        )
+
+        if not ranked_rows:
+            message_parts.append("当前任务尚未生成榜单，分析结果基于当前参数直接重算。")
+        if strategy["effective_trade_count"] <= 0:
+            message_parts.append("未产生有效交易策略，请放宽阈值或调整参数范围。")
+
+        return StrategyOptimizeTaskAnalysisResponse(
+            task_id=task.task_id,
+            template_id=task.template_id,
+            template_name=task.template_name,
+            combo_id=selected_combo_id,
+            benchmark_name="转债等权",
+            window=window,
+            metric_rows=metric_rows,
+            curve=curve_rows,
+            yearly_distribution=yearly_distribution,
+            monthly_distribution=monthly_distribution,
+            weekly_distribution=weekly_distribution,
+            rotations=strategy["rotations"],
+            message=" ".join(message_parts).strip(),
+        )
+
     def get_optimize_summary(
         self,
         *,
@@ -862,6 +1021,18 @@ class CbQuantService:
                     or evaluated % max(1, total // 100) == 0
                     or evaluated % 500 == 0
                 ):
+                    ranked_snapshot = [
+                        item.model_copy(update={"rank": idx + 1})
+                        for idx, item in enumerate(
+                            sorted(
+                                ranking_rows,
+                                key=lambda item: (item.robust_score, item.cagr, -item.mdd),
+                                reverse=True,
+                            )
+                        )
+                    ]
+                    self._optimize_results[task_id] = ranked_snapshot
+
                     elapsed_seconds = max(1.0, (datetime.now() - start_at).total_seconds())
                     remain = max(0, total - evaluated)
                     per_cost = elapsed_seconds / evaluated
@@ -869,7 +1040,7 @@ class CbQuantService:
                     self._update_optimize_task(
                         task_id,
                         evaluated_combinations=evaluated,
-                        progress=max(1, min(99, int(evaluated / total * 100))),
+                        progress=max(1, min(99, ceil(evaluated / total * 100))),
                         eta=f"{eta_minutes}m" if remain else "done",
                         message=f"已评估 {evaluated}/{total}",
                     )
@@ -921,7 +1092,7 @@ class CbQuantService:
             self._update_optimize_task(
                 task_id,
                 status="failed",
-                progress=max(1, min(99, int(evaluated / total * 100))) if evaluated > 0 else 0,
+                progress=max(1, min(99, ceil(evaluated / total * 100))) if evaluated > 0 else 0,
                 evaluated_combinations=evaluated,
                 eta="--",
                 finished_at=_now_readable(),
@@ -1419,6 +1590,474 @@ class CbQuantService:
             if isinstance(value, (int, float, str, bool)) or value is None:
                 payload[key] = value
         return payload
+
+    def _simulate_detailed_strategy(
+        self,
+        *,
+        module: Any,
+        dataset: list[tuple[str, Any]],
+        setting: dict[str, Any],
+        initial_capital_wan: float,
+    ) -> dict[str, Any]:
+        cfg = module.build_strategy_config(setting)
+        head_count = max(1, int(round(self._to_float(setting.get("head_count"), 10.0))))
+        max_hold_num = max(1, int(round(self._to_float(setting.get("max_hold_num"), 12.0))))
+        until_win = bool(setting.get("until_win", False))
+        per_position = 1.0 / max_hold_num if max_hold_num > 0 else 0.0
+
+        dates: list[str] = []
+        daily_returns: list[float] = []
+        nav_series: list[float] = []
+        cum_return_pct: list[float] = []
+        drawdown_pct: list[float] = []
+        avg_drawdown_pct: list[float] = []
+        turnover_pct: list[float] = []
+        trade_pnls_pct: list[float] = []
+        rotations: list[StrategyBacktestRotationRow] = []
+
+        holdings: list[dict[str, Any]] = []
+        nav = 1.0
+        peak = 1.0
+        drawdown_sum = 0.0
+        drawdown_count = 0
+        effective_trade_count = 0
+        prev_codes: set[str] = set()
+
+        for index, (trade_date, df_all) in enumerate(dataset):
+            candidate = module.build_candidates(df_all, trade_date, cfg, head_count)
+            if candidate is None:
+                candidate = df_all.iloc[0:0]
+            if candidate is None or candidate.empty:
+                candidate_codes: set[str] = set()
+            else:
+                candidate_codes = set(candidate["cb_code"].astype(str).tolist())
+
+            if index == 0:
+                if candidate is not None and not candidate.empty:
+                    for _, row in candidate.head(max_hold_num).iterrows():
+                        price = self._to_float(row.get("price"), 0.0)
+                        if price <= 0:
+                            continue
+                        holdings.append(
+                            {
+                                "code": str(row.get("cb_code", "")),
+                                "buy_price": price,
+                                "last_price": price,
+                                "ratio": per_position,
+                            }
+                        )
+                prev_codes = {item["code"] for item in holdings}
+                dates.append(trade_date)
+                daily_returns.append(0.0)
+                nav_series.append(nav)
+                cum_return_pct.append(0.0)
+                drawdown_pct.append(0.0)
+                avg_drawdown_pct.append(0.0)
+                turnover_pct.append(0.0)
+                rotations.append(
+                    StrategyBacktestRotationRow(
+                        rebalance_date=trade_date,
+                        weekday=self._weekday_cn(trade_date),
+                        holdings=self._format_holdings_text(holdings=holdings, frame=df_all),
+                        holding_count=len(holdings),
+                        turnover_pct=0.0,
+                        period_return_pct=0.0,
+                        cumulative_return_pct=0.0,
+                        nav_wan=round(initial_capital_wan * nav, 4),
+                    )
+                )
+                continue
+
+            day_return = 0.0
+            for item in holdings:
+                code = str(item.get("code", ""))
+                if code not in df_all.index:
+                    continue
+                row = df_all.loc[code]
+                cur_price = self._to_float(row.get("price"), self._to_float(item.get("last_price"), 0.0))
+                last_price = max(1e-8, self._to_float(item.get("last_price"), cur_price))
+                ratio = self._to_float(item.get("ratio"), 0.0)
+                day_return += ((cur_price - last_price) / last_price) * ratio
+                item["last_price"] = cur_price
+
+            nav *= 1.0 + day_return
+            if nav > peak:
+                peak = nav
+            drawdown = (nav / peak - 1.0) * 100 if peak > 0 else 0.0
+            drawdown_sum += drawdown
+            drawdown_count += 1
+
+            keep_list: list[dict[str, Any]] = []
+            sell_list: list[dict[str, Any]] = []
+
+            for item in holdings:
+                code = str(item.get("code", ""))
+                if code not in df_all.index:
+                    sell_list.append(item)
+                    continue
+                row = df_all.loc[code]
+                cur_price = self._to_float(row.get("price"), self._to_float(item.get("last_price"), 0.0))
+                is_ransom = str(row.get("is_ransom_flag", "False")) == "True"
+                if is_ransom:
+                    sell_list.append(item)
+                    continue
+                if until_win and cur_price <= self._to_float(item.get("buy_price"), cur_price):
+                    keep_list.append(item)
+                    continue
+                if code in candidate_codes:
+                    keep_list.append(item)
+                else:
+                    sell_list.append(item)
+
+            for item in sell_list:
+                code = str(item.get("code", ""))
+                if code in df_all.index:
+                    row = df_all.loc[code]
+                    sell_price = self._to_float(row.get("price"), self._to_float(item.get("last_price"), 0.0))
+                else:
+                    sell_price = self._to_float(item.get("last_price"), 0.0)
+                buy_price = max(1e-8, self._to_float(item.get("buy_price"), sell_price))
+                pnl_pct = (sell_price - buy_price) / buy_price * 100.0
+                trade_pnls_pct.append(pnl_pct)
+                effective_trade_count += 1
+
+            existing_codes = {str(item.get("code", "")) for item in keep_list}
+            for _, row in candidate.iterrows():
+                if len(keep_list) >= max_hold_num:
+                    break
+                code = str(row.get("cb_code", ""))
+                if code in existing_codes:
+                    continue
+                price = self._to_float(row.get("price"), 0.0)
+                if price <= 0:
+                    continue
+                keep_list.append(
+                    {
+                        "code": code,
+                        "buy_price": price,
+                        "last_price": price,
+                        "ratio": per_position,
+                    }
+                )
+                existing_codes.add(code)
+
+            current_codes = {str(item.get("code", "")) for item in keep_list}
+            if prev_codes:
+                changed_count = len(prev_codes - current_codes) + len(current_codes - prev_codes)
+                day_turnover = changed_count / max(1, len(prev_codes)) * 100.0
+            else:
+                changed_count = len(current_codes)
+                day_turnover = changed_count / max(1, max_hold_num) * 100.0
+
+            holdings = keep_list
+            prev_codes = current_codes
+
+            dates.append(trade_date)
+            daily_returns.append(day_return)
+            nav_series.append(nav)
+            cum_return_pct.append((nav - 1.0) * 100.0)
+            drawdown_pct.append(drawdown)
+            avg_drawdown_pct.append(drawdown_sum / max(1, drawdown_count))
+            turnover_pct.append(day_turnover)
+
+            if changed_count > 0 or index == len(dataset) - 1:
+                rotations.append(
+                    StrategyBacktestRotationRow(
+                        rebalance_date=trade_date,
+                        weekday=self._weekday_cn(trade_date),
+                        holdings=self._format_holdings_text(holdings=holdings, frame=df_all),
+                        holding_count=len(holdings),
+                        turnover_pct=round(day_turnover, 4),
+                        period_return_pct=round(day_return * 100.0, 4),
+                        cumulative_return_pct=round((nav - 1.0) * 100.0, 4),
+                        nav_wan=round(initial_capital_wan * nav, 4),
+                    )
+                )
+
+        return {
+            "dates": dates,
+            "daily_returns": daily_returns,
+            "nav_series": nav_series,
+            "cum_return_pct": cum_return_pct,
+            "drawdown_pct": drawdown_pct,
+            "avg_drawdown_pct": avg_drawdown_pct,
+            "turnover_pct": turnover_pct,
+            "trade_pnls_pct": trade_pnls_pct,
+            "rotations": rotations,
+            "effective_trade_count": effective_trade_count,
+        }
+
+    def _simulate_equal_weight_benchmark(
+        self,
+        *,
+        dataset: list[tuple[str, Any]],
+        initial_capital_wan: float,
+    ) -> dict[str, Any]:
+        dates: list[str] = []
+        daily_returns: list[float] = []
+        nav_series: list[float] = []
+        cum_return_pct: list[float] = []
+
+        nav = 1.0
+        for index, (trade_date, frame) in enumerate(dataset):
+            if index == 0:
+                dates.append(trade_date)
+                daily_returns.append(0.0)
+                nav_series.append(nav)
+                cum_return_pct.append(0.0)
+                continue
+
+            prev_frame = dataset[index - 1][1]
+            daily_ret = 0.0
+            try:
+                common_idx = prev_frame.index.intersection(frame.index)
+                if len(common_idx) > 0 and "price" in prev_frame.columns and "price" in frame.columns:
+                    prev_prices = prev_frame.loc[common_idx, "price"].astype(float)
+                    cur_prices = frame.loc[common_idx, "price"].astype(float)
+                    valid = prev_prices > 0
+                    if bool(valid.any()):
+                        returns = (cur_prices[valid] - prev_prices[valid]) / prev_prices[valid]
+                        daily_ret = float(returns.mean())
+            except Exception:
+                daily_ret = 0.0
+
+            nav *= 1.0 + daily_ret
+            dates.append(trade_date)
+            daily_returns.append(daily_ret)
+            nav_series.append(nav)
+            cum_return_pct.append((nav - 1.0) * 100.0)
+
+        return {
+            "dates": dates,
+            "daily_returns": daily_returns,
+            "nav_series": nav_series,
+            "cum_return_pct": cum_return_pct,
+            "final_asset_wan": round(initial_capital_wan * nav, 4),
+        }
+
+    def _compute_backtest_metrics(
+        self,
+        *,
+        daily_returns: list[float],
+        nav_series: list[float],
+        initial_capital_wan: float,
+        turnover_pct: list[float] | None = None,
+        trade_pnls_pct: list[float] | None = None,
+    ) -> dict[str, float | None]:
+        if not nav_series:
+            nav_series = [1.0]
+        eval_returns = daily_returns[1:] if len(daily_returns) > 1 else list(daily_returns)
+        sample_days = len(eval_returns)
+        final_nav = nav_series[-1]
+
+        total_return_pct = (final_nav - 1.0) * 100.0
+        cumulative_asset_wan = initial_capital_wan * final_nav
+        years = max(sample_days / 244.0, 1.0 / 244.0)
+        annual_return_pct = (((max(final_nav, 1e-9)) ** (1.0 / years)) - 1.0) * 100.0
+
+        peak = nav_series[0]
+        worst_drawdown = 0.0
+        drawdown_duration = 0
+        max_drawdown_duration = 0
+        for nav in nav_series:
+            if nav > peak:
+                peak = nav
+                drawdown_duration = 0
+            drawdown = nav / peak - 1.0 if peak > 0 else 0.0
+            if drawdown < 0:
+                drawdown_duration += 1
+                if drawdown_duration > max_drawdown_duration:
+                    max_drawdown_duration = drawdown_duration
+            if drawdown < worst_drawdown:
+                worst_drawdown = drawdown
+
+        mean_daily = sum(eval_returns) / sample_days if sample_days else 0.0
+        if sample_days > 1:
+            variance = sum((value - mean_daily) ** 2 for value in eval_returns) / (sample_days - 1)
+            daily_std = sqrt(max(variance, 0.0))
+        else:
+            daily_std = 0.0
+        downside_values = [value for value in eval_returns if value < 0]
+        downside_std = sqrt(sum(value * value for value in downside_values) / len(downside_values)) if downside_values else 0.0
+        sharpe = mean_daily / daily_std * sqrt(244.0) if daily_std > 1e-12 else 0.0
+        sortino = mean_daily / downside_std * sqrt(244.0) if downside_std > 1e-12 else 0.0
+        max_drawdown_pct = worst_drawdown * 100.0
+        calmar = annual_return_pct / abs(max_drawdown_pct) if abs(max_drawdown_pct) > 1e-9 else 0.0
+
+        turnover_values = turnover_pct or []
+        avg_turnover_pct = sum(turnover_values) / len(turnover_values) if turnover_values else 0.0
+
+        cycle_returns = trade_pnls_pct or []
+        trade_cycles = len(cycle_returns)
+        profit_cycles = len([value for value in cycle_returns if value > 0])
+        loss_cycles = len([value for value in cycle_returns if value <= 0])
+        win_rate_pct = (profit_cycles / trade_cycles * 100.0) if trade_cycles > 0 else 0.0
+        avg_cycle_return_pct = (sum(cycle_returns) / trade_cycles) if trade_cycles > 0 else None
+        max_cycle_profit_pct = max(cycle_returns) if trade_cycles > 0 else None
+        max_cycle_loss_pct = min(cycle_returns) if trade_cycles > 0 else None
+        avg_profit = (
+            sum(value for value in cycle_returns if value > 0) / profit_cycles
+            if profit_cycles > 0
+            else None
+        )
+        avg_loss = (
+            abs(sum(value for value in cycle_returns if value <= 0) / loss_cycles)
+            if loss_cycles > 0
+            else None
+        )
+        if avg_profit is None or avg_loss is None or avg_loss <= 1e-9:
+            profit_loss_ratio = None
+        else:
+            profit_loss_ratio = avg_profit / avg_loss
+
+        return {
+            "total_return_pct": round(total_return_pct, 4),
+            "cumulative_asset_wan": round(cumulative_asset_wan, 4),
+            "annual_return_pct": round(annual_return_pct, 4),
+            "max_drawdown_pct": round(max_drawdown_pct, 4),
+            "sharpe": round(sharpe, 4),
+            "sortino": round(sortino, 4),
+            "calmar": round(calmar, 4),
+            "avg_turnover_pct": round(avg_turnover_pct, 4),
+            "trade_cycles": float(trade_cycles),
+            "profit_cycles": float(profit_cycles),
+            "loss_cycles": float(loss_cycles),
+            "win_rate_pct": round(win_rate_pct, 4),
+            "profit_loss_ratio": round(profit_loss_ratio, 4) if profit_loss_ratio is not None else None,
+            "avg_cycle_return_pct": round(avg_cycle_return_pct, 4) if avg_cycle_return_pct is not None else None,
+            "max_cycle_profit_pct": round(max_cycle_profit_pct, 4) if max_cycle_profit_pct is not None else None,
+            "max_cycle_loss_pct": round(max_cycle_loss_pct, 4) if max_cycle_loss_pct is not None else None,
+            "max_drawdown_duration_days": float(max_drawdown_duration),
+        }
+
+    def _build_metric_rows(
+        self,
+        *,
+        strategy_metrics: dict[str, float | None],
+        benchmark_metrics: dict[str, float | None],
+    ) -> list[StrategyBacktestMetricRow]:
+        metric_keys = [
+            "total_return_pct",
+            "cumulative_asset_wan",
+            "annual_return_pct",
+            "max_drawdown_pct",
+            "sharpe",
+            "sortino",
+            "calmar",
+            "avg_turnover_pct",
+            "trade_cycles",
+            "profit_cycles",
+            "loss_cycles",
+            "win_rate_pct",
+            "profit_loss_ratio",
+            "avg_cycle_return_pct",
+            "max_cycle_profit_pct",
+            "max_cycle_loss_pct",
+            "max_drawdown_duration_days",
+        ]
+
+        relative_metrics: dict[str, float | None] = {}
+        absolute_metrics: dict[str, float | None] = {}
+        for key in metric_keys:
+            strategy_value = strategy_metrics.get(key)
+            benchmark_value = benchmark_metrics.get(key)
+            if strategy_value is None or benchmark_value is None:
+                relative_metrics[key] = None
+            else:
+                relative_metrics[key] = round(strategy_value - benchmark_value, 4)
+            absolute_metrics[key] = strategy_value
+
+        return [
+            StrategyBacktestMetricRow(strategy_combo="当前策略", **strategy_metrics),
+            StrategyBacktestMetricRow(strategy_combo="基准策略", **benchmark_metrics),
+            StrategyBacktestMetricRow(strategy_combo="相对超额", **relative_metrics),
+            StrategyBacktestMetricRow(strategy_combo="绝对超额", **absolute_metrics),
+        ]
+
+    def _build_distribution_rows(
+        self,
+        *,
+        dates: list[str],
+        strategy_daily_returns: list[float],
+        benchmark_daily_returns: list[float],
+        period: str,
+    ) -> list[StrategyBacktestDistributionRow]:
+        grouped: dict[str, dict[str, float]] = {}
+        ordered_keys: list[str] = []
+        for index in range(1, min(len(dates), len(strategy_daily_returns), len(benchmark_daily_returns))):
+            date_text = dates[index]
+            try:
+                trade_dt = datetime.strptime(date_text, "%Y-%m-%d")
+            except ValueError:
+                continue
+
+            if period == "yearly":
+                key = f"{trade_dt.year}年"
+            elif period == "monthly":
+                key = f"{trade_dt.year}-{trade_dt.month:02d}"
+            else:
+                iso = trade_dt.isocalendar()
+                key = f"{iso.year}-W{iso.week:02d}"
+
+            if key not in grouped:
+                grouped[key] = {"strategy": 1.0, "benchmark": 1.0}
+                ordered_keys.append(key)
+
+            grouped[key]["strategy"] *= 1.0 + strategy_daily_returns[index]
+            grouped[key]["benchmark"] *= 1.0 + benchmark_daily_returns[index]
+
+        rows: list[StrategyBacktestDistributionRow] = []
+        for key in ordered_keys:
+            strategy_ret = (grouped[key]["strategy"] - 1.0) * 100.0
+            benchmark_ret = (grouped[key]["benchmark"] - 1.0) * 100.0
+            rows.append(
+                StrategyBacktestDistributionRow(
+                    period=key,
+                    strategy_return_pct=round(strategy_ret, 4),
+                    benchmark_return_pct=round(benchmark_ret, 4),
+                    excess_return_pct=round(strategy_ret - benchmark_ret, 4),
+                )
+            )
+        return rows
+
+    def _format_holdings_text(self, *, holdings: list[dict[str, Any]], frame: Any) -> str:
+        if not holdings:
+            return "--"
+        labels: list[str] = []
+        for item in holdings[:12]:
+            code = str(item.get("code", ""))
+            name = ""
+            if code in frame.index:
+                row = frame.loc[code]
+                if hasattr(row, "iloc") and not isinstance(row, dict):
+                    try:
+                        row = row.iloc[0]
+                    except Exception:
+                        pass
+                name = str(row.get("cb_name", "")).strip()
+            if not name:
+                name = code
+            labels.append(f"{name}({code})")
+        suffix = f" 等{len(holdings)}只" if len(holdings) > 12 else ""
+        return "，".join(labels) + suffix
+
+    @staticmethod
+    def _weekday_cn(date_text: str) -> str:
+        weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+        try:
+            idx = datetime.strptime(date_text, "%Y-%m-%d").weekday()
+            return weekdays[idx]
+        except ValueError:
+            return "--"
+
+    @staticmethod
+    def _parse_iso_date(value: str | None) -> date | None:
+        if not value:
+            return None
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            return None
 
     def _resolve_setting_for_combo(self, *, combo_id: str, template_name: str) -> dict[str, Any]:
         setting = self._candidate_settings.get(combo_id)

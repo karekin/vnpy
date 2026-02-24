@@ -16,6 +16,7 @@ from vnpy.web.schemas import (
     OperationResponse,
     StrategyOptimizeTaskCreateRequest,
     StrategyOptimizeTaskCreateResponse,
+    StrategyOptimizeTaskAnalysisResponse,
     StrategyOptimizeTaskDetailResponse,
     StrategyOptimizeTaskListResponse,
     StrategyOptimizeSummaryResponse,
@@ -236,6 +237,22 @@ def list_optimize_tasks(
 @router.get("/strategy/optimize-tasks/{task_id}", response_model=StrategyOptimizeTaskDetailResponse)
 def get_optimize_task_detail(task_id: str) -> StrategyOptimizeTaskDetailResponse:
     detail = cb_quant_service.get_optimize_task_detail(task_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail=f"optimize task not found: {task_id}")
+    return detail
+
+
+@router.get("/strategy/optimize-tasks/{task_id}/analysis", response_model=StrategyOptimizeTaskAnalysisResponse)
+def get_optimize_task_analysis(
+    task_id: str,
+    combo_id: str | None = Query(default=None),
+    initial_capital_wan: float = Query(default=100.0, gt=0),
+) -> StrategyOptimizeTaskAnalysisResponse:
+    detail = cb_quant_service.get_optimize_task_analysis(
+        task_id=task_id,
+        combo_id=combo_id,
+        initial_capital_wan=initial_capital_wan,
+    )
     if not detail:
         raise HTTPException(status_code=404, detail=f"optimize task not found: {task_id}")
     return detail

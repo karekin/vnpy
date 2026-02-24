@@ -227,6 +227,71 @@ export type StrategyOptimizeSummary = {
   message: string;
 };
 
+export type StrategyBacktestMetricRow = {
+  strategyCombo: string;
+  totalReturnPct: number | null;
+  cumulativeAssetWan: number | null;
+  annualReturnPct: number | null;
+  maxDrawdownPct: number | null;
+  sharpe: number | null;
+  sortino: number | null;
+  calmar: number | null;
+  avgTurnoverPct: number | null;
+  tradeCycles: number | null;
+  profitCycles: number | null;
+  lossCycles: number | null;
+  winRatePct: number | null;
+  profitLossRatio: number | null;
+  avgCycleReturnPct: number | null;
+  maxCycleProfitPct: number | null;
+  maxCycleLossPct: number | null;
+  maxDrawdownDurationDays: number | null;
+};
+
+export type StrategyBacktestCurvePoint = {
+  date: string;
+  strategyCumReturnPct: number;
+  benchmarkCumReturnPct: number;
+  relativeExcessPct: number;
+  absoluteExcessPct: number;
+  drawdownPct: number;
+  avgDrawdownPct: number;
+};
+
+export type StrategyBacktestDistributionRow = {
+  period: string;
+  strategyReturnPct: number;
+  benchmarkReturnPct: number;
+  excessReturnPct: number;
+};
+
+export type StrategyBacktestRotationRow = {
+  rebalanceDate: string;
+  weekday: string;
+  holdings: string;
+  holdingCount: number;
+  turnoverPct: number;
+  periodReturnPct: number;
+  cumulativeReturnPct: number;
+  navWan: number;
+};
+
+export type StrategyOptimizeTaskAnalysis = {
+  taskId: string;
+  templateId: string;
+  templateName: string;
+  comboId: string;
+  benchmarkName: string;
+  window: WindowName;
+  metricRows: StrategyBacktestMetricRow[];
+  curve: StrategyBacktestCurvePoint[];
+  yearlyDistribution: StrategyBacktestDistributionRow[];
+  monthlyDistribution: StrategyBacktestDistributionRow[];
+  weeklyDistribution: StrategyBacktestDistributionRow[];
+  rotations: StrategyBacktestRotationRow[];
+  message: string;
+};
+
 export type FactorCatalogFactor = {
   id: string;
   factorName: string;
@@ -468,6 +533,71 @@ type StrategyTopBondRowApi = {
   update_time: string;
 };
 
+type StrategyBacktestMetricRowApi = {
+  strategy_combo: string;
+  total_return_pct: number | null;
+  cumulative_asset_wan: number | null;
+  annual_return_pct: number | null;
+  max_drawdown_pct: number | null;
+  sharpe: number | null;
+  sortino: number | null;
+  calmar: number | null;
+  avg_turnover_pct: number | null;
+  trade_cycles: number | null;
+  profit_cycles: number | null;
+  loss_cycles: number | null;
+  win_rate_pct: number | null;
+  profit_loss_ratio: number | null;
+  avg_cycle_return_pct: number | null;
+  max_cycle_profit_pct: number | null;
+  max_cycle_loss_pct: number | null;
+  max_drawdown_duration_days: number | null;
+};
+
+type StrategyBacktestCurvePointApi = {
+  date: string;
+  strategy_cum_return_pct: number;
+  benchmark_cum_return_pct: number;
+  relative_excess_pct: number;
+  absolute_excess_pct: number;
+  drawdown_pct: number;
+  avg_drawdown_pct: number;
+};
+
+type StrategyBacktestDistributionRowApi = {
+  period: string;
+  strategy_return_pct: number;
+  benchmark_return_pct: number;
+  excess_return_pct: number;
+};
+
+type StrategyBacktestRotationRowApi = {
+  rebalance_date: string;
+  weekday: string;
+  holdings: string;
+  holding_count: number;
+  turnover_pct: number;
+  period_return_pct: number;
+  cumulative_return_pct: number;
+  nav_wan: number;
+};
+
+type StrategyOptimizeTaskAnalysisApi = {
+  task_id: string;
+  template_id: string;
+  template_name: string;
+  combo_id: string;
+  benchmark_name: string;
+  window: WindowName;
+  metric_rows: StrategyBacktestMetricRowApi[];
+  curve: StrategyBacktestCurvePointApi[];
+  yearly_distribution: StrategyBacktestDistributionRowApi[];
+  monthly_distribution: StrategyBacktestDistributionRowApi[];
+  weekly_distribution: StrategyBacktestDistributionRowApi[];
+  rotations: StrategyBacktestRotationRowApi[];
+  message: string;
+};
+
 const configuredApiBase = [
   process.env.NEXT_PUBLIC_CB_QUANT_API_URL,
   process.env.NEXT_PUBLIC_API_URL,
@@ -491,14 +621,28 @@ function buildUrl(path: string, params?: Record<string, string | number | boolea
 }
 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    cache: "no-store",
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-    ...init,
-  });
+  const controller = new AbortController();
+  const timeoutMs = 15_000;
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      cache: "no-store",
+      headers: {
+        "Content-Type": "application/json",
+        ...(init?.headers ?? {}),
+      },
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new Error(`请求超时（>${timeoutMs / 1000}s）: ${url}`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 
   if (!response.ok) {
     const contentType = response.headers.get("content-type") ?? "";
@@ -721,6 +865,63 @@ function mapTopBondRow(row: StrategyTopBondRowApi): StrategyTopBondRow {
     amountWan: row.amount_wan,
     score: row.score,
     updateTime: row.update_time,
+  };
+}
+
+function mapBacktestMetricRow(row: StrategyBacktestMetricRowApi): StrategyBacktestMetricRow {
+  return {
+    strategyCombo: row.strategy_combo,
+    totalReturnPct: row.total_return_pct,
+    cumulativeAssetWan: row.cumulative_asset_wan,
+    annualReturnPct: row.annual_return_pct,
+    maxDrawdownPct: row.max_drawdown_pct,
+    sharpe: row.sharpe,
+    sortino: row.sortino,
+    calmar: row.calmar,
+    avgTurnoverPct: row.avg_turnover_pct,
+    tradeCycles: row.trade_cycles,
+    profitCycles: row.profit_cycles,
+    lossCycles: row.loss_cycles,
+    winRatePct: row.win_rate_pct,
+    profitLossRatio: row.profit_loss_ratio,
+    avgCycleReturnPct: row.avg_cycle_return_pct,
+    maxCycleProfitPct: row.max_cycle_profit_pct,
+    maxCycleLossPct: row.max_cycle_loss_pct,
+    maxDrawdownDurationDays: row.max_drawdown_duration_days,
+  };
+}
+
+function mapBacktestCurvePoint(row: StrategyBacktestCurvePointApi): StrategyBacktestCurvePoint {
+  return {
+    date: row.date,
+    strategyCumReturnPct: row.strategy_cum_return_pct,
+    benchmarkCumReturnPct: row.benchmark_cum_return_pct,
+    relativeExcessPct: row.relative_excess_pct,
+    absoluteExcessPct: row.absolute_excess_pct,
+    drawdownPct: row.drawdown_pct,
+    avgDrawdownPct: row.avg_drawdown_pct,
+  };
+}
+
+function mapBacktestDistributionRow(row: StrategyBacktestDistributionRowApi): StrategyBacktestDistributionRow {
+  return {
+    period: row.period,
+    strategyReturnPct: row.strategy_return_pct,
+    benchmarkReturnPct: row.benchmark_return_pct,
+    excessReturnPct: row.excess_return_pct,
+  };
+}
+
+function mapBacktestRotationRow(row: StrategyBacktestRotationRowApi): StrategyBacktestRotationRow {
+  return {
+    rebalanceDate: row.rebalance_date,
+    weekday: row.weekday,
+    holdings: row.holdings,
+    holdingCount: row.holding_count,
+    turnoverPct: row.turnover_pct,
+    periodReturnPct: row.period_return_pct,
+    cumulativeReturnPct: row.cumulative_return_pct,
+    navWan: row.nav_wan,
   };
 }
 
@@ -1160,6 +1361,33 @@ export async function getStrategyOptimizeSummary(params?: {
     topBonds: payload.top_bonds.map(mapTopBondRow),
     finishedTaskCount: payload.finished_task_count,
     totalResultCount: payload.total_result_count,
+    message: payload.message,
+  };
+}
+
+export async function getStrategyOptimizeTaskAnalysis(
+  taskId: string,
+  params?: { comboId?: string; initialCapitalWan?: number },
+): Promise<StrategyOptimizeTaskAnalysis> {
+  const payload = await requestJson<StrategyOptimizeTaskAnalysisApi>(
+    buildUrl(`/api/v1/cb-quant/strategy/optimize-tasks/${taskId}/analysis`, {
+      combo_id: params?.comboId,
+      initial_capital_wan: params?.initialCapitalWan ?? 100,
+    }),
+  );
+  return {
+    taskId: payload.task_id,
+    templateId: payload.template_id,
+    templateName: payload.template_name,
+    comboId: payload.combo_id,
+    benchmarkName: payload.benchmark_name,
+    window: payload.window,
+    metricRows: payload.metric_rows.map(mapBacktestMetricRow),
+    curve: payload.curve.map(mapBacktestCurvePoint),
+    yearlyDistribution: payload.yearly_distribution.map(mapBacktestDistributionRow),
+    monthlyDistribution: payload.monthly_distribution.map(mapBacktestDistributionRow),
+    weeklyDistribution: payload.weekly_distribution.map(mapBacktestDistributionRow),
+    rotations: payload.rotations.map(mapBacktestRotationRow),
     message: payload.message,
   };
 }
