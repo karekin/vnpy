@@ -18,8 +18,12 @@ from vnpy.web.schemas import (
     StrategyOptimizeTaskCreateResponse,
     StrategyOptimizeTaskDetailResponse,
     StrategyOptimizeTaskListResponse,
+    StrategyOptimizeSummaryResponse,
     StrategyExpandFactorCombosRequest,
     StrategyExpandFactorCombosResponse,
+    StrategyTemplateBatchDeleteRequest,
+    StrategyTemplateBatchEnableRequest,
+    StrategyTemplateBatchResponse,
     StrategyTemplateConfigRequest,
     StrategyTemplateConfigResponse,
     StrategyTemplateCreateRequest,
@@ -77,6 +81,35 @@ def create_strategy_template(
     request: StrategyTemplateCreateRequest,
 ) -> StrategyTemplateRow:
     return cb_quant_service.create_template(request)
+
+
+@router.post("/strategy/templates/batch/enable", response_model=StrategyTemplateBatchResponse)
+def batch_enable_strategy_templates(
+    request: StrategyTemplateBatchEnableRequest,
+) -> StrategyTemplateBatchResponse:
+    affected, missing = cb_quant_service.batch_enable_templates(
+        request.template_ids,
+        status=request.status,
+    )
+    return StrategyTemplateBatchResponse(
+        ok=True,
+        affected=affected,
+        missing_ids=missing,
+        message=f"已批量启用 {affected} 个策略。",
+    )
+
+
+@router.post("/strategy/templates/batch/delete", response_model=StrategyTemplateBatchResponse)
+def batch_delete_strategy_templates(
+    request: StrategyTemplateBatchDeleteRequest,
+) -> StrategyTemplateBatchResponse:
+    affected, missing = cb_quant_service.batch_delete_templates(request.template_ids)
+    return StrategyTemplateBatchResponse(
+        ok=True,
+        affected=affected,
+        missing_ids=missing,
+        message=f"已批量删除 {affected} 个策略。",
+    )
 
 
 @router.get("/strategy/templates/{template_id}", response_model=StrategyTemplateDetailResponse)
@@ -206,6 +239,14 @@ def get_optimize_task_detail(task_id: str) -> StrategyOptimizeTaskDetailResponse
     if not detail:
         raise HTTPException(status_code=404, detail=f"optimize task not found: {task_id}")
     return detail
+
+
+@router.get("/strategy/optimize-summary", response_model=StrategyOptimizeSummaryResponse)
+def get_optimize_summary(
+    top_n: int = Query(default=20, ge=1, le=200),
+    current_top_n: int = Query(default=20, ge=1, le=200),
+) -> StrategyOptimizeSummaryResponse:
+    return cb_quant_service.get_optimize_summary(top_n=top_n, current_top_n=current_top_n)
 
 
 @router.get("/backtest/jobs", response_model=BacktestJobListResponse)

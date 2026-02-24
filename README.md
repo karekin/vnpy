@@ -336,6 +336,31 @@ python -m vnpy.web.app
 * HTTP: `http://127.0.0.1:8000`
 * OpenAPI: `http://127.0.0.1:8000/docs`
 
+### 前后端联调启动
+
+请分别打开两个终端：
+
+后端（项目根目录）：
+
+```bash
+cd /Users/karekin/Downloads/coding/project/vnpy
+pip install -e ".[web]"
+python -m vnpy.web.app
+```
+
+前端（frontend 目录）：
+
+```bash
+cd /Users/karekin/Downloads/coding/project/vnpy/frontend
+npm install
+npm run dev
+```
+
+默认地址：
+
+* 前端：`http://localhost:3000`
+* 后端：`http://127.0.0.1:8000`
+
 ### 历史数据源建议（开源）
 
 生产建议使用“多源采集 + 统一落库”的方式，避免单源中断：

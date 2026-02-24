@@ -169,6 +169,22 @@ class StrategyTemplateUpdateRequest(BaseModel):
     owner: str | None = Field(default=None, min_length=1, max_length=64)
 
 
+class StrategyTemplateBatchEnableRequest(BaseModel):
+    template_ids: list[str] = Field(min_length=1)
+    status: StrategyTemplateStatus = "active"
+
+
+class StrategyTemplateBatchDeleteRequest(BaseModel):
+    template_ids: list[str] = Field(min_length=1)
+
+
+class StrategyTemplateBatchResponse(BaseModel):
+    ok: bool = True
+    affected: int = 0
+    missing_ids: list[str] = Field(default_factory=list)
+    message: str = "ok"
+
+
 class StrategyTemplateConfigRequest(BaseModel):
     factor_keys: list[str] = Field(default_factory=list)
     expression_draft: str = ""
@@ -192,7 +208,7 @@ class StrategyTemplateDetailResponse(BaseModel):
 class StrategyExpandFactorCombosRequest(BaseModel):
     min_factor_count: int = Field(default=1, ge=1)
     max_factor_count: int | None = Field(default=None, ge=1)
-    max_strategies: int | None = Field(default=2000, ge=1)
+    max_strategies: int | None = Field(default=None, ge=1)
 
 
 class StrategyExpandFactorCombosResponse(BaseModel):
@@ -298,6 +314,9 @@ class StrategyOptimizeTaskListResponse(BaseModel):
 
 class StrategyOptimizeResultRow(BaseModel):
     rank: int
+    task_id: str | None = None
+    template_id: str | None = None
+    template_name: str | None = None
     combo_id: str
     robust_score: float
     cagr: float
@@ -331,6 +350,14 @@ class StrategyOptimizeTaskDetailResponse(BaseModel):
 class StrategyOptimizeTaskCreateResponse(BaseModel):
     task: StrategyOptimizeTaskRow
     message: str
+
+
+class StrategyOptimizeSummaryResponse(BaseModel):
+    top_strategies: list[StrategyOptimizeResultRow]
+    top_bonds: list[StrategyTopBondRow]
+    finished_task_count: int = 0
+    total_result_count: int = 0
+    message: str = ""
 
 
 class WsEvent(BaseModel):

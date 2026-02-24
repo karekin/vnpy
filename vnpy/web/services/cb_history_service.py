@@ -29,6 +29,37 @@ def _to_code6(value: Any) -> str:
     return digits.zfill(6)
 
 
+def _normalize_yn(value: Any, default: str = "N") -> str:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return "Y" if value else "N"
+    text = str(value).strip().upper()
+    if text in {"Y", "N"}:
+        return text
+    if text in {"TRUE", "T", "YES", "1"}:
+        return "Y"
+    if text in {"FALSE", "F", "NO", "0"}:
+        return "N"
+    return default
+
+
+def _normalize_tf(value: Any, default: str = "False") -> str:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    text = str(value).strip()
+    if text in {"True", "False"}:
+        return text
+    upper = text.upper()
+    if upper in {"TRUE", "T", "YES", "1"}:
+        return "True"
+    if upper in {"FALSE", "F", "NO", "0"}:
+        return "False"
+    return default
+
+
 class CbHistoryService:
     """Persisted daily snapshot service for backtest history."""
 
@@ -147,6 +178,13 @@ class CbHistoryService:
         for _, item in frame.iterrows():
             payload = item.to_dict()
             payload["cb_code"] = str(payload.get("cb_code") or "")
+            payload["is_unlist"] = _normalize_yn(payload.get("is_unlist"), "N")
+            payload["last_is_unlist"] = _normalize_yn(payload.get("last_is_unlist"), "N")
+            payload["is_ransom_flag"] = _normalize_tf(payload.get("is_ransom_flag"), "False")
+            if payload.get("cb_to_pb") is None:
+                price = _safe_float(payload.get("price"), 0.0)
+                pure_bond_value = _safe_float(payload.get("new_style"), 0.0)
+                payload["cb_to_pb"] = round(price / pure_bond_value, 4) if pure_bond_value > 0 else 1.0
             rows.append(payload)
         return rows
 
@@ -196,6 +234,7 @@ class CbHistoryService:
             "convert_stock_value": _safe_float(item.get("convert_value"), 0.0),
             "convert_stock_price": _safe_float(item.get("convert_price"), 0.0),
             "new_style": pure_bond_value,
+            "cb_to_pb": cb_to_pb if cb_to_pb > 0 else 1.0,
             "old_style": _safe_float(item.get("option_value"), 0.0),
             "stock_stdevry": _safe_float(item.get("stock_volatility"), 30.0),
             "stock_code": _to_code6(stock_code),

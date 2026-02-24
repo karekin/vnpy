@@ -34,8 +34,6 @@ type FactorOption = {
 };
 
 const pageSizeOptions = [10, 20, 50];
-const defaultFactorKeys = ["dblow", "conv_prem", "turnover", "remain_size", "rating"];
-
 function statusTone(status: StrategyTemplateStatus) {
   if (status === "active") return "green" as const;
   if (status === "draft") return "yellow" as const;
@@ -57,11 +55,20 @@ function defaultParamRow(factorKey: string, expressionType?: number): StrategyPa
 
   const defaults: Record<string, [number, number, number]> = {
     dblow: [100, 180, 5],
-    conv_prem: [0, 30, 1],
+    conv_prem: [0, 40, 2],
     turnover: [0.2, 8, 0.2],
     remain_size: [1, 80, 1],
     price_max: [105, 150, 1],
     premium_max: [5, 35, 0.5],
+    price_bemchmark: [106, 124, 2],
+    premium_bemchmark: [16, 34, 2],
+    stock_ratio: [0.2, 0.35, 0.05],
+    premium_ratio: [0.15, 0.35, 0.05],
+    stock_stdevry_bemchmark: [20, 35, 5],
+    max_price: [130, 200, 10],
+    head_count: [5, 15, 5],
+    remain_ratio: [0.1, 0.2, 0.05],
+    max_hold_num: [5, 10, 5],
   };
   const [minValue, maxValue, step] = defaults[factorKey] ?? [0, 10, 1];
   return {
@@ -155,7 +162,7 @@ export default function StrategyDetailPage() {
 
         setFactorCatalog(factorResp.items);
 
-        const factorKeys = detail.config.factorKeys.length ? detail.config.factorKeys : defaultFactorKeys;
+        const factorKeys = detail.config.factorKeys;
         setSelectedFactorKeys(factorKeys);
         setExpressionDraft(detail.config.expressionDraft ?? "");
 

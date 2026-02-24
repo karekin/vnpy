@@ -99,6 +99,15 @@ FACTOR_REGISTRY: dict[FactorCategory, tuple[FactorMeta, ...]] = {
         _factor(id="068f2557-8b21-72ee-8000-b5414fc3a35e", factor_name="地域", factor_key="area", category=FactorCategory.BASE, expression_type=ExpressionType.TEXT, view_style=6, view_precision=0),
         _factor(id="068f2555-8c36-7751-8000-1fa592c68b82", factor_name="企业类型", factor_key="orgform", category=FactorCategory.BASE, expression_type=ExpressionType.TEXT, view_style=6, view_precision=0),
         _factor(id="068f2559-48db-710d-8000-6f09a916c889", factor_name="外部评级", factor_key="rating", category=FactorCategory.BASE, expression_type=ExpressionType.TEXT, view_style=6, view_precision=0),
+        _factor(id="cbq-param-001", factor_name="收益价基准", factor_key="price_bemchmark", category=FactorCategory.BASE, factor_type=FactorType.ADVANCED, view_precision=2),
+        _factor(id="cbq-param-002", factor_name="溢价率基准", factor_key="premium_bemchmark", category=FactorCategory.BASE, factor_type=FactorType.ADVANCED, view_precision=2),
+        _factor(id="cbq-param-003", factor_name="正股权重", factor_key="stock_ratio", category=FactorCategory.BASE, factor_type=FactorType.ADVANCED, view_style=1, view_precision=2),
+        _factor(id="cbq-param-004", factor_name="溢价权重", factor_key="premium_ratio", category=FactorCategory.BASE, factor_type=FactorType.ADVANCED, view_style=1, view_precision=2),
+        _factor(id="cbq-param-005", factor_name="波动率基准", factor_key="stock_stdevry_bemchmark", category=FactorCategory.BASE, factor_type=FactorType.ADVANCED, view_precision=2),
+        _factor(id="cbq-param-006", factor_name="价格上限", factor_key="max_price", category=FactorCategory.BASE, factor_type=FactorType.ADVANCED, view_precision=2),
+        _factor(id="cbq-param-007", factor_name="候选数量", factor_key="head_count", category=FactorCategory.BASE, factor_type=FactorType.ADVANCED, view_precision=0),
+        _factor(id="cbq-param-008", factor_name="剩余规模权重", factor_key="remain_ratio", category=FactorCategory.BASE, factor_type=FactorType.ADVANCED, view_style=1, view_precision=2),
+        _factor(id="cbq-param-009", factor_name="持仓数量", factor_key="max_hold_num", category=FactorCategory.BASE, factor_type=FactorType.ADVANCED, view_precision=0),
         _factor(id="068f255a-ce11-7133-8000-d80e2589ebee", factor_name="三方评级", factor_key="yy_rating", category=FactorCategory.BASE, expression_type=ExpressionType.TEXT, view_style=6, view_precision=0),
         _factor(id="068f255c-d061-76d5-8000-0fbec7cd2b51", factor_name="一级行业", factor_key="industry_1", category=FactorCategory.BASE, expression_type=ExpressionType.TEXT, view_style=6, view_precision=0),
         _factor(id="068f255e-215f-7fc3-8000-1520d5d46377", factor_name="二级行业", factor_key="industry_2", category=FactorCategory.BASE, expression_type=ExpressionType.TEXT, view_style=6, view_precision=0),
@@ -238,4 +247,3 @@ FUNCTION_REGISTRY: dict[FunctionCategory, tuple[FunctionMeta, ...]] = {
         _func(FunctionCategory.CALENDAR, "year", "year(date_expr: 日期 | 日期向量)", "计算年份。", [_param("date_expr", "日期|日期向量", "date|date_vector")]),
     ),
 }
-

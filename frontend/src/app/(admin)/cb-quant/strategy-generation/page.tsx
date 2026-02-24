@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  batchDeleteStrategyTemplates,
+  batchEnableStrategyTemplates,
   createStrategyTemplate,
   deleteStrategyTemplate,
   expandStrategyFactorCombos,
@@ -8,6 +10,7 @@ import {
   listStrategyTemplates,
   updateStrategyTemplate,
   updateStrategyTemplateConfig,
+  type StrategyParamSpaceRow,
   type StrategyTemplate,
 } from "@/components/cb-quant/api";
 import CbQuantPageShell from "@/components/cb-quant/CbQuantPageShell";
@@ -23,6 +26,73 @@ function getStrategyTone(status: "active" | "draft" | "archived") {
   if (status === "active") return "green" as const;
   if (status === "draft") return "yellow" as const;
   return "slate" as const;
+}
+
+function choose(n: number, k: number): number {
+  if (k < 0 || n < k) return 0;
+  if (k === 0 || n === k) return 1;
+  let result = 1;
+  for (let i = 1; i <= k; i += 1) {
+    result = (result * (n - i + 1)) / i;
+  }
+  return Math.round(result);
+}
+
+const baselineFactorKeys = [
+  "dblow",
+  "conv_prem",
+  "turnover",
+  "remain_size",
+  "rating",
+  "price_bemchmark",
+  "premium_bemchmark",
+  "stock_ratio",
+  "premium_ratio",
+  "stock_stdevry_bemchmark",
+  "max_price",
+  "head_count",
+  "remain_ratio",
+  "max_hold_num",
+];
+
+function baselineParamRow(factorKey: string): StrategyParamSpaceRow {
+  if (factorKey === "rating") {
+    return {
+      factorKey,
+      valueType: "enum",
+      enabled: true,
+      minValue: null,
+      maxValue: null,
+      step: null,
+      enumValues: ["AA", "AA+", "AAA"],
+    };
+  }
+
+  const defaults: Record<string, [number, number, number]> = {
+    dblow: [100, 180, 5],
+    conv_prem: [0, 40, 2],
+    turnover: [0.2, 8, 0.2],
+    remain_size: [1, 80, 1],
+    price_bemchmark: [106, 124, 2],
+    premium_bemchmark: [16, 34, 2],
+    stock_ratio: [0.2, 0.35, 0.05],
+    premium_ratio: [0.15, 0.35, 0.05],
+    stock_stdevry_bemchmark: [20, 35, 5],
+    max_price: [130, 200, 10],
+    head_count: [5, 15, 5],
+    remain_ratio: [0.1, 0.2, 0.05],
+    max_hold_num: [5, 10, 5],
+  };
+  const [minValue, maxValue, step] = defaults[factorKey] ?? [0, 10, 1];
+  return {
+    factorKey,
+    valueType: "number",
+    enabled: true,
+    minValue,
+    maxValue,
+    step,
+    enumValues: [],
+  };
 }
 
 export default function CbQuantStrategyGenerationPage() {
@@ -142,17 +212,39 @@ export default function CbQuantStrategyGenerationPage() {
     setRunningActionId("GLOBAL_EXPAND");
     try {
       const allStrategies = await loadAllStrategies();
-      const targets = selectedStrategyIds.length
+      let targets = selectedStrategyIds.length
         ? allStrategies.filter((row) => selectedSet.has(row.id))
         : allStrategies;
+      let autoCreatedTemplate: StrategyTemplate | null = null;
 
       if (!targets.length) {
-        setError("没有可生成的策略，请先勾选策略或调整筛选条件。");
+        if (keyword) {
+          setError("当前筛选结果为空，请清空搜索或调整筛选条件后重试。");
+          return;
+        }
+        autoCreatedTemplate = await createStrategyTemplate({ name: "双三因子基准策略", owner: "quant_new" });
+        await updateStrategyTemplateConfig(autoCreatedTemplate.id, {
+          factorKeys: baselineFactorKeys,
+          expressionDraft: "",
+          parameterSpace: baselineFactorKeys.map((factorKey) => baselineParamRow(factorKey)),
+        });
+        const detail = await getStrategyTemplateDetail(autoCreatedTemplate.id);
+        targets = [detail.template];
+      }
+
+      const eligibleTargets = targets.filter((row) => row.factorCount >= 2);
+
+      if (!eligibleTargets.length) {
+        setError("所选策略因子数不足 2，无法生成双因子/三因子组合。");
         return;
       }
 
+      const subsetEstimate = eligibleTargets.reduce(
+        (sum, row) => sum + choose(row.factorCount, 2) + choose(row.factorCount, 3),
+        0,
+      );
       const ok = window.confirm(
-        `将为 ${targets.length} 个策略生成单因子到全因子组合，继续执行吗？`,
+        `将为 ${eligibleTargets.length} 个策略生成全部“双因子+三因子”组合（理论子集约 ${subsetEstimate.toLocaleString()} 个），继续执行吗？`,
       );
       if (!ok) {
         return;
@@ -160,17 +252,22 @@ export default function CbQuantStrategyGenerationPage() {
 
       let createdTotal = 0;
       let subsetTotal = 0;
-      for (const target of targets) {
+      for (const target of eligibleTargets) {
         const result = await expandStrategyFactorCombos(target.id, {
-          minFactorCount: 1,
-          maxFactorCount: target.factorCount,
+          minFactorCount: 2,
+          maxFactorCount: 3,
         });
         createdTotal += result.createdCount;
         subsetTotal += result.totalSubsets;
       }
 
       await loadStrategies();
-      setHint(`已完成 ${targets.length} 个策略的全组合生成，新增策略 ${createdTotal} 个（理论子集 ${subsetTotal} 个）。`);
+      const skippedCount = targets.length - eligibleTargets.length;
+      const skippedHint = skippedCount > 0 ? `，跳过 ${skippedCount} 个因子数不足 2 的策略` : "";
+      const autoCreateHint = autoCreatedTemplate ? `已自动创建基准策略 ${autoCreatedTemplate.id}。` : "";
+      setHint(
+        `${autoCreateHint}已完成 ${eligibleTargets.length} 个策略的双/三因子组合生成，新增策略 ${createdTotal} 个（理论子集 ${subsetTotal.toLocaleString()} 个）${skippedHint}。`,
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "全局生成组合失败");
     } finally {
@@ -193,30 +290,50 @@ export default function CbQuantStrategyGenerationPage() {
     }
   };
 
-  const handleBatchBacktest = async () => {
+  const handleBatchEnableStrategies = async () => {
     setError("");
     setHint("");
-    try {
-      let targetIds = selectedStrategyIds;
-      if (!targetIds.length) {
-        const allStrategies = await loadAllStrategies();
-        if (!allStrategies.length) {
-          setError("当前没有可回测的策略。");
-          return;
-        }
-        const ok = window.confirm(`未勾选策略，是否直接回测当前筛选结果的全部 ${allStrategies.length} 个策略？`);
-        if (!ok) {
-          return;
-        }
-        targetIds = allStrategies.map((row) => row.id);
-        setSelectedStrategyIds(targetIds);
-      }
+    if (!selectedStrategyIds.length) {
+      setError("请先勾选要启用的策略。");
+      return;
+    }
 
-      const params = new URLSearchParams();
-      params.set("strategyIds", targetIds.join(","));
-      router.push(`/cb-quant/backtest-evaluation?${params.toString()}`);
+    const ok = window.confirm(`确认启用已选 ${selectedStrategyIds.length} 个策略？`);
+    if (!ok) return;
+
+    setRunningActionId("GLOBAL_ENABLE");
+    try {
+      const result = await batchEnableStrategyTemplates(selectedStrategyIds, "active");
+      await loadStrategies();
+      setHint(result.message);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "批量回测跳转失败");
+      setError(err instanceof Error ? err.message : "批量启用策略失败");
+    } finally {
+      setRunningActionId("");
+    }
+  };
+
+  const handleBatchDeleteStrategies = async () => {
+    setError("");
+    setHint("");
+    if (!selectedStrategyIds.length) {
+      setError("请先勾选要删除的策略。");
+      return;
+    }
+
+    const ok = window.confirm(`确认删除已选 ${selectedStrategyIds.length} 个策略？此操作不可恢复。`);
+    if (!ok) return;
+
+    setRunningActionId("GLOBAL_DELETE");
+    try {
+      const result = await batchDeleteStrategyTemplates(selectedStrategyIds);
+      setSelectedStrategyIds([]);
+      await loadStrategies();
+      setHint(result.message);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "批量删除策略失败");
+    } finally {
+      setRunningActionId("");
     }
   };
 
@@ -264,15 +381,15 @@ export default function CbQuantStrategyGenerationPage() {
   return (
     <CbQuantPageShell
       title="策略生成行动页"
-      subtitle="先勾选目标策略（可全选），再执行全组合生成或批量回测。"
+      subtitle="维护策略参数并批量生成双因子/三因子组合。"
     >
       <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
         <div className="flex flex-col gap-3 border-b border-gray-200 px-5 py-4 dark:border-gray-800 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <h3 className="text-lg font-semibold text-gray-800 dark:text-white/90">策略库</h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400">先维护策略参数空间，再批量生成全组合并对指定策略回测。</p>
+            <p className="text-sm text-gray-500 dark:text-gray-400">先配置参数空间，再批量生成双因子/三因子组合。</p>
           </div>
-          <div className="flex flex-wrap gap-3 sm:items-center">
+          <div className="flex flex-nowrap items-center gap-2 overflow-x-auto pb-1">
             <div className="relative">
               <span className="absolute top-1/2 left-4 -translate-y-1/2 text-gray-500 dark:text-gray-400">
                 <svg className="fill-current" width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -287,7 +404,7 @@ export default function CbQuantStrategyGenerationPage() {
               <input
                 type="text"
                 placeholder="Search strategy/name/owner..."
-                className="dark:bg-dark-900 shadow-theme-xs focus:border-brand-300 focus:ring-brand-500/10 dark:focus:border-brand-800 h-11 w-full rounded-lg border border-gray-300 bg-transparent py-2.5 pr-4 pl-11 text-sm text-gray-800 placeholder:text-gray-400 focus:ring-3 focus:outline-hidden xl:w-[300px] dark:border-gray-700 dark:bg-gray-900 dark:text-white/90 dark:placeholder:text-white/30"
+                className="dark:bg-dark-900 shadow-theme-xs focus:border-brand-300 focus:ring-brand-500/10 dark:focus:border-brand-800 h-11 w-[320px] min-w-[260px] rounded-lg border border-gray-300 bg-transparent py-2.5 pr-4 pl-11 text-sm text-gray-800 placeholder:text-gray-400 focus:ring-3 focus:outline-hidden dark:border-gray-700 dark:bg-gray-900 dark:text-white/90 dark:placeholder:text-white/30"
                 value={search}
                 onChange={(event) => {
                   setSearch(event.target.value);
@@ -298,21 +415,31 @@ export default function CbQuantStrategyGenerationPage() {
             <button
               type="button"
               onClick={handleExpandAllStrategies}
-              disabled={runningActionId === "GLOBAL_EXPAND" || loading}
+              disabled={Boolean(runningActionId) || loading}
               className="inline-flex h-11 items-center justify-center whitespace-nowrap rounded-lg border border-brand-500 px-4 text-sm font-medium text-brand-600 hover:bg-brand-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-brand-400 dark:text-brand-300"
             >
-              {runningActionId === "GLOBAL_EXPAND" ? "生成中..." : "生成全组合"}
+              {runningActionId === "GLOBAL_EXPAND" ? "生成中..." : "生成双/三因子"}
             </button>
             <button
               type="button"
-              onClick={handleBatchBacktest}
+              onClick={handleBatchEnableStrategies}
+              disabled={Boolean(runningActionId) || !selectedStrategyIds.length}
               className="inline-flex h-11 items-center justify-center whitespace-nowrap rounded-lg border border-brand-500 px-4 text-sm font-medium text-brand-600 hover:bg-brand-50 dark:border-brand-400 dark:text-brand-300"
             >
-              立即回测
+              {runningActionId === "GLOBAL_ENABLE" ? "启用中..." : "启用策略"}
+            </button>
+            <button
+              type="button"
+              onClick={handleBatchDeleteStrategies}
+              disabled={Boolean(runningActionId) || !selectedStrategyIds.length}
+              className="inline-flex h-11 items-center justify-center whitespace-nowrap rounded-lg border border-red-300 px-4 text-sm font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-700 dark:text-red-300"
+            >
+              {runningActionId === "GLOBAL_DELETE" ? "删除中..." : "删除策略"}
             </button>
             <button
               type="button"
               onClick={handleCreateStrategy}
+              disabled={Boolean(runningActionId)}
               className="inline-flex h-11 items-center justify-center whitespace-nowrap rounded-lg bg-brand-500 px-4 text-sm font-medium text-white hover:bg-brand-600"
             >
               新建策略
@@ -377,7 +504,7 @@ export default function CbQuantStrategyGenerationPage() {
             emptyText="暂无策略，请先新建策略"
           >
             {strategies.map((row) => {
-              const disabled = runningActionId === row.id || runningActionId === "GLOBAL_EXPAND";
+              const disabled = Boolean(runningActionId);
               return (
                 <TableRow key={row.id} className="border-b border-gray-100 dark:border-gray-800">
                   <TableCell className="px-4 py-3">

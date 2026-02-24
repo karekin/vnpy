@@ -94,7 +94,15 @@ class CrawlerPhaseABacktestAdapter:
     def load_market_data(self) -> list[tuple[str, Any]]:
         dataset = self._history_store.load_market_dataset()
         if dataset:
-            return dataset
+            module = self._load_module()
+            normalized: list[tuple[str, Any]] = []
+            normalizer = getattr(module, "normalize_market_frame", None)
+            for trade_date, frame in dataset:
+                if callable(normalizer):
+                    normalized.append((trade_date, normalizer(frame)))
+                else:
+                    normalized.append((trade_date, frame))
+            return normalized
         module = self._load_module()
         return module.load_market_data(self.data_dir)
 

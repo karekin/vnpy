@@ -34,6 +34,13 @@ export type StrategyTemplateConfig = {
   updatedAt: string;
 };
 
+export type StrategyTemplateBatchResult = {
+  ok: boolean;
+  affected: number;
+  missingIds: string[];
+  message: string;
+};
+
 export type StrategyTemplateDetail = {
   template: StrategyTemplate;
   config: StrategyTemplateConfig;
@@ -179,6 +186,9 @@ export type StrategyOptimizeTask = {
 
 export type StrategyOptimizeResultRow = {
   rank: number;
+  taskId?: string | null;
+  templateId?: string | null;
+  templateName?: string | null;
   comboId: string;
   robustScore: number;
   cagr: number;
@@ -207,6 +217,14 @@ export type StrategyOptimizeTaskDetail = {
   task: StrategyOptimizeTask;
   topStrategies: StrategyOptimizeResultRow[];
   topBonds: StrategyTopBondRow[];
+};
+
+export type StrategyOptimizeSummary = {
+  topStrategies: StrategyOptimizeResultRow[];
+  topBonds: StrategyTopBondRow[];
+  finishedTaskCount: number;
+  totalResultCount: number;
+  message: string;
 };
 
 export type FactorCatalogFactor = {
@@ -423,6 +441,9 @@ type StrategyOptimizeTaskApi = {
 
 type StrategyOptimizeResultRowApi = {
   rank: number;
+  task_id?: string | null;
+  template_id?: string | null;
+  template_name?: string | null;
   combo_id: string;
   robust_score: number;
   cagr: number;
@@ -673,6 +694,9 @@ function mapOptimizeTask(row: StrategyOptimizeTaskApi): StrategyOptimizeTask {
 function mapOptimizeResultRow(row: StrategyOptimizeResultRowApi): StrategyOptimizeResultRow {
   return {
     rank: row.rank,
+    taskId: row.task_id ?? null,
+    templateId: row.template_id ?? null,
+    templateName: row.template_name ?? null,
     comboId: row.combo_id,
     robustScore: row.robust_score,
     cagr: row.cagr,
@@ -905,6 +929,52 @@ export async function deleteStrategyTemplate(templateId: string): Promise<void> 
   );
 }
 
+export async function batchEnableStrategyTemplates(
+  templateIds: string[],
+  status: StrategyTemplateStatus = "active",
+): Promise<StrategyTemplateBatchResult> {
+  const payload = await requestJson<{
+    ok: boolean;
+    affected: number;
+    missing_ids: string[];
+    message: string;
+  }>(buildUrl("/api/v1/cb-quant/strategy/templates/batch/enable"), {
+    method: "POST",
+    body: JSON.stringify({
+      template_ids: templateIds,
+      status,
+    }),
+  });
+  return {
+    ok: payload.ok,
+    affected: payload.affected,
+    missingIds: payload.missing_ids,
+    message: payload.message,
+  };
+}
+
+export async function batchDeleteStrategyTemplates(
+  templateIds: string[],
+): Promise<StrategyTemplateBatchResult> {
+  const payload = await requestJson<{
+    ok: boolean;
+    affected: number;
+    missing_ids: string[];
+    message: string;
+  }>(buildUrl("/api/v1/cb-quant/strategy/templates/batch/delete"), {
+    method: "POST",
+    body: JSON.stringify({
+      template_ids: templateIds,
+    }),
+  });
+  return {
+    ok: payload.ok,
+    affected: payload.affected,
+    missingIds: payload.missing_ids,
+    message: payload.message,
+  };
+}
+
 export async function getStrategyTemplateDetail(templateId: string): Promise<StrategyTemplateDetail> {
   const payload = await requestJson<StrategyTemplateDetailApi>(
     buildUrl(`/api/v1/cb-quant/strategy/templates/${templateId}`),
@@ -1066,6 +1136,31 @@ export async function getStrategyOptimizeTaskDetail(taskId: string): Promise<Str
     task: mapOptimizeTask(payload.task),
     topStrategies: payload.top_strategies.map(mapOptimizeResultRow),
     topBonds: payload.top_bonds.map(mapTopBondRow),
+  };
+}
+
+export async function getStrategyOptimizeSummary(params?: {
+  topN?: number;
+  currentTopN?: number;
+}): Promise<StrategyOptimizeSummary> {
+  const payload = await requestJson<{
+    top_strategies: StrategyOptimizeResultRowApi[];
+    top_bonds: StrategyTopBondRowApi[];
+    finished_task_count: number;
+    total_result_count: number;
+    message: string;
+  }>(
+    buildUrl("/api/v1/cb-quant/strategy/optimize-summary", {
+      top_n: params?.topN ?? 20,
+      current_top_n: params?.currentTopN ?? 20,
+    }),
+  );
+  return {
+    topStrategies: payload.top_strategies.map(mapOptimizeResultRow),
+    topBonds: payload.top_bonds.map(mapTopBondRow),
+    finishedTaskCount: payload.finished_task_count,
+    totalResultCount: payload.total_result_count,
+    message: payload.message,
   };
 }
 

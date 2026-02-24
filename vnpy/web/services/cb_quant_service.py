@@ -32,6 +32,7 @@ from vnpy.web.schemas import (
     StrategyOptimizeTaskDetailResponse,
     StrategyOptimizeTaskListResponse,
     StrategyOptimizeTaskRow,
+    StrategyOptimizeSummaryResponse,
     StrategyTopBondRow,
     StrategyTemplateConfigRequest,
     StrategyTemplateConfigResponse,
@@ -206,6 +207,69 @@ class CbQuantService:
                 self._save_templates_and_configs()
             return deleted
 
+    def batch_enable_templates(self, template_ids: list[str], *, status: str = "active") -> tuple[int, list[str]]:
+        targets = {item for item in template_ids if item}
+        if not targets:
+            return 0, []
+
+        with self._lock:
+            status_value = status if status in {"active", "draft", "archived"} else "active"
+            now = _now_readable()
+            found: set[str] = set()
+            updated_rows: list[StrategyTemplateRow] = []
+            for row in self._templates:
+                if row.id not in targets:
+                    updated_rows.append(row)
+                    continue
+                found.add(row.id)
+                updated_rows.append(
+                    StrategyTemplateRow(
+                        id=row.id,
+                        name=row.name,
+                        version=row.version,
+                        status=status_value,
+                        factor_count=row.factor_count,
+                        rebalance=row.rebalance,
+                        risk_preset=row.risk_preset,
+                        combo_size=row.combo_size,
+                        owner=row.owner,
+                        updated_at=now,
+                    )
+                )
+
+            missing = sorted(targets - found)
+            if found:
+                self._templates = updated_rows
+                self._save_templates_and_configs()
+            return len(found), missing
+
+    def batch_delete_templates(self, template_ids: list[str]) -> tuple[int, list[str]]:
+        targets = {item for item in template_ids if item}
+        if not targets:
+            return 0, []
+
+        with self._lock:
+            existing = {row.id for row in self._templates}
+            found = targets & existing
+            missing = sorted(targets - found)
+            if not found:
+                return 0, missing
+
+            self._templates = [row for row in self._templates if row.id not in found]
+            for template_id in found:
+                self._template_configs.pop(template_id, None)
+
+            self._candidates = [row for row in self._candidates if row.template_id not in found]
+            valid_combo_ids = {row.combo_id for row in self._candidates}
+            self._candidate_settings = {
+                combo_id: setting
+                for combo_id, setting in self._candidate_settings.items()
+                if combo_id in valid_combo_ids
+            }
+
+            self._save_templates_and_configs()
+            return len(found), missing
+
     def expand_template_factor_combos(
         self,
         template_id: str,
@@ -233,10 +297,24 @@ class CbQuantService:
                 message="策略没有可展开的因子，请先配置参数空间。",
             )
 
-        min_count = max(1, min(request.min_factor_count, factor_count))
-        max_count = factor_count if request.max_factor_count is None else max(1, min(request.max_factor_count, factor_count))
+        request_min = max(1, request.min_factor_count)
+        request_max = factor_count if request.max_factor_count is None else max(1, request.max_factor_count)
+        if request_min > request_max:
+            request_min, request_max = request_max, request_min
+
+        min_count = request_min
+        max_count = min(factor_count, request_max)
         if min_count > max_count:
-            min_count, max_count = max_count, min_count
+            return StrategyExpandFactorCombosResponse(
+                source_template_id=template.id,
+                source_template_name=template.name,
+                min_factor_count=request_min,
+                max_factor_count=request_max,
+                total_subsets=0,
+                created_count=0,
+                truncated=False,
+                message=f"策略因子数为 {factor_count}，无法生成 {request_min}~{request_max} 因子组合。",
+            )
 
         total_subsets = sum(comb(factor_count, k) for k in range(min_count, max_count + 1))
         max_strategies = request.max_strategies or total_subsets
@@ -633,10 +711,87 @@ class CbQuantService:
         task = self._get_optimize_task(task_id)
         if not task:
             return None
+        rows = [
+            row
+            for row in self._optimize_results.get(task_id, [])
+            if not (abs(row.total_return_pct) < 1e-9 and row.turnover <= 1e-9)
+        ]
         return StrategyOptimizeTaskDetailResponse(
             task=task,
-            top_strategies=self._optimize_results.get(task_id, []),
+            top_strategies=rows,
             top_bonds=self._optimize_top_bonds.get(task_id, []),
+        )
+
+    def get_optimize_summary(
+        self,
+        *,
+        top_n: int = 20,
+        current_top_n: int = 20,
+    ) -> StrategyOptimizeSummaryResponse:
+        safe_top_n = max(1, min(200, int(top_n)))
+        safe_current_top_n = max(1, min(200, int(current_top_n)))
+
+        finished_tasks = [row for row in self._optimize_tasks if row.status == "finished"]
+        finished_task_ids = {row.task_id for row in finished_tasks}
+        if not finished_task_ids:
+            return StrategyOptimizeSummaryResponse(
+                top_strategies=[],
+                top_bonds=[],
+                finished_task_count=0,
+                total_result_count=0,
+                message="暂无已完成任务，请先执行回测搜索。",
+            )
+
+        merged_rows: list[StrategyOptimizeResultRow] = []
+        for task in finished_tasks:
+            rows = self._optimize_results.get(task.task_id, [])
+            if not rows:
+                continue
+            for row in rows:
+                if abs(row.total_return_pct) < 1e-9 and row.turnover <= 1e-9:
+                    continue
+                merged_rows.append(
+                    row.model_copy(
+                        update={
+                            "task_id": task.task_id,
+                            "template_id": task.template_id,
+                            "template_name": task.template_name,
+                        }
+                    )
+                )
+
+        if not merged_rows:
+            return StrategyOptimizeSummaryResponse(
+                top_strategies=[],
+                top_bonds=[],
+                finished_task_count=len(finished_task_ids),
+                total_result_count=0,
+                message="暂无可汇总的策略结果。",
+            )
+
+        merged_rows.sort(key=lambda item: (item.robust_score, item.cagr, -item.mdd), reverse=True)
+        ranked_top = [
+            row.model_copy(update={"rank": idx + 1})
+            for idx, row in enumerate(merged_rows[:safe_top_n])
+        ]
+
+        top_bonds: list[StrategyTopBondRow] = []
+        market_warning = ""
+        best_params = ranked_top[0].params if ranked_top else {}
+        if best_params:
+            try:
+                top_bonds, market_source = self._score_current_market(best_params, limit=safe_current_top_n)
+                if not market_source.startswith("eastmoney."):
+                    market_warning = f"；Top20基于 {market_source}（非实时）"
+            except Exception as exc:
+                market_warning = f"；实时Top20计算失败: {str(exc)[:80]}"
+
+        return StrategyOptimizeSummaryResponse(
+            top_strategies=ranked_top,
+            top_bonds=top_bonds,
+            finished_task_count=len(finished_task_ids),
+            total_result_count=len(merged_rows),
+            message=f"已汇总 {len(finished_task_ids)} 个完成任务，共 {len(merged_rows)} 条策略结果{market_warning}",
         )
 
     def _run_optimize_task(
@@ -670,6 +825,7 @@ class CbQuantService:
         ranking_rows: list[StrategyOptimizeResultRow] = []
         total = max(1, task.total_combinations)
         evaluated = 0
+        skipped_no_trade = 0
         start_at = datetime.now()
 
         try:
@@ -680,6 +836,9 @@ class CbQuantService:
                 evaluated += 1
                 row = self._evaluate_combo(
                     module=module,
+                    task_id=task_id,
+                    template_id=task.template_id,
+                    template_name=task.template_name,
                     dataset=dataset,
                     combo_id=combo_id,
                     windows=task.windows,
@@ -687,6 +846,9 @@ class CbQuantService:
                     end_date=end_date,
                     setting=setting,
                 )
+                if abs(row.total_return_pct) < 1e-9 and row.turnover <= 1e-9:
+                    skipped_no_trade += 1
+                    continue
                 ranking_rows.append(row)
                 ranking_rows.sort(
                     key=lambda item: (item.robust_score, item.cagr, -item.mdd),
@@ -718,13 +880,31 @@ class CbQuantService:
                     sorted(ranking_rows, key=lambda item: (item.robust_score, item.cagr, -item.mdd), reverse=True)
                 )
             ]
+            if not ranked:
+                self._optimize_results[task_id] = []
+                self._optimize_top_bonds[task_id] = []
+                self._update_optimize_task(
+                    task_id,
+                    status="finished",
+                    progress=100,
+                    evaluated_combinations=evaluated,
+                    eta="done",
+                    finished_at=_now_readable(),
+                    message=f"优化完成，但未产生有效交易策略（无交易组合 {skipped_no_trade}/{evaluated}）。",
+                )
+                return
             best_setting = ranked[0].params if ranked else {}
             self._optimize_results[task_id] = ranked
             top_bonds: list[StrategyTopBondRow] = []
             market_warning = ""
+            strategy_warning = ""
+            if ranked and abs(ranked[0].total_return_pct) < 1e-9 and ranked[0].turnover <= 1e-9:
+                strategy_warning = "；当前参数空间未产生有效交易，建议放宽筛选阈值或调整因子范围"
             if best_setting:
                 try:
-                    top_bonds = self._score_current_market(best_setting, limit=current_top_n)
+                    top_bonds, market_source = self._score_current_market(best_setting, limit=current_top_n)
+                    if not market_source.startswith("eastmoney."):
+                        market_warning = f"；Top20基于 {market_source}（非实时）"
                 except Exception as exc:
                     market_warning = f"；实时Top20计算失败: {str(exc)[:80]}"
             self._optimize_top_bonds[task_id] = top_bonds
@@ -735,7 +915,7 @@ class CbQuantService:
                 evaluated_combinations=evaluated,
                 eta="done",
                 finished_at=_now_readable(),
-                message=f"优化完成，最佳策略 {ranked[0].combo_id if ranked else '--'}{market_warning}",
+                message=f"优化完成，最佳策略 {ranked[0].combo_id if ranked else '--'}{strategy_warning}{market_warning}",
             )
         except Exception as exc:
             self._update_optimize_task(
@@ -995,6 +1175,9 @@ class CbQuantService:
         self,
         *,
         module: Any,
+        task_id: str,
+        template_id: str,
+        template_name: str,
         dataset: list[tuple[str, Any]],
         combo_id: str,
         windows: list[WindowName],
@@ -1068,6 +1251,9 @@ class CbQuantService:
 
         return StrategyOptimizeResultRow(
             rank=0,
+            task_id=task_id,
+            template_id=template_id,
+            template_name=template_name,
             combo_id=combo_id,
             robust_score=round(robust_score, 4),
             cagr=round(cagr, 6),
@@ -1165,8 +1351,10 @@ class CbQuantService:
         setting["until_win"] = bool(setting.get("until_win", False))
         return setting
 
-    def _score_current_market(self, setting: dict[str, Any], limit: int = 20) -> list[StrategyTopBondRow]:
+    def _score_current_market(self, setting: dict[str, Any], limit: int = 20) -> tuple[list[StrategyTopBondRow], str]:
         market = self._market_service.list_bonds(min_volume_wan=0)
+        if market.source.startswith("fallback.mock"):
+            raise RuntimeError(f"realtime market source unavailable: {market.source}")
         rows = []
         price_b = max(1.0, self._to_float(setting.get("price_bemchmark"), 115.0))
         premium_b = max(1.0, self._to_float(setting.get("premium_bemchmark"), 25.0))
@@ -1222,7 +1410,7 @@ class CbQuantService:
             )
         rows.sort(key=lambda item: (item.score, item.amount_wan or 0.0), reverse=True)
         ranked = [row.model_copy(update={"rank": idx + 1}) for idx, row in enumerate(rows[: max(1, limit)])]
-        return ranked
+        return ranked, market.source
 
     @staticmethod
     def _serialize_setting(setting: dict[str, Any]) -> dict[str, Any]:
@@ -1341,6 +1529,15 @@ class CbQuantService:
         turnover: float,
         window_name: WindowName,
     ) -> float:
+        # Strongly penalize zero/negative return strategies to avoid ranking no-trade combos at top.
+        if cagr <= 0.0001:
+            base = 10.0
+            base += max(-4.0, min(4.0, (win_rate_pct - 50.0) * 0.08))
+            base += max(-4.0, min(4.0, (0.08 - turnover) * 10.0))
+            if turnover < 0.01:
+                base = min(base, 6.0)
+            return round(max(0.0, min(25.0, base)), 1)
+
         score = 55.0
         score += max(-35.0, min(35.0, cagr * 120.0))
         score += max(-20.0, min(22.0, (0.25 - mdd) * 80.0))
@@ -1517,7 +1714,7 @@ class CbQuantService:
         return None
 
     def _default_config(self, template_id: str, updated_at: str) -> StrategyTemplateConfigResponse:
-        factor_keys = ["dblow", "conv_prem", "turnover", "remain_size", "rating"]
+        factor_keys: list[str] = []
         parameter_space = self._normalize_parameter_space(
             factor_keys=factor_keys,
             parameter_space=[],
@@ -1610,11 +1807,20 @@ class CbQuantService:
     def _default_param_space_row(self, factor_key: str) -> StrategyParamSpaceRow:
         numeric_defaults: dict[str, tuple[float, float, float]] = {
             "dblow": (100, 180, 5),
-            "conv_prem": (0, 30, 1),
+            "conv_prem": (0, 40, 2),
             "turnover": (0.2, 8.0, 0.2),
             "remain_size": (1, 80, 1),
             "price_max": (105, 150, 1),
             "premium_max": (5, 35, 0.5),
+            "price_bemchmark": (106, 124, 2),
+            "premium_bemchmark": (16, 34, 2),
+            "stock_ratio": (0.20, 0.35, 0.05),
+            "premium_ratio": (0.15, 0.35, 0.05),
+            "stock_stdevry_bemchmark": (20, 35, 5),
+            "max_price": (130, 200, 10),
+            "head_count": (5, 15, 5),
+            "remain_ratio": (0.10, 0.20, 0.05),
+            "max_hold_num": (5, 10, 5),
         }
         enum_defaults: dict[str, list[str]] = {
             "rating": ["AA", "AA+", "AAA"],

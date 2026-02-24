@@ -4,12 +4,14 @@ import {
   createStrategyOptimizeTask,
   getHistoryDataSummary,
   getHistorySyncStatus,
+  getStrategyOptimizeSummary,
   getStrategyOptimizeTaskDetail,
   listStrategyOptimizeTasks,
   listStrategyTemplates,
   triggerHistorySync,
   type HistoryDataSummary,
   type HistorySyncStatus,
+  type StrategyOptimizeSummary,
   type StrategyOptimizeTask,
   type StrategyOptimizeTaskDetail,
   type StrategyTemplate,
@@ -21,8 +23,7 @@ import StatusTag from "@/components/cb-quant/StatusTag";
 import TablePaginationBar from "@/components/cb-quant/TablePaginationBar";
 import { getTotalPages } from "@/components/cb-quant/tableUtils";
 import { TableCell, TableRow } from "@/components/ui/table";
-import { useSearchParams } from "next/navigation";
-import React, { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 export const dynamic = "force-dynamic";
 
@@ -41,21 +42,8 @@ function dateToInput(value: Date): string {
   return value.toISOString().slice(0, 10);
 }
 
-function CbQuantBacktestEvaluationContent() {
-  const searchParams = useSearchParams();
-  const strategyIdFromQuery = searchParams.get("strategyId") ?? "";
-  const strategyIdsFromQueryRaw = searchParams.get("strategyIds") ?? "";
-  const strategyIdsFromQuery = useMemo(
-    () =>
-      strategyIdsFromQueryRaw
-        .split(",")
-        .map((id) => id.trim())
-        .filter((id) => id.length > 0),
-    [strategyIdsFromQueryRaw],
-  );
-
+export default function CbQuantBacktestEvaluationPage() {
   const [strategies, setStrategies] = useState<StrategyTemplate[]>([]);
-  const [selectedStrategyIds, setSelectedStrategyIds] = useState<string[]>([]);
 
   const [startDate, setStartDate] = useState<string>("");
   const [endDate, setEndDate] = useState<string>("");
@@ -68,7 +56,9 @@ function CbQuantBacktestEvaluationContent() {
   const [tasksTotal, setTasksTotal] = useState<number>(0);
   const [tasksTotalPages, setTasksTotalPages] = useState<number>(1);
   const [selectedTaskId, setSelectedTaskId] = useState<string>("");
+  const [resultMode, setResultMode] = useState<"global" | "task">("global");
   const [detail, setDetail] = useState<StrategyOptimizeTaskDetail | null>(null);
+  const [summary, setSummary] = useState<StrategyOptimizeSummary | null>(null);
 
   const [loadingTasks, setLoadingTasks] = useState<boolean>(false);
   const [syncingHistory, setSyncingHistory] = useState<boolean>(false);
@@ -78,21 +68,20 @@ function CbQuantBacktestEvaluationContent() {
   const [error, setError] = useState<string>("");
   const [hint, setHint] = useState<string>("");
 
-  const selectedStrategySet = useMemo(() => new Set(selectedStrategyIds), [selectedStrategyIds]);
-  const selectedStrategies = useMemo(
-    () => strategies.filter((row) => selectedStrategySet.has(row.id)),
-    [selectedStrategySet, strategies],
-  );
+  const enabledStrategies = useMemo(() => strategies.filter((row) => row.status === "active"), [strategies]);
   const strategyById = useMemo(() => new Map(strategies.map((row) => [row.id, row])), [strategies]);
   const totalCombinations = useMemo(
-    () => selectedStrategies.reduce((sum, row) => sum + row.comboSize, 0),
-    [selectedStrategies],
+    () => enabledStrategies.reduce((sum, row) => sum + row.comboSize, 0),
+    [enabledStrategies],
   );
 
   const activeWindows = useMemo(
     () => (Object.entries(windows).filter(([, checked]) => checked).map(([key]) => key) as WindowName[]),
     [windows],
   );
+  const showingGlobal = resultMode === "global";
+  const displayTopStrategies = showingGlobal ? (summary?.topStrategies ?? []) : (detail?.topStrategies ?? []);
+  const displayTopBonds = showingGlobal ? (summary?.topBonds ?? []) : (detail?.topBonds ?? []);
 
   const loadBootstrap = useCallback(async () => {
     try {
@@ -105,18 +94,6 @@ function CbQuantBacktestEvaluationContent() {
 
       const syncStatus = await getHistorySyncStatus();
       setHistorySyncStatus(syncStatus);
-
-      if (strategyResp.items.length) {
-        const validIdSet = new Set(strategyResp.items.map((item) => item.id));
-        const queryIds = strategyIdsFromQuery.filter((id) => validIdSet.has(id));
-        const querySingle = validIdSet.has(strategyIdFromQuery) ? strategyIdFromQuery : "";
-        setSelectedStrategyIds((prev) => {
-          if (prev.length) return prev;
-          if (queryIds.length) return Array.from(new Set(queryIds));
-          if (querySingle) return [querySingle];
-          return [strategyResp.items[0].id];
-        });
-      }
 
       if (summary.dateStart && summary.dateEnd) {
         setStartDate(summary.dateStart);
@@ -131,13 +108,13 @@ function CbQuantBacktestEvaluationContent() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "初始化失败");
     }
-  }, [strategyIdFromQuery, strategyIdsFromQuery]);
+  }, []);
 
   const loadTasks = useCallback(async () => {
     setLoadingTasks(true);
     try {
       const response = await listStrategyOptimizeTasks({
-        templateId: selectedStrategyIds.length === 1 ? selectedStrategyIds[0] : "all",
+        templateId: "all",
         page: tasksPage,
         pageSize: 10,
       });
@@ -155,7 +132,7 @@ function CbQuantBacktestEvaluationContent() {
     } finally {
       setLoadingTasks(false);
     }
-  }, [selectedStrategyIds, tasksPage, selectedTaskId]);
+  }, [tasksPage, selectedTaskId]);
 
   const loadDetail = useCallback(async () => {
     if (!selectedTaskId) {
@@ -171,30 +148,47 @@ function CbQuantBacktestEvaluationContent() {
     }
   }, [selectedTaskId]);
 
+  const loadSummary = useCallback(async () => {
+    try {
+      const response = await getStrategyOptimizeSummary({
+        topN,
+        currentTopN,
+      });
+      setSummary(response);
+    } catch (err) {
+      setSummary(null);
+      setError(err instanceof Error ? err.message : "全局汇总加载失败");
+    }
+  }, [topN, currentTopN]);
+
   useEffect(() => {
     void loadBootstrap();
   }, [loadBootstrap]);
 
   useEffect(() => {
-    if (!selectedStrategyIds.length) return;
     void loadTasks();
-  }, [selectedStrategyIds, tasksPage, loadTasks]);
+  }, [tasksPage, loadTasks]);
 
   useEffect(() => {
     void loadDetail();
   }, [loadDetail]);
 
   useEffect(() => {
+    void loadSummary();
+  }, [loadSummary]);
+
+  useEffect(() => {
     const timer = window.setInterval(() => {
       void loadTasks();
       void loadDetail();
+      void loadSummary();
     }, 3000);
     return () => window.clearInterval(timer);
-  }, [loadTasks, loadDetail]);
+  }, [loadTasks, loadDetail, loadSummary]);
 
   const handleCreateTask = async () => {
-    if (!selectedStrategyIds.length) {
-      setError("请先勾选至少一个策略");
+    if (!enabledStrategies.length) {
+      setError("没有启用策略，请先到策略生成页启用策略。");
       return;
     }
     if (!activeWindows.length) {
@@ -207,23 +201,23 @@ function CbQuantBacktestEvaluationContent() {
     setHint("");
     try {
       const createdTaskIds: string[] = [];
-      const failedStrategyIds: string[] = [];
+      const failedStrategyNames: string[] = [];
 
-      for (const strategyId of selectedStrategyIds) {
+      for (const strategy of enabledStrategies) {
         try {
-          const strategy = strategyById.get(strategyId);
+          const strategyData = strategyById.get(strategy.id);
           const result = await createStrategyOptimizeTask({
-            templateId: strategyId,
+            templateId: strategy.id,
             windows: activeWindows,
             startDate,
             endDate,
             topN,
-            maxCombinations: strategy?.comboSize ?? undefined,
+            maxCombinations: strategyData?.comboSize ?? undefined,
             currentTopN,
           });
           createdTaskIds.push(result.task.taskId);
         } catch {
-          failedStrategyIds.push(strategyId);
+          failedStrategyNames.push(strategy.name);
         }
       }
 
@@ -235,14 +229,16 @@ function CbQuantBacktestEvaluationContent() {
       }
 
       setHint(
-        `已创建 ${createdCount} 个策略的回测任务，共 ${totalTasks} 个窗口任务。${
-          failedStrategyIds.length ? `失败 ${failedStrategyIds.length} 个策略：${failedStrategyIds.join("、")}` : ""
+        `已为 ${createdCount} 个启用策略创建回测任务，共 ${totalTasks} 个窗口任务。${
+          failedStrategyNames.length ? `失败 ${failedStrategyNames.length} 个策略：${failedStrategyNames.join("、")}` : ""
         }`,
       );
       setSelectedTaskId(createdTaskIds[0]);
+      setResultMode("task");
       setTasksPage(1);
       await loadTasks();
       await loadDetail();
+      await loadSummary();
     } catch (err) {
       setError(err instanceof Error ? err.message : "创建优化任务失败");
     } finally {
@@ -269,13 +265,13 @@ function CbQuantBacktestEvaluationContent() {
   return (
     <CbQuantPageShell
       title="回测评估行动页"
-      subtitle="多选策略后批量创建回测任务，系统轮询进度并输出最优策略与当前Top20。"
+      subtitle="按启用策略批量回测，轮询进度并输出最优策略与当前Top20。"
     >
       <div className="space-y-6">
         <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
           <div className="border-b border-gray-200 px-5 py-4 dark:border-gray-800">
             <h3 className="text-lg font-semibold text-gray-800 dark:text-white/90">回测任务创建</h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400">用户动线：选策略与窗口 → 启动回测搜索 → 轮询进度 → 查看最优策略与当前Top20。</p>
+            <p className="text-sm text-gray-500 dark:text-gray-400">用户动线：同步历史快照 → 启动回测搜索 → 轮询进度 → 查看最优策略与当前Top20。</p>
             <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-gray-600 dark:text-gray-300">
               <span>
                 历史快照：
@@ -301,56 +297,10 @@ function CbQuantBacktestEvaluationContent() {
           </div>
           <div className="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-4">
             <div>
-              <div className="mb-2 flex items-center justify-between">
-                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400">策略（可多选）</label>
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedStrategyIds(strategies.map((row) => row.id));
-                      setTasksPage(1);
-                    }}
-                    disabled={!strategies.length}
-                    className="rounded border border-gray-300 px-2 py-0.5 text-[11px] text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:text-gray-300"
-                  >
-                    全选
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedStrategyIds([]);
-                      setTasksPage(1);
-                    }}
-                    disabled={!selectedStrategyIds.length}
-                    className="rounded border border-gray-300 px-2 py-0.5 text-[11px] text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:text-gray-300"
-                  >
-                    清空
-                  </button>
-                </div>
+              <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">启用策略数</label>
+              <div className="h-11 rounded-lg border border-gray-300 bg-gray-50 px-3 text-sm leading-11 text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200">
+                {enabledStrategies.length} / {strategies.length}
               </div>
-              <div className="h-[128px] space-y-1 overflow-y-auto rounded-lg border border-gray-300 bg-transparent px-3 py-2 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white">
-                {strategies.map((row) => (
-                  <label key={row.id} className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={selectedStrategySet.has(row.id)}
-                      onChange={() => {
-                        setSelectedStrategyIds((prev) => {
-                          if (prev.includes(row.id)) {
-                            return prev.filter((id) => id !== row.id);
-                          }
-                          return [...prev, row.id];
-                        });
-                        setTasksPage(1);
-                      }}
-                    />
-                    <span className="truncate text-xs">
-                      {row.id} · {row.name}
-                    </span>
-                  </label>
-                ))}
-              </div>
-              <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">已选 {selectedStrategyIds.length} 个策略</p>
             </div>
             <div>
               <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">回测开始日期</label>
@@ -444,9 +394,7 @@ function CbQuantBacktestEvaluationContent() {
         <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
           <div className="border-b border-gray-200 px-5 py-4 dark:border-gray-800">
             <h3 className="text-lg font-semibold text-gray-800 dark:text-white/90">回测任务队列（轮询刷新）</h3>
-            <p className="text-xs text-gray-500 dark:text-gray-400">
-              {selectedStrategyIds.length === 1 ? "当前按单策略过滤任务队列。" : "当前显示全量任务队列（多策略模式）。"}
-            </p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">当前显示全量任务队列。</p>
           </div>
           <div className="p-5">
             <ScrollableDataTable
@@ -480,7 +428,10 @@ function CbQuantBacktestEvaluationContent() {
                   <TableCell className="px-4 py-3">
                     <button
                       type="button"
-                      onClick={() => setSelectedTaskId(row.taskId)}
+                      onClick={() => {
+                        setSelectedTaskId(row.taskId);
+                        setResultMode("task");
+                      }}
                       className="rounded-lg border border-brand-500 px-3 py-1.5 text-xs font-medium text-brand-600 hover:bg-brand-50 dark:border-brand-400 dark:text-brand-300"
                     >
                       查看结果
@@ -498,22 +449,65 @@ function CbQuantBacktestEvaluationContent() {
           </div>
         </div>
 
+        <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-white/[0.03]">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setResultMode("global")}
+              className={`rounded-lg border px-3 py-1.5 text-xs font-medium ${
+                showingGlobal
+                  ? "border-brand-500 bg-brand-50 text-brand-600 dark:border-brand-400 dark:bg-brand-500/10 dark:text-brand-300"
+                  : "border-gray-300 text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300"
+              }`}
+            >
+              全局汇总（全部双/三因子）
+            </button>
+            <button
+              type="button"
+              onClick={() => setResultMode("task")}
+              disabled={!selectedTaskId}
+              className={`rounded-lg border px-3 py-1.5 text-xs font-medium ${
+                !showingGlobal
+                  ? "border-brand-500 bg-brand-50 text-brand-600 dark:border-brand-400 dark:bg-brand-500/10 dark:text-brand-300"
+                  : "border-gray-300 text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300"
+              } disabled:cursor-not-allowed disabled:opacity-60`}
+            >
+              单任务视图（当前选择）
+            </button>
+            <span className="text-xs text-gray-500 dark:text-gray-400">
+              {showingGlobal
+                ? `已完成任务 ${summary?.finishedTaskCount ?? 0} 个，汇总策略 ${summary?.totalResultCount ?? 0} 条。`
+                : `当前任务：${detail?.task.taskId ?? selectedTaskId ?? "--"}。`}
+            </span>
+          </div>
+          {showingGlobal && summary?.message ? (
+            <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">{summary.message}</p>
+          ) : null}
+          {!showingGlobal && detail?.task.message ? (
+            <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">{detail.task.message}</p>
+          ) : null}
+        </div>
+
         <div className="grid gap-6 xl:grid-cols-2">
           <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
             <div className="border-b border-gray-200 px-5 py-4 dark:border-gray-800">
-              <h3 className="text-lg font-semibold text-gray-800 dark:text-white/90">最优策略榜单</h3>
+              <h3 className="text-lg font-semibold text-gray-800 dark:text-white/90">
+                {showingGlobal ? "全局最优策略榜单（跨任务汇总）" : "最优策略榜单（单任务）"}
+              </h3>
             </div>
             <div className="p-5">
               <ScrollableDataTable
-                headers={["排名", "组合ID", "稳健分", "CAGR", "MDD", "Calmar", "收益%", "参数"]}
-                minTableWidthClass="min-w-[1100px]"
-                colSpan={8}
-                isEmpty={!detail || detail.topStrategies.length === 0}
+                headers={["排名", "任务ID", "模板", "组合ID", "稳健分", "CAGR", "MDD", "Calmar", "收益%", "参数"]}
+                minTableWidthClass="min-w-[1400px]"
+                colSpan={10}
+                isEmpty={displayTopStrategies.length === 0}
                 emptyText="任务完成后展示TopN策略"
               >
-                {(detail?.topStrategies ?? []).map((row) => (
-                  <TableRow key={row.comboId} className="border-b border-gray-100 dark:border-gray-800">
+                {displayTopStrategies.map((row) => (
+                  <TableRow key={`${row.taskId ?? "task"}-${row.comboId}-${row.rank}`} className="border-b border-gray-100 dark:border-gray-800">
                     <TableCell className="px-4 py-3 text-sm font-semibold text-gray-900 dark:text-white">#{row.rank}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.taskId ?? "--"}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.templateName ?? "--"}</TableCell>
                     <TableCell className="px-4 py-3 text-sm font-semibold text-gray-900 dark:text-white">{row.comboId}</TableCell>
                     <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.robustScore.toFixed(2)}</TableCell>
                     <TableCell className="px-4 py-3 text-sm font-medium text-green-600">{toPercent(row.cagr)}</TableCell>
@@ -531,17 +525,19 @@ function CbQuantBacktestEvaluationContent() {
 
           <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
             <div className="border-b border-gray-200 px-5 py-4 dark:border-gray-800">
-              <h3 className="text-lg font-semibold text-gray-800 dark:text-white/90">当前市场 Top20 可转债</h3>
+              <h3 className="text-lg font-semibold text-gray-800 dark:text-white/90">
+                {showingGlobal ? "当前市场 Top20 可转债（按全局最优策略）" : "当前市场 Top20 可转债（按任务最优策略）"}
+              </h3>
             </div>
             <div className="p-5">
               <ScrollableDataTable
                 headers={["排名", "转债代码", "转债名称", "现价", "转股溢价率", "双低", "成交额(万)", "评分"]}
                 minTableWidthClass="min-w-[980px]"
                 colSpan={8}
-                isEmpty={!detail || detail.topBonds.length === 0}
-                emptyText="任务完成后按最优策略实时计算Top20"
+                isEmpty={displayTopBonds.length === 0}
+                emptyText="仅展示实时行情可得的Top20（非实时源时不展示）"
               >
-                {(detail?.topBonds ?? []).map((row) => (
+                {displayTopBonds.map((row) => (
                   <TableRow key={`${row.bondId}-${row.rank}`} className="border-b border-gray-100 dark:border-gray-800">
                     <TableCell className="px-4 py-3 text-sm font-semibold text-gray-900 dark:text-white">#{row.rank}</TableCell>
                     <TableCell className="px-4 py-3 text-sm font-semibold text-gray-900 dark:text-white">{row.bondId}</TableCell>
@@ -559,24 +555,5 @@ function CbQuantBacktestEvaluationContent() {
         </div>
       </div>
     </CbQuantPageShell>
-  );
-}
-
-export default function CbQuantBacktestEvaluationPage() {
-  return (
-    <Suspense
-      fallback={
-        <CbQuantPageShell
-          title="回测评估行动页"
-          subtitle="多选策略后批量创建回测任务，系统轮询进度并输出最优策略与当前Top20。"
-        >
-          <div className="rounded-xl border border-gray-200 bg-white px-5 py-10 text-sm text-gray-500 dark:border-gray-800 dark:bg-white/[0.03] dark:text-gray-400">
-            加载中...
-          </div>
-        </CbQuantPageShell>
-      }
-    >
-      <CbQuantBacktestEvaluationContent />
-    </Suspense>
   );
 }
