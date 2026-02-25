@@ -179,3 +179,20 @@ class TestBacktestCreateJobsStrictCandidate:
         assert len(service._store.saved) == 1
         assert service._store.saved[0]["context"]["setting"]["price_bemchmark"] == 110.0
         assert len(service._executor.submitted) == 1
+
+
+class TestOptimizeSamplingHelpers:
+    def test_sample_combo_indices_should_be_unique_and_cover_range(self) -> None:
+        indices = CbQuantService._sample_combo_indices(total=1000, sample_limit=11)
+        assert len(indices) == 11
+        assert indices == sorted(indices)
+        assert len(set(indices)) == 11
+        assert indices[0] == 1
+        assert indices[-1] == 1000
+
+    def test_should_enable_stage1_screening(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        service = _build_service()
+        monkeypatch.setenv("CBQ_OPT_STAGE1_THRESHOLD", "500")
+        assert service._should_enable_stage1_screening(total=600, windows=["full", "3y", "1y"]) is True
+        assert service._should_enable_stage1_screening(total=400, windows=["full", "3y", "1y"]) is False
+        assert service._should_enable_stage1_screening(total=600, windows=["full"]) is False

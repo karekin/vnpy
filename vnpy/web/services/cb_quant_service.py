@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import date, datetime
 from itertools import combinations, islice, product
 import json
 from math import ceil, comb, sqrt
+import os
 from pathlib import Path
 from threading import Event, Lock, Thread, current_thread
 from typing import Any, Iterable, TypeVar
@@ -1016,6 +1017,23 @@ class CbQuantService:
 
         module = self._adapter._load_module()
         dataset = self._adapter.load_market_data()
+        total = max(1, task.total_combinations)
+        workers = self._optimize_worker_count()
+        window_dataset_map = self._prepare_window_dataset_map(
+            dataset=dataset,
+            windows=task.windows,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        if not any(bool(window_dataset_map.get(window_name)) for window_name in task.windows):
+            self._update_optimize_task(
+                task_id,
+                status="failed",
+                eta="--",
+                finished_at=_now_readable(),
+                message="No market snapshots available for selected window",
+            )
+            return
 
         self._update_optimize_task(
             task_id,
@@ -1023,72 +1041,187 @@ class CbQuantService:
             progress=1,
             started_at=_now_readable(),
             eta="loading",
-            message="正在加载历史快照并初始化参数空间",
+            message=f"正在加载历史快照并初始化参数空间（workers={workers}）",
         )
 
         ranking_rows: list[StrategyOptimizeResultRow] = []
-        total = max(1, task.total_combinations)
-        evaluated = 0
+        evaluated_primary = 0
+        evaluated_secondary = 0
         skipped_no_trade = 0
         start_at = datetime.now()
 
         try:
-            for combo_id, setting in self._iter_template_settings(
-                template_id=task.template_id,
-                limit=task.total_combinations,
-            ):
-                evaluated += 1
-                row = self._evaluate_combo(
+            screening_enabled = self._should_enable_stage1_screening(total=total, windows=task.windows)
+            stage1_window = self._pick_stage1_window(task.windows)
+            stage1_windows: list[WindowName] = [stage1_window]
+            stage1_sample_limit = self._stage1_sample_limit(total=total, top_n=top_n) if screening_enabled else total
+            stage2_shortlist_limit = self._stage2_shortlist_limit(
+                total=total,
+                top_n=top_n,
+                current_top_n=current_top_n,
+            )
+
+            if screening_enabled:
+                stage1_best_rows: list[StrategyOptimizeResultRow] = []
+                stage1_combo_iter = self._iter_sampled_template_settings(
+                    template_id=task.template_id,
+                    total=total,
+                    sample_limit=stage1_sample_limit,
+                )
+                stage1_map = {stage1_window: window_dataset_map.get(stage1_window, [])}
+                for row in self._iter_combo_results_parallel(
                     module=module,
                     task_id=task_id,
                     template_id=task.template_id,
                     template_name=task.template_name,
                     dataset=dataset,
-                    combo_id=combo_id,
+                    combo_iter=stage1_combo_iter,
+                    windows=stage1_windows,
+                    start_date=start_date,
+                    end_date=end_date,
+                    window_dataset_map=stage1_map,
+                    workers=workers,
+                ):
+                    evaluated_primary += 1
+                    if abs(row.total_return_pct) < 1e-9 and row.turnover <= 1e-9:
+                        skipped_no_trade += 1
+                    else:
+                        stage1_best_rows.append(row)
+                        stage1_best_rows.sort(
+                            key=lambda item: (item.robust_score, item.cagr, -item.mdd),
+                            reverse=True,
+                        )
+                        stage1_best_rows = stage1_best_rows[:stage2_shortlist_limit]
+
+                    should_emit = (
+                        evaluated_primary == 1
+                        or evaluated_primary == stage1_sample_limit
+                        or evaluated_primary % max(1, stage1_sample_limit // 100) == 0
+                        or evaluated_primary % 200 == 0
+                    )
+                    if not should_emit:
+                        continue
+                    elapsed_seconds = max(1.0, (datetime.now() - start_at).total_seconds())
+                    remain = max(0, stage1_sample_limit - evaluated_primary)
+                    per_cost = elapsed_seconds / max(1, evaluated_primary)
+                    eta_minutes = int((remain * per_cost) / 60)
+                    self._optimize_results[task_id] = self._rank_optimize_rows(stage1_best_rows[:top_n])
+                    self._update_optimize_task(
+                        task_id,
+                        evaluated_combinations=min(total, evaluated_primary),
+                        progress=max(1, min(70, ceil(evaluated_primary / max(1, stage1_sample_limit) * 70))),
+                        eta=f"{eta_minutes}m" if remain else "stage1-done",
+                        message=(
+                            f"阶段1({stage1_window})筛选 {evaluated_primary}/{stage1_sample_limit}，"
+                            f"入围 {min(len(stage1_best_rows), stage2_shortlist_limit)}"
+                        ),
+                    )
+
+                shortlist = sorted(
+                    stage1_best_rows,
+                    key=lambda item: (item.robust_score, item.cagr, -item.mdd),
+                    reverse=True,
+                )[:stage2_shortlist_limit]
+                stage2_total = len(shortlist)
+                if stage2_total == 0:
+                    ranking_rows = []
+                else:
+                    stage2_combo_iter = (
+                        (row.combo_id, dict(row.params))
+                        for row in shortlist
+                    )
+                    for row in self._iter_combo_results_parallel(
+                        module=module,
+                        task_id=task_id,
+                        template_id=task.template_id,
+                        template_name=task.template_name,
+                        dataset=dataset,
+                        combo_iter=stage2_combo_iter,
+                        windows=task.windows,
+                        start_date=start_date,
+                        end_date=end_date,
+                        window_dataset_map=window_dataset_map,
+                        workers=workers,
+                    ):
+                        evaluated_secondary += 1
+                        if abs(row.total_return_pct) < 1e-9 and row.turnover <= 1e-9:
+                            skipped_no_trade += 1
+                            continue
+                        ranking_rows.append(row)
+                        ranking_rows.sort(
+                            key=lambda item: (item.robust_score, item.cagr, -item.mdd),
+                            reverse=True,
+                        )
+                        ranking_rows = ranking_rows[:top_n]
+
+                        should_emit = (
+                            evaluated_secondary == 1
+                            or evaluated_secondary == stage2_total
+                            or evaluated_secondary % max(1, stage2_total // 50) == 0
+                            or evaluated_secondary % 100 == 0
+                        )
+                        if not should_emit:
+                            continue
+                        elapsed_seconds = max(1.0, (datetime.now() - start_at).total_seconds())
+                        remain = max(0, stage2_total - evaluated_secondary)
+                        per_cost = elapsed_seconds / max(1, evaluated_primary + evaluated_secondary)
+                        eta_minutes = int((remain * per_cost) / 60)
+                        self._optimize_results[task_id] = self._rank_optimize_rows(ranking_rows)
+                        stage2_progress = 70 + ceil(evaluated_secondary / max(1, stage2_total) * 29)
+                        self._update_optimize_task(
+                            task_id,
+                            evaluated_combinations=min(total, evaluated_primary),
+                            progress=max(70, min(99, stage2_progress)),
+                            eta=f"{eta_minutes}m" if remain else "done",
+                            message=f"阶段2复评 {evaluated_secondary}/{stage2_total}",
+                        )
+            else:
+                combo_iter = self._iter_template_settings(
+                    template_id=task.template_id,
+                    limit=task.total_combinations,
+                )
+                for row in self._iter_combo_results_parallel(
+                    module=module,
+                    task_id=task_id,
+                    template_id=task.template_id,
+                    template_name=task.template_name,
+                    dataset=dataset,
+                    combo_iter=combo_iter,
                     windows=task.windows,
                     start_date=start_date,
                     end_date=end_date,
-                    setting=setting,
-                )
-                if abs(row.total_return_pct) < 1e-9 and row.turnover <= 1e-9:
-                    skipped_no_trade += 1
-                    continue
-                ranking_rows.append(row)
-                ranking_rows.sort(
-                    key=lambda item: (item.robust_score, item.cagr, -item.mdd),
-                    reverse=True,
-                )
-                ranking_rows = ranking_rows[:top_n]
-
-                if (
-                    evaluated == 1
-                    or evaluated == total
-                    or evaluated % max(1, total // 100) == 0
-                    or evaluated % 500 == 0
+                    window_dataset_map=window_dataset_map,
+                    workers=workers,
                 ):
-                    ranked_snapshot = [
-                        item.model_copy(update={"rank": idx + 1})
-                        for idx, item in enumerate(
-                            sorted(
-                                ranking_rows,
-                                key=lambda item: (item.robust_score, item.cagr, -item.mdd),
-                                reverse=True,
-                            )
-                        )
-                    ]
-                    self._optimize_results[task_id] = ranked_snapshot
-
-                    elapsed_seconds = max(1.0, (datetime.now() - start_at).total_seconds())
-                    remain = max(0, total - evaluated)
-                    per_cost = elapsed_seconds / evaluated
-                    eta_minutes = int((remain * per_cost) / 60)
-                    self._update_optimize_task(
-                        task_id,
-                        evaluated_combinations=evaluated,
-                        progress=max(1, min(99, ceil(evaluated / total * 100))),
-                        eta=f"{eta_minutes}m" if remain else "done",
-                        message=f"已评估 {evaluated}/{total}",
+                    evaluated_primary += 1
+                    if abs(row.total_return_pct) < 1e-9 and row.turnover <= 1e-9:
+                        skipped_no_trade += 1
+                        continue
+                    ranking_rows.append(row)
+                    ranking_rows.sort(
+                        key=lambda item: (item.robust_score, item.cagr, -item.mdd),
+                        reverse=True,
                     )
+                    ranking_rows = ranking_rows[:top_n]
+
+                    if (
+                        evaluated_primary == 1
+                        or evaluated_primary == total
+                        or evaluated_primary % max(1, total // 100) == 0
+                        or evaluated_primary % 200 == 0
+                    ):
+                        self._optimize_results[task_id] = self._rank_optimize_rows(ranking_rows)
+                        elapsed_seconds = max(1.0, (datetime.now() - start_at).total_seconds())
+                        remain = max(0, total - evaluated_primary)
+                        per_cost = elapsed_seconds / max(1, evaluated_primary)
+                        eta_minutes = int((remain * per_cost) / 60)
+                        self._update_optimize_task(
+                            task_id,
+                            evaluated_combinations=evaluated_primary,
+                            progress=max(1, min(99, ceil(evaluated_primary / total * 100))),
+                            eta=f"{eta_minutes}m" if remain else "done",
+                            message=f"已评估 {evaluated_primary}/{total}",
+                        )
 
             ranked = [
                 row.model_copy(update={"rank": idx + 1})
@@ -1103,10 +1236,10 @@ class CbQuantService:
                     task_id,
                     status="finished",
                     progress=100,
-                    evaluated_combinations=evaluated,
+                    evaluated_combinations=min(total, evaluated_primary),
                     eta="done",
                     finished_at=_now_readable(),
-                    message=f"优化完成，但未产生有效交易策略（无交易组合 {skipped_no_trade}/{evaluated}）。",
+                    message=f"优化完成，但未产生有效交易策略（无交易组合 {skipped_no_trade}/{max(1, evaluated_primary + evaluated_secondary)}）。",
                 )
                 return
             best_setting = ranked[0].params if ranked else {}
@@ -1128,17 +1261,21 @@ class CbQuantService:
                 task_id,
                 status="finished",
                 progress=100,
-                evaluated_combinations=evaluated,
+                evaluated_combinations=min(total, evaluated_primary),
                 eta="done",
                 finished_at=_now_readable(),
-                message=f"优化完成，最佳策略 {ranked[0].combo_id if ranked else '--'}{strategy_warning}{market_warning}",
+                message=(
+                    f"优化完成，最佳策略 {ranked[0].combo_id if ranked else '--'}"
+                    f"{strategy_warning}{market_warning}"
+                    f"；主筛={evaluated_primary}/{total}, 复评={evaluated_secondary}"
+                ),
             )
         except Exception as exc:
             self._update_optimize_task(
                 task_id,
                 status="failed",
-                progress=max(1, min(99, ceil(evaluated / total * 100))) if evaluated > 0 else 0,
-                evaluated_combinations=evaluated,
+                progress=max(1, min(99, ceil(evaluated_primary / total * 100))) if evaluated_primary > 0 else 0,
+                evaluated_combinations=min(total, evaluated_primary),
                 eta="--",
                 finished_at=_now_readable(),
                 message=f"error: {str(exc)[:160]}",
@@ -1488,6 +1625,365 @@ class CbQuantService:
                 return merged
         return None
 
+    @staticmethod
+    def _rank_optimize_rows(rows: list[StrategyOptimizeResultRow]) -> list[StrategyOptimizeResultRow]:
+        return [
+            row.model_copy(update={"rank": idx + 1})
+            for idx, row in enumerate(
+                sorted(rows, key=lambda item: (item.robust_score, item.cagr, -item.mdd), reverse=True)
+            )
+        ]
+
+    def _prepare_window_dataset_map(
+        self,
+        *,
+        dataset: list[tuple[str, Any]],
+        windows: list[WindowName],
+        start_date: date | None,
+        end_date: date | None,
+    ) -> dict[WindowName, list[tuple[str, Any]]]:
+        sliced_map: dict[WindowName, list[tuple[str, Any]]] = {}
+        for window_name in self._normalize_windows(windows):
+            sliced = self._adapter._slice_dataset(
+                dataset=dataset,
+                window_name=window_name,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            if not sliced and (start_date or end_date):
+                sliced = self._adapter._slice_dataset(
+                    dataset=dataset,
+                    window_name=window_name,
+                    start_date=None,
+                    end_date=None,
+                )
+            sliced_map[window_name] = sliced
+        return sliced_map
+
+    @staticmethod
+    def _pick_stage1_window(windows: list[WindowName]) -> WindowName:
+        if "1y" in windows:
+            return "1y"
+        if "3y" in windows:
+            return "3y"
+        return "full"
+
+    @staticmethod
+    def _env_int(name: str, default: int, *, low: int = 1, high: int = 1_000_000) -> int:
+        raw = os.getenv(name, "").strip()
+        if not raw:
+            return default
+        try:
+            value = int(raw)
+        except Exception:
+            return default
+        return max(low, min(high, value))
+
+    @staticmethod
+    def _env_float(name: str, default: float, *, low: float = 0.0, high: float = 1.0) -> float:
+        raw = os.getenv(name, "").strip()
+        if not raw:
+            return default
+        try:
+            value = float(raw)
+        except Exception:
+            return default
+        return max(low, min(high, value))
+
+    def _optimize_worker_count(self) -> int:
+        return self._env_int("CBQ_OPT_WORKERS", 1, low=1, high=32)
+
+    def _should_enable_stage1_screening(self, *, total: int, windows: list[WindowName]) -> bool:
+        threshold = self._env_int("CBQ_OPT_STAGE1_THRESHOLD", 500, low=10, high=5_000_000)
+        return total >= threshold and len(windows) >= 2
+
+    def _stage1_sample_limit(self, *, total: int, top_n: int) -> int:
+        ratio = self._env_float("CBQ_OPT_STAGE1_RATIO", 0.1, low=0.01, high=1.0)
+        min_sample = self._env_int("CBQ_OPT_STAGE1_MIN", 400, low=20, high=1_000_000)
+        max_sample = self._env_int("CBQ_OPT_STAGE1_MAX", 12_000, low=50, high=2_000_000)
+        base = max(min_sample, int(total * ratio), max(20, top_n * 20))
+        return max(1, min(total, min(max_sample, base)))
+
+    def _stage2_shortlist_limit(self, *, total: int, top_n: int, current_top_n: int) -> int:
+        multiplier = self._env_int("CBQ_OPT_SHORTLIST_MULTIPLIER", 8, low=2, high=50)
+        min_shortlist = self._env_int("CBQ_OPT_SHORTLIST_MIN", 120, low=20, high=20_000)
+        max_shortlist = self._env_int("CBQ_OPT_SHORTLIST_MAX", 3_000, low=50, high=100_000)
+        base = max(min_shortlist, max(top_n, current_top_n) * multiplier)
+        return max(1, min(total, min(max_shortlist, base)))
+
+    @staticmethod
+    def _sample_combo_indices(total: int, sample_limit: int) -> list[int]:
+        if total <= 0:
+            return []
+        if sample_limit >= total:
+            return list(range(1, total + 1))
+        if sample_limit <= 1:
+            return [1]
+
+        step = (total - 1) / (sample_limit - 1)
+        seeded = [1 + int(round(idx * step)) for idx in range(sample_limit)]
+        seen: set[int] = set()
+        indices: list[int] = []
+        for value in seeded:
+            safe = max(1, min(total, value))
+            if safe in seen:
+                continue
+            seen.add(safe)
+            indices.append(safe)
+
+        if len(indices) < sample_limit:
+            for value in range(1, total + 1):
+                if value in seen:
+                    continue
+                indices.append(value)
+                seen.add(value)
+                if len(indices) >= sample_limit:
+                    break
+        indices.sort()
+        return indices[:sample_limit]
+
+    def _iter_sampled_template_settings(
+        self,
+        *,
+        template_id: str,
+        total: int,
+        sample_limit: int,
+    ) -> Iterable[tuple[str, dict[str, Any]]]:
+        if sample_limit >= total:
+            yield from self._iter_template_settings(template_id=template_id, limit=total)
+            return
+
+        for combo_seq in self._sample_combo_indices(total, sample_limit):
+            combo_id = f"CMB-{combo_seq:06d}"
+            setting = self._build_candidate_setting(template_id=template_id, combo_id=combo_id)
+            if not setting:
+                continue
+            yield combo_id, setting
+
+    def _iter_combo_results_parallel(
+        self,
+        *,
+        module: Any,
+        task_id: str,
+        template_id: str,
+        template_name: str,
+        dataset: list[tuple[str, Any]],
+        combo_iter: Iterable[tuple[str, dict[str, Any]]],
+        windows: list[WindowName],
+        start_date: date | None,
+        end_date: date | None,
+        window_dataset_map: dict[WindowName, list[tuple[str, Any]]] | None,
+        workers: int,
+    ) -> Iterable[StrategyOptimizeResultRow]:
+        combo_iterator = iter(combo_iter)
+        if workers <= 1:
+            for combo_id, setting in combo_iterator:
+                yield self._evaluate_combo(
+                    module=module,
+                    task_id=task_id,
+                    template_id=template_id,
+                    template_name=template_name,
+                    dataset=dataset,
+                    combo_id=combo_id,
+                    windows=windows,
+                    start_date=start_date,
+                    end_date=end_date,
+                    setting=setting,
+                    window_dataset_map=window_dataset_map,
+                )
+            return
+
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="cbq-opt-eval") as pool:
+            inflight: dict[Any, str] = {}
+
+            def submit_next() -> bool:
+                try:
+                    combo_id, setting = next(combo_iterator)
+                except StopIteration:
+                    return False
+                future = pool.submit(
+                    self._evaluate_combo,
+                    module=module,
+                    task_id=task_id,
+                    template_id=template_id,
+                    template_name=template_name,
+                    dataset=dataset,
+                    combo_id=combo_id,
+                    windows=windows,
+                    start_date=start_date,
+                    end_date=end_date,
+                    setting=setting,
+                    window_dataset_map=window_dataset_map,
+                )
+                inflight[future] = combo_id
+                return True
+
+            for _ in range(max(1, workers * 2)):
+                if not submit_next():
+                    break
+
+            while inflight:
+                done, _ = wait(set(inflight.keys()), return_when=FIRST_COMPLETED)
+                for future in done:
+                    inflight.pop(future, None)
+                    yield future.result()
+                    submit_next()
+
+    def _build_candidate_code_map(
+        self,
+        *,
+        module: Any,
+        dataset: list[tuple[str, Any]],
+        cfg: dict[str, Any],
+        head_count: int,
+    ) -> dict[str, list[str]]:
+        candidate_code_map: dict[str, list[str]] = {}
+        for trade_date, frame in dataset:
+            try:
+                candidate = module.build_candidates(frame, trade_date, cfg, head_count)
+            except Exception:
+                candidate = None
+            if candidate is None or getattr(candidate, "empty", True):
+                candidate_code_map[trade_date] = []
+                continue
+            try:
+                codes = candidate["cb_code"].astype(str).tolist()
+            except Exception:
+                candidate_code_map[trade_date] = []
+                continue
+            candidate_code_map[trade_date] = codes[: max(1, head_count)]
+        return candidate_code_map
+
+    def _run_backtest_from_candidate_map(
+        self,
+        *,
+        dataset: list[tuple[str, Any]],
+        candidate_code_map: dict[str, list[str]],
+        max_hold_num: int,
+        until_win: bool,
+    ) -> dict[str, Any]:
+        holdings: list[dict[str, Any]] = []
+        per_position = 1.0 / max_hold_num if max_hold_num > 0 else 0.0
+        daily_returns: list[float] = []
+        sell_win = 0
+        sell_loss = 0
+
+        for index, (trade_date, frame) in enumerate(dataset):
+            ranked_codes = [code for code in candidate_code_map.get(trade_date, []) if code in frame.index]
+            ranked_set = set(ranked_codes)
+
+            if index == 0:
+                for code in ranked_codes:
+                    if len(holdings) >= max_hold_num:
+                        break
+                    row = frame.loc[code]
+                    price = self._to_float(row.get("price"), 0.0)
+                    if price <= 0:
+                        continue
+                    holdings.append(
+                        {
+                            "code": code,
+                            "buy_price": price,
+                            "last_price": price,
+                            "ratio": per_position,
+                        }
+                    )
+                continue
+
+            daily_ret = 0.0
+            for item in holdings:
+                code = str(item.get("code", ""))
+                if code not in frame.index:
+                    continue
+                row = frame.loc[code]
+                cur_price = self._to_float(row.get("price"), self._to_float(item.get("last_price"), 0.0))
+                last_price = self._to_float(item.get("last_price"), cur_price)
+                if last_price > 0:
+                    daily_ret += ((cur_price - last_price) / last_price) * self._to_float(item.get("ratio"), 0.0)
+                item["last_price"] = cur_price
+            daily_returns.append(round(daily_ret, 6))
+
+            keep_list: list[dict[str, Any]] = []
+            sell_list: list[dict[str, Any]] = []
+            for item in holdings:
+                code = str(item.get("code", ""))
+                if code not in frame.index:
+                    sell_list.append(item)
+                    continue
+                row = frame.loc[code]
+                cur_price = self._to_float(row.get("price"), self._to_float(item.get("last_price"), 0.0))
+                is_ransom = str(row.get("is_ransom_flag", "False")) == "True"
+
+                if is_ransom:
+                    sell_list.append(item)
+                    continue
+                if until_win and cur_price <= self._to_float(item.get("buy_price"), cur_price):
+                    keep_list.append(item)
+                    continue
+                if code in ranked_set:
+                    keep_list.append(item)
+                else:
+                    sell_list.append(item)
+
+            for item in sell_list:
+                code = str(item.get("code", ""))
+                if code in frame.index:
+                    row = frame.loc[code]
+                    sell_price = self._to_float(row.get("price"), self._to_float(item.get("last_price"), 0.0))
+                else:
+                    sell_price = self._to_float(item.get("last_price"), 0.0)
+                buy_price = self._to_float(item.get("buy_price"), sell_price)
+                pnl_pct = (sell_price - buy_price) / buy_price * 100.0 if buy_price > 0 else 0.0
+                if pnl_pct > 0:
+                    sell_win += 1
+                else:
+                    sell_loss += 1
+
+            existing_codes = {str(item.get("code", "")) for item in keep_list}
+            for code in ranked_codes:
+                if len(keep_list) >= max_hold_num:
+                    break
+                if code in existing_codes:
+                    continue
+                row = frame.loc[code]
+                price = self._to_float(row.get("price"), 0.0)
+                if price <= 0:
+                    continue
+                keep_list.append(
+                    {
+                        "code": code,
+                        "buy_price": price,
+                        "last_price": price,
+                        "ratio": per_position,
+                    }
+                )
+                existing_codes.add(code)
+
+            holdings = keep_list
+
+        equity = 1.0
+        max_equity = 1.0
+        max_drawdown = 0.0
+        for daily_ret in daily_returns:
+            equity *= 1.0 + daily_ret
+            max_equity = max(max_equity, equity)
+            drawdown = equity / max_equity - 1.0
+            max_drawdown = min(max_drawdown, drawdown)
+
+        total_return_pct = (equity - 1.0) * 100.0
+        max_drawdown_pct = abs(max_drawdown) * 100.0
+        trade_count = sell_win + sell_loss
+        win_rate_pct = (sell_win / trade_count * 100.0) if trade_count > 0 else 0.0
+
+        return {
+            "total_return_pct": round(total_return_pct, 4),
+            "max_drawdown_pct": round(max_drawdown_pct, 4),
+            "trade_count": int(trade_count),
+            "win_rate_pct": round(win_rate_pct, 4),
+            "sample_days": len(dataset),
+            "rebalanced_days": len(daily_returns),
+        }
+
     def _evaluate_combo(
         self,
         *,
@@ -1501,27 +1997,45 @@ class CbQuantService:
         start_date: date | None,
         end_date: date | None,
         setting: dict[str, Any],
+        window_dataset_map: dict[WindowName, list[tuple[str, Any]]] | None = None,
     ) -> StrategyOptimizeResultRow:
         head_count = max(1, int(round(self._to_float(setting.get("head_count"), 10.0))))
         max_hold_num = max(1, int(round(self._to_float(setting.get("max_hold_num"), 12.0))))
         until_win = bool(setting.get("until_win", False))
         cfg = module.build_strategy_config(setting)
+        base_dataset: list[tuple[str, Any]] = []
+        if window_dataset_map is not None:
+            for window_name in windows:
+                candidate_dataset = window_dataset_map.get(window_name) or []
+                if len(candidate_dataset) > len(base_dataset):
+                    base_dataset = candidate_dataset
+        if not base_dataset:
+            base_dataset = dataset
+        candidate_code_map = self._build_candidate_code_map(
+            module=module,
+            dataset=base_dataset,
+            cfg=cfg,
+            head_count=head_count,
+        )
 
         all_metrics: list[dict[str, float]] = []
         all_returns: list[float] = []
         for window_name in windows:
-            sliced = self._adapter._slice_dataset(
-                dataset=dataset,
-                window_name=window_name,
-                start_date=start_date,
-                end_date=end_date,
-            )
+            sliced = None
+            if window_dataset_map is not None:
+                sliced = window_dataset_map.get(window_name)
+            if sliced is None:
+                sliced = self._adapter._slice_dataset(
+                    dataset=dataset,
+                    window_name=window_name,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
             if not sliced:
                 continue
-            stats = module.run_backtest(
+            stats = self._run_backtest_from_candidate_map(
                 dataset=sliced,
-                cfg=cfg,
-                head_count=head_count,
+                candidate_code_map=candidate_code_map,
                 max_hold_num=max_hold_num,
                 until_win=until_win,
             )
@@ -1533,18 +2047,21 @@ class CbQuantService:
 
         if not all_metrics:
             for window_name in windows:
-                sliced = self._adapter._slice_dataset(
-                    dataset=dataset,
-                    window_name=window_name,
-                    start_date=None,
-                    end_date=None,
-                )
+                sliced = None
+                if window_dataset_map is not None:
+                    sliced = window_dataset_map.get(window_name)
+                if sliced is None or not sliced:
+                    sliced = self._adapter._slice_dataset(
+                        dataset=dataset,
+                        window_name=window_name,
+                        start_date=None,
+                        end_date=None,
+                    )
                 if not sliced:
                     continue
-                stats = module.run_backtest(
+                stats = self._run_backtest_from_candidate_map(
                     dataset=sliced,
-                    cfg=cfg,
-                    head_count=head_count,
+                    candidate_code_map=candidate_code_map,
                     max_hold_num=max_hold_num,
                     until_win=until_win,
                 )
