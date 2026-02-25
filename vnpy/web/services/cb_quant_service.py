@@ -6,7 +6,7 @@ from itertools import combinations, islice, product
 import json
 from math import ceil, comb, sqrt
 from pathlib import Path
-from threading import Event, Lock, Thread
+from threading import Event, Lock, Thread, current_thread
 from typing import Any, Iterable, TypeVar
 
 from vnpy.web.adapters import CrawlerPhaseABacktestAdapter
@@ -1162,6 +1162,8 @@ class CbQuantService:
         biz_to = (business_date_to or "").strip() or None
 
         for row in self._jobs:
+            if not self._is_displayable_backtest_job(row):
+                continue
             if status != "all" and row.status != status:
                 continue
             job_biz_date = str(row.business_date or "")
@@ -1218,12 +1220,13 @@ class CbQuantService:
         return BacktestCompareResponse(items=rows, total=len(rows))
 
     def get_stats(self) -> BacktestStatsResponse:
-        running = sum(1 for row in self._jobs if row.status == "running")
-        queued = sum(1 for row in self._jobs if row.status == "queued")
-        finished = sum(1 for row in self._jobs if row.status == "finished")
-        failed = sum(1 for row in self._jobs if row.status == "failed")
-        cancelled = sum(1 for row in self._jobs if row.status == "cancelled")
-        rule_pack_count = len({row.rule_pack_id for row in self._jobs})
+        visible_jobs = [row for row in self._jobs if self._is_displayable_backtest_job(row)]
+        running = sum(1 for row in visible_jobs if row.status == "running")
+        queued = sum(1 for row in visible_jobs if row.status == "queued")
+        finished = sum(1 for row in visible_jobs if row.status == "finished")
+        failed = sum(1 for row in visible_jobs if row.status == "failed")
+        cancelled = sum(1 for row in visible_jobs if row.status == "cancelled")
+        rule_pack_count = len({row.rule_pack_id for row in visible_jobs})
         top_cagr = max((row.cagr for row in self._leaderboard), default=0.0)
 
         return BacktestStatsResponse(
@@ -1242,8 +1245,17 @@ class CbQuantService:
             windows = ["full", "3y", "1y"]
         business_date = request.business_date.isoformat() if request.business_date else date.today().isoformat()
 
-        candidate = self._find_candidate(request.combo_id)
-        template_name = request.template or (candidate.template if candidate else "未命名模板")
+        request_template = str(request.template or "").strip()
+        candidate = self._find_candidate(
+            request.combo_id,
+            template_name=request_template if request_template else None,
+        )
+        if not candidate:
+            raise ValueError(
+                f"unknown combo_id/template: combo_id={request.combo_id}, template={request_template or '--'}; "
+                "please choose an existing candidate combo."
+            )
+        template_name = candidate.template
         rule_pack_id = request.rule_pack_id or self._build_rule_pack_id(request)
 
         with self._lock:
@@ -1267,9 +1279,9 @@ class CbQuantService:
                     progress=0,
                     business_date=business_date,
                     created_at=created_at,
-                    started_at=_now_hms(),
+                    started_at="",
                     eta="--",
-                    worker=f"wk-0{(seq % 5) + 1}",
+                    worker="",
                 )
                 created.append(row)
                 context = {
@@ -1356,7 +1368,14 @@ class CbQuantService:
             daemon=True,
         )
 
-        self._update_job(job_id, status="running", progress=3, eta="loading data")
+        self._update_job(
+            job_id,
+            status="running",
+            progress=3,
+            eta="loading data",
+            started_at=_now_hms(),
+            worker=current_thread().name,
+        )
         ticker.start()
 
         try:
@@ -1802,9 +1821,10 @@ class CbQuantService:
                     continue
                 row = df_all.loc[code]
                 cur_price = self._to_float(row.get("price"), self._to_float(item.get("last_price"), 0.0))
-                last_price = max(1e-8, self._to_float(item.get("last_price"), cur_price))
+                last_price = self._to_float(item.get("last_price"), cur_price)
                 ratio = self._to_float(item.get("ratio"), 0.0)
-                day_return += ((cur_price - last_price) / last_price) * ratio
+                if last_price > 0:
+                    day_return += ((cur_price - last_price) / last_price) * ratio
                 item["last_price"] = cur_price
 
             nav *= 1.0 + day_return
@@ -1843,8 +1863,8 @@ class CbQuantService:
                     sell_price = self._to_float(row.get("price"), self._to_float(item.get("last_price"), 0.0))
                 else:
                     sell_price = self._to_float(item.get("last_price"), 0.0)
-                buy_price = max(1e-8, self._to_float(item.get("buy_price"), sell_price))
-                pnl_pct = (sell_price - buy_price) / buy_price * 100.0
+                buy_price = self._to_float(item.get("buy_price"), sell_price)
+                pnl_pct = (sell_price - buy_price) / buy_price * 100.0 if buy_price > 0 else 0.0
                 trade_pnls_pct.append(pnl_pct)
                 effective_trade_count += 1
 
@@ -2190,25 +2210,21 @@ class CbQuantService:
             return None
 
     def _resolve_setting_for_combo(self, *, combo_id: str, template_name: str) -> dict[str, Any]:
-        setting = self._candidate_settings.get(combo_id)
-        if setting:
-            return dict(setting)
-
         template_id = ""
-        candidate = self._find_candidate(combo_id)
+        candidate = self._find_candidate(combo_id, template_name=template_name if template_name else None)
         if candidate and candidate.template_id:
             template_id = candidate.template_id
-        elif template_name:
+        if not template_id and template_name:
             for row in self._templates:
                 if row.name == template_name:
                     template_id = row.id
                     break
 
         if not template_id:
-            resolved = self._adapter.default_setting()
-            self._candidate_settings[combo_id] = dict(resolved)
-            return resolved
+            raise ValueError(f"unknown template for combo: combo_id={combo_id}, template={template_name or '--'}")
         resolved = self._build_candidate_setting(template_id=template_id, combo_id=combo_id)
+        if not resolved:
+            raise ValueError(f"invalid combo for template: combo_id={combo_id}, template={template_name or template_id}")
         self._candidate_settings[combo_id] = dict(resolved)
         return resolved
 
@@ -2217,14 +2233,53 @@ class CbQuantService:
             template_id=template_id,
             updated_at=_now_readable(),
         )
+        combo_seq = self._parse_combo_sequence(combo_id)
+        enabled_rows = [row for row in cfg.parameter_space if row.enabled and row.factor_key in cfg.factor_keys]
+        if not enabled_rows:
+            return self._adapter.default_setting()
+        if combo_seq is None or combo_seq <= 0:
+            # Backward compatibility fallback for legacy/custom combo ids.
+            row_map: dict[str, StrategyParamSpaceRow] = {row.factor_key: row for row in enabled_rows}
+            values: dict[str, Any] = {}
+            for factor_key, row in row_map.items():
+                values[factor_key] = self._pick_param_value(combo_id=combo_id, row=row)
+            return self._build_setting_from_factor_values(values)
 
-        row_map: dict[str, StrategyParamSpaceRow] = {
-            row.factor_key: row for row in cfg.parameter_space if row.enabled
-        }
-        values: dict[str, Any] = {}
-        for factor_key, row in row_map.items():
-            values[factor_key] = self._pick_param_value(combo_id=combo_id, row=row)
-        return self._build_setting_from_factor_values(values)
+        factor_keys = [row.factor_key for row in enabled_rows]
+        all_choices = [self._choices_for_param_row(row) for row in enabled_rows]
+        for choices in all_choices:
+            if not choices:
+                return self._adapter.default_setting()
+
+        total_combos = 1
+        for choices in all_choices:
+            total_combos *= len(choices)
+        if combo_seq > total_combos:
+            return {}
+
+        idx0 = combo_seq - 1
+        picked: list[Any] = [None for _ in all_choices]
+        # Match _iter_template_settings() product order without building cartesian list.
+        for pos in range(len(all_choices) - 1, -1, -1):
+            choices = all_choices[pos]
+            picked[pos] = choices[idx0 % len(choices)]
+            idx0 //= len(choices)
+
+        return self._build_setting_from_factor_values(dict(zip(factor_keys, picked)))
+
+    @staticmethod
+    def _parse_combo_sequence(combo_id: str) -> int | None:
+        text = str(combo_id or "").strip().upper()
+        if not text.startswith("CMB-"):
+            return None
+        suffix = text.split("-", 1)[1]
+        if not suffix.isdigit():
+            return None
+        try:
+            value = int(suffix)
+        except Exception:
+            return None
+        return value if value > 0 else None
 
     def _pick_param_value(self, *, combo_id: str, row: StrategyParamSpaceRow) -> Any:
         seed = self._hash(f"{combo_id}|{row.factor_key}")
@@ -2490,11 +2545,55 @@ class CbQuantService:
         self._candidate_settings = settings
 
     # ---------- helpers ----------
-    def _find_candidate(self, combo_id: str) -> CandidateRow | None:
+    def _candidate_matches(self, combo_id: str, *, template_name: str | None = None) -> list[CandidateRow]:
+        combo = str(combo_id or "").strip()
+        if not combo:
+            return []
+        template_filter = str(template_name or "").strip()
+        matched: list[CandidateRow] = []
         for row in self._candidates:
-            if row.combo_id == combo_id:
-                return row
-        return None
+            if row.combo_id != combo:
+                continue
+            if template_filter and row.template != template_filter:
+                continue
+            matched.append(row)
+        return matched
+
+    def _find_candidate(self, combo_id: str, template_name: str | None = None) -> CandidateRow | None:
+        matched = self._candidate_matches(combo_id, template_name=template_name)
+        if not matched:
+            return None
+        if template_name:
+            return matched[0]
+
+        # Without template filter, reject ambiguous combo ids across templates.
+        template_names = {row.template for row in matched}
+        if len(template_names) > 1:
+            return None
+        return matched[0]
+
+    def _is_displayable_backtest_job(self, row: BacktestJobRow) -> bool:
+        if not row.combo_id or not row.template:
+            return False
+
+        combo_seq = self._parse_combo_sequence(row.combo_id)
+        if combo_seq is None:
+            return False
+
+        template_id = ""
+        for template in self._templates:
+            if template.name == row.template:
+                template_id = template.id
+                break
+        if not template_id:
+            return False
+
+        cfg = self._template_configs.get(template_id)
+        if not cfg:
+            return False
+        if cfg.combo_size > 0 and combo_seq > cfg.combo_size:
+            return False
+        return True
 
     def _find_template(self, template_id: str) -> StrategyTemplateRow | None:
         for row in self._templates:
@@ -2689,7 +2788,7 @@ class CbQuantService:
     @staticmethod
     def _window_label(window_name: WindowName) -> str:
         if window_name == "full":
-            return "2018-2025"
+            return "全周期"
         if window_name == "3y":
             return "近3年"
         return "近1年"

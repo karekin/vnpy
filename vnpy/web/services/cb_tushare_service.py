@@ -173,6 +173,7 @@ class CbTushareService:
         snapshot_rows_total = 0
         trade_day_count = 0
         skipped_days: list[tuple[str, str]] = []
+        last_valid_price_map: dict[str, float] = {}
 
         try:
             cal_df = client.query(
@@ -227,6 +228,7 @@ class CbTushareService:
                         cb_basic_map=cb_basic_map,
                         stock_daily_map=stock_daily_map,
                         stock_basic_map=stock_basic_map,
+                        last_valid_price_map=last_valid_price_map,
                     )
 
                     factor_rows_total += self._store.upsert_factor_rows(trade_date=trade_day, rows=factor_rows)
@@ -359,10 +361,31 @@ class CbTushareService:
         cb_basic_map: dict[str, dict[str, Any]],
         stock_daily_map: dict[str, dict[str, Any]],
         stock_basic_map: dict[str, dict[str, Any]],
+        last_valid_price_map: dict[str, float] | None = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         factor_rows: list[dict[str, Any]] = []
         snapshot_rows: list[dict[str, Any]] = []
         trade_dt = datetime.strptime(trade_date, "%Y-%m-%d").date()
+        price_cache = last_valid_price_map if last_valid_price_map is not None else {}
+
+        missing_prev_codes: list[str] = []
+        for cb_row in cb_daily_rows:
+            ts_code = str(_pick(cb_row, "ts_code", "bond_code", "code", default="")).strip()
+            if not ts_code:
+                continue
+            code6 = _ts_code_to_code6(ts_code)
+            if not code6 or code6 in price_cache:
+                continue
+            close_price = _safe_float(_pick(cb_row, "close", "price"), 0.0)
+            pre_close_price = _safe_float(_pick(cb_row, "pre_close", "preclose"), 0.0)
+            if close_price <= 0 and pre_close_price <= 0:
+                missing_prev_codes.append(code6)
+        if missing_prev_codes:
+            previous = self._store.load_latest_valid_prices(
+                before_trade_date=trade_date,
+                bond_ids=missing_prev_codes,
+            )
+            price_cache.update(previous)
 
         for cb_row in cb_daily_rows:
             ts_code = str(_pick(cb_row, "ts_code", "bond_code", "code", default="")).strip()
@@ -374,7 +397,15 @@ class CbTushareService:
             stock_daily = stock_daily_map.get(stock_ts_code, {})
             stock_basic = stock_basic_map.get(stock_ts_code, {})
 
-            price = _safe_float(_pick(cb_row, "close", "price"), 0.0)
+            close_price = _safe_float(_pick(cb_row, "close", "price"), 0.0)
+            pre_close_price = _safe_float(_pick(cb_row, "pre_close", "preclose"), 0.0)
+            price, price_fill_source = self._normalize_price(
+                close_price=close_price,
+                pre_close_price=pre_close_price,
+                previous_valid_price=price_cache.get(code6),
+            )
+            if price > 0:
+                price_cache[code6] = price
             premium_rate = _safe_float(_pick(cb_row, "bond_prem", "premium_rt", "premium_rate"), 0.0)
             pure_bond_value = _safe_float(_pick(cb_row, "bond_value", "pure_bond_value"), 0.0)
             cb_to_pb = price / pure_bond_value if pure_bond_value > 0 else 1.0
@@ -402,6 +433,7 @@ class CbTushareService:
                 "cb_name": str(_pick(basic, "bond_short_name", "bond_name", default=ts_code)),
                 "stock_ts_code": stock_ts_code,
                 "price": round(price, 4),
+                "price_fill_source": price_fill_source,
                 "premium_rate": round(premium_rate, 4),
                 "cb_to_pb": round(cb_to_pb, 4),
                 "pb": round(stock_pb, 4),
@@ -428,6 +460,21 @@ class CbTushareService:
             )
 
         return factor_rows, snapshot_rows
+
+    @staticmethod
+    def _normalize_price(
+        *,
+        close_price: float,
+        pre_close_price: float,
+        previous_valid_price: float | None,
+    ) -> tuple[float, str]:
+        if close_price > 0:
+            return close_price, "close"
+        if pre_close_price > 0:
+            return pre_close_price, "pre_close"
+        if previous_valid_price is not None and previous_valid_price > 0:
+            return previous_valid_price, "prev_valid"
+        return 0.0, "missing"
 
     @staticmethod
     def _derive_maturity_fields(*, trade_dt: date, maturity_text: str) -> tuple[float | None, str, str]:

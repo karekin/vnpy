@@ -351,7 +351,10 @@ def list_backtest_jobs(
 def create_backtest_jobs(
     request: BacktestCreateJobsRequest,
 ) -> BacktestCreateJobsResponse:
-    return cb_quant_service.create_jobs(request)
+    try:
+        return cb_quant_service.create_jobs(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/backtest/jobs/{job_id}/cancel", response_model=OperationResponse)

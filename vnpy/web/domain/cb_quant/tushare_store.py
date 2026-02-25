@@ -198,6 +198,50 @@ class CbTushareStore:
             conn.commit()
         return len(values)
 
+    def load_latest_valid_prices(
+        self,
+        *,
+        before_trade_date: str,
+        bond_ids: list[str],
+    ) -> dict[str, float]:
+        if not bond_ids:
+            return {}
+        td = before_trade_date.replace("-", "")
+        seen: set[str] = set()
+        normalized: list[str] = []
+        for raw in bond_ids:
+            code = str(raw or "").strip()
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            normalized.append(code)
+        if not normalized:
+            return {}
+
+        placeholders = ",".join("?" for _ in normalized)
+        sql = (
+            "SELECT src.bond_id, CAST(json_extract(src.row_json, '$.price') AS REAL) AS price "
+            "FROM ts_cb_factor_daily AS src "
+            "JOIN ("
+            "  SELECT bond_id, MAX(trade_date) AS max_trade_date "
+            "  FROM ts_cb_factor_daily "
+            f"  WHERE trade_date < ? AND bond_id IN ({placeholders}) "
+            "    AND CAST(json_extract(row_json, '$.price') AS REAL) > 0 "
+            "  GROUP BY bond_id"
+            ") AS latest "
+            "ON src.bond_id = latest.bond_id AND src.trade_date = latest.max_trade_date"
+        )
+        params: list[Any] = [td, *normalized]
+        result: dict[str, float] = {}
+        with self._connect() as conn:
+            cursor = conn.execute(sql, params)
+            for row in cursor.fetchall():
+                code = str(row[0] or "").strip()
+                price = float(row[1] or 0.0)
+                if code and price > 0:
+                    result[code] = price
+        return result
+
     def get_summary(self) -> TushareStoreSummary:
         with self._connect() as conn:
             cb_row = conn.execute(

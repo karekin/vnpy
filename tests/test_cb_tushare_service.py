@@ -193,6 +193,98 @@ class TestCbTushareServiceSyncRangeFailure:
         assert "simulated upstream error" in latest_log.message
 
 
+class TestCbTusharePriceCleaning:
+    def test_normalize_price_priority(self) -> None:
+        price, source = CbTushareService._normalize_price(
+            close_price=102.3,
+            pre_close_price=99.8,
+            previous_valid_price=88.0,
+        )
+        assert price == 102.3
+        assert source == "close"
+
+    def test_build_rows_should_fill_from_pre_close(
+        self,
+        isolated_service: CbTushareService,
+    ) -> None:
+        cache: dict[str, float] = {}
+        factor_rows, snapshot_rows = isolated_service._build_factor_and_snapshot_rows(
+            trade_date="2024-01-30",
+            cb_daily_rows=[
+                {
+                    "ts_code": "110001.SH",
+                    "close": 0.0,
+                    "pre_close": 101.5,
+                    "bond_prem": 21.0,
+                    "bond_value": 88.0,
+                }
+            ],
+            cb_basic_map={
+                "110001.SH": {
+                    "bond_short_name": "CB-ONE",
+                    "stk_code": "600000",
+                    "maturity_date": "2028-12-31",
+                    "issue_size": "12",
+                }
+            },
+            stock_daily_map={"600000.SH": {"pct_chg": 2.0}},
+            stock_basic_map={"600000.SH": {"pb": 1.66, "total_mv": 900000}},
+            last_valid_price_map=cache,
+        )
+
+        assert len(factor_rows) == 1
+        assert len(snapshot_rows) == 1
+        assert factor_rows[0]["price"] == 101.5
+        assert factor_rows[0]["price_fill_source"] == "pre_close"
+        assert cache["110001"] == 101.5
+
+    def test_build_rows_should_fill_from_previous_valid_price(
+        self,
+        isolated_service: CbTushareService,
+    ) -> None:
+        isolated_service._store.upsert_factor_rows(
+            trade_date="2024-01-29",
+            rows=[
+                {
+                    "trade_date": "2024-01-29",
+                    "cb_code": "110001",
+                    "price": 88.8,
+                    "source": "unit",
+                }
+            ],
+        )
+
+        cache: dict[str, float] = {}
+        factor_rows, _snapshot_rows = isolated_service._build_factor_and_snapshot_rows(
+            trade_date="2024-01-30",
+            cb_daily_rows=[
+                {
+                    "ts_code": "110001.SH",
+                    "close": 0.0,
+                    "pre_close": 0.0,
+                    "bond_prem": 21.0,
+                    "bond_value": 88.0,
+                }
+            ],
+            cb_basic_map={
+                "110001.SH": {
+                    "bond_short_name": "CB-ONE",
+                    "stk_code": "600000",
+                    "maturity_date": "2028-12-31",
+                    "issue_size": "12",
+                }
+            },
+            stock_daily_map={"600000.SH": {"pct_chg": 0.5}},
+            stock_basic_map={"600000.SH": {"pb": 1.5, "total_mv": 800000}},
+            last_valid_price_map=cache,
+        )
+
+        assert len(factor_rows) == 1
+        assert factor_rows[0]["price"] == 88.8
+        assert factor_rows[0]["price_fill_source"] == "prev_valid"
+        assert cache["110001"] == 88.8
+
+
 def _load_live_token_and_url() -> tuple[str | None, str]:
     local = CbTushareService._load_local_env_map()
     token = (
