@@ -47,6 +47,7 @@ _templates
 *.mo
 *.log
 .run_rpc_server.log
+.env.tushare.local
 
 # Alpha
 lab/

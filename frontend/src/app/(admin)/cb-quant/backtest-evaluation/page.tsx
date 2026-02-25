@@ -1,21 +1,26 @@
 "use client";
 
 import {
+  cancelBacktestJob,
   createStrategyOptimizeTask,
   getHistoryDataSummary,
-  getHistorySyncStatus,
+  listBacktestJobs,
+  getTushareHistorySummary,
+  getTushareHistorySyncStatus,
   getStrategyOptimizeTaskAnalysis,
   getStrategyOptimizeSummary,
   getStrategyOptimizeTaskDetail,
   listStrategyOptimizeTasks,
   listStrategyTemplates,
-  triggerHistorySync,
+  triggerTushareHistorySync,
+  type BacktestJob,
   type StrategyBacktestDistributionRow,
   type StrategyBacktestMetricRow,
   type StrategyBacktestRotationRow,
   type StrategyOptimizeTaskAnalysis,
   type HistoryDataSummary,
-  type HistorySyncStatus,
+  type TushareDataSummary,
+  type TushareSyncStatus,
   type StrategyOptimizeSummary,
   type StrategyOptimizeTask,
   type StrategyOptimizeTaskDetail,
@@ -42,6 +47,14 @@ function statusTone(status: StrategyOptimizeTask["status"]) {
   return "red" as const;
 }
 
+function backtestJobTone(status: BacktestJob["status"]) {
+  if (status === "queued") return "yellow" as const;
+  if (status === "running") return "blue" as const;
+  if (status === "finished") return "green" as const;
+  if (status === "cancelled") return "slate" as const;
+  return "red" as const;
+}
+
 function toPercent(value: number): string {
   return `${(value * 100).toFixed(2)}%`;
 }
@@ -58,6 +71,21 @@ function defaultDateRange(): { start: string; end: string } {
     start: dateToInput(prev),
     end: dateToInput(now),
   };
+}
+
+function estimateTradeDays(startDate?: string, endDate?: string): number {
+  if (!startDate || !endDate) {
+    return 1500;
+  }
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return 1500;
+  }
+  const diff = Math.abs(end.getTime() - start.getTime());
+  const days = Math.floor(diff / (24 * 60 * 60 * 1000)) + 1;
+  const estimated = Math.ceil(days * 0.75) + 20;
+  return Math.max(30, Math.min(5000, estimated));
 }
 
 function formatPercent(value: number | null | undefined, digits = 2): string {
@@ -93,6 +121,15 @@ export default function CbQuantBacktestEvaluationPage() {
   const [tasksPage, setTasksPage] = useState<number>(1);
   const [tasksTotal, setTasksTotal] = useState<number>(0);
   const [tasksTotalPages, setTasksTotalPages] = useState<number>(1);
+  const [backtestJobs, setBacktestJobs] = useState<BacktestJob[]>([]);
+  const [backtestJobsPage, setBacktestJobsPage] = useState<number>(1);
+  const [backtestJobsTotal, setBacktestJobsTotal] = useState<number>(0);
+  const [backtestJobsTotalPages, setBacktestJobsTotalPages] = useState<number>(1);
+  const [backtestJobStatusFilter, setBacktestJobStatusFilter] = useState<string>("all");
+  const [backtestBusinessDate, setBacktestBusinessDate] = useState<string>("");
+  const [backtestBusinessDateFrom, setBacktestBusinessDateFrom] = useState<string>("");
+  const [backtestBusinessDateTo, setBacktestBusinessDateTo] = useState<string>("");
+  const [cancellingBacktestJobId, setCancellingBacktestJobId] = useState<string>("");
   const [selectedTaskId, setSelectedTaskId] = useState<string>("");
   const [resultMode, setResultMode] = useState<"global" | "task">("global");
   const [detail, setDetail] = useState<StrategyOptimizeTaskDetail | null>(null);
@@ -103,9 +140,11 @@ export default function CbQuantBacktestEvaluationPage() {
   const [distributionPeriod, setDistributionPeriod] = useState<"yearly" | "monthly" | "weekly">("yearly");
 
   const [loadingTasks, setLoadingTasks] = useState<boolean>(false);
-  const [syncingHistory, setSyncingHistory] = useState<boolean>(false);
+  const [loadingBacktestJobs, setLoadingBacktestJobs] = useState<boolean>(false);
+  const [syncingTushareHistory, setSyncingTushareHistory] = useState<boolean>(false);
   const [historySummary, setHistorySummary] = useState<HistoryDataSummary | null>(null);
-  const [historySyncStatus, setHistorySyncStatus] = useState<HistorySyncStatus | null>(null);
+  const [tushareSummary, setTushareSummary] = useState<TushareDataSummary | null>(null);
+  const [tushareSyncStatus, setTushareSyncStatus] = useState<TushareSyncStatus | null>(null);
   const [creating, setCreating] = useState<boolean>(false);
   const [error, setError] = useState<string>("");
   const [hint, setHint] = useState<string>("");
@@ -303,10 +342,11 @@ export default function CbQuantBacktestEvaluationPage() {
     setStartDate((prev) => prev || fallbackRange.start);
     setEndDate((prev) => prev || fallbackRange.end);
 
-    const [strategyRes, summaryRes, syncRes] = await Promise.allSettled([
+    const [strategyRes, summaryRes, tsSummaryRes, tsSyncRes] = await Promise.allSettled([
       loadStrategies(),
       getHistoryDataSummary(),
-      getHistorySyncStatus(),
+      getTushareHistorySummary(),
+      getTushareHistorySyncStatus(),
     ]);
 
     if (summaryRes.status === "fulfilled") {
@@ -320,10 +360,16 @@ export default function CbQuantBacktestEvaluationPage() {
       setHistorySummary(null);
     }
 
-    if (syncRes.status === "fulfilled") {
-      setHistorySyncStatus(syncRes.value);
+    if (tsSummaryRes.status === "fulfilled") {
+      setTushareSummary(tsSummaryRes.value);
     } else {
-      setHistorySyncStatus(null);
+      setTushareSummary(null);
+    }
+
+    if (tsSyncRes.status === "fulfilled") {
+      setTushareSyncStatus(tsSyncRes.value);
+    } else {
+      setTushareSyncStatus(null);
     }
 
     if (strategyRes.status !== "fulfilled") {
@@ -356,6 +402,36 @@ export default function CbQuantBacktestEvaluationPage() {
       setLoadingTasks(false);
     }
   }, [tasksPage, selectedTaskId]);
+
+  const loadBacktestJobs = useCallback(async () => {
+    setLoadingBacktestJobs(true);
+    try {
+      const response = await listBacktestJobs({
+        status: backtestJobStatusFilter,
+        businessDate: backtestBusinessDate || undefined,
+        businessDateFrom: backtestBusinessDateFrom || undefined,
+        businessDateTo: backtestBusinessDateTo || undefined,
+        page: backtestJobsPage,
+        pageSize: 10,
+      });
+      setBacktestJobs(response.items);
+      setBacktestJobsTotal(response.total);
+      setBacktestJobsTotalPages(getTotalPages(response.total, 10));
+    } catch (err) {
+      setBacktestJobs([]);
+      setBacktestJobsTotal(0);
+      setBacktestJobsTotalPages(1);
+      setError(err instanceof Error ? err.message : "回测任务列表加载失败");
+    } finally {
+      setLoadingBacktestJobs(false);
+    }
+  }, [
+    backtestBusinessDate,
+    backtestBusinessDateFrom,
+    backtestBusinessDateTo,
+    backtestJobStatusFilter,
+    backtestJobsPage,
+  ]);
 
   const loadDetail = useCallback(async () => {
     if (!selectedTaskId) {
@@ -429,6 +505,10 @@ export default function CbQuantBacktestEvaluationPage() {
   }, [tasksPage, loadTasks]);
 
   useEffect(() => {
+    void loadBacktestJobs();
+  }, [loadBacktestJobs]);
+
+  useEffect(() => {
     void loadDetail();
   }, [loadDetail]);
 
@@ -483,6 +563,7 @@ export default function CbQuantBacktestEvaluationPage() {
       pollingRef.current = true;
       void Promise.allSettled([
         loadTasks(),
+        loadBacktestJobs(),
         loadSummary(),
         showingGlobal ? Promise.resolve() : loadDetail(),
       ]).finally(() => {
@@ -490,7 +571,7 @@ export default function CbQuantBacktestEvaluationPage() {
       });
     }, 3000);
     return () => window.clearInterval(timer);
-  }, [loadTasks, loadDetail, loadSummary, showingGlobal]);
+  }, [loadBacktestJobs, loadTasks, loadDetail, loadSummary, showingGlobal]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -559,19 +640,43 @@ export default function CbQuantBacktestEvaluationPage() {
     }
   };
 
-  const handleSyncHistory = async () => {
-    setSyncingHistory(true);
+  const handleSyncTushareHistory = async () => {
+    setSyncingTushareHistory(true);
     setError("");
     try {
-      const result = await triggerHistorySync();
-      setHint(result.message);
-      const [summary, syncStatus] = await Promise.all([getHistoryDataSummary(), getHistorySyncStatus()]);
-      setHistorySummary(summary);
-      setHistorySyncStatus(syncStatus);
+      const maxTradeDays = estimateTradeDays(startDate, endDate);
+      const payload = await triggerTushareHistorySync({
+        startDate: startDate || undefined,
+        endDate: endDate || undefined,
+        maxTradeDays,
+      });
+      setHint(payload.message);
+      const [tsSummary, tsSyncStatus, history] = await Promise.all([
+        getTushareHistorySummary(),
+        getTushareHistorySyncStatus(),
+        getHistoryDataSummary(),
+      ]);
+      setTushareSummary(tsSummary);
+      setTushareSyncStatus(tsSyncStatus);
+      setHistorySummary(history);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "历史快照同步失败");
+      setError(err instanceof Error ? err.message : "Tushare 同步失败");
     } finally {
-      setSyncingHistory(false);
+      setSyncingTushareHistory(false);
+    }
+  };
+
+  const handleCancelBacktestJob = async (jobId: string) => {
+    setCancellingBacktestJobId(jobId);
+    setError("");
+    try {
+      const payload = await cancelBacktestJob(jobId);
+      setHint(payload.message);
+      await loadBacktestJobs();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "取消回测任务失败");
+    } finally {
+      setCancellingBacktestJobId("");
     }
   };
 
@@ -584,7 +689,7 @@ export default function CbQuantBacktestEvaluationPage() {
         <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
           <div className="border-b border-gray-200 px-5 py-4 dark:border-gray-800">
             <h3 className="text-lg font-semibold text-gray-800 dark:text-white/90">回测任务创建</h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400">用户动线：同步历史快照 → 启动回测搜索 → 轮询进度 → 查看最优策略与当前Top20。</p>
+            <p className="text-sm text-gray-500 dark:text-gray-400">用户动线：同步Tushare历史 → 启动回测搜索 → 轮询进度 → 查看最优策略与当前Top20。</p>
             <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-gray-600 dark:text-gray-300">
               <span>
                 历史快照：
@@ -593,18 +698,24 @@ export default function CbQuantBacktestEvaluationPage() {
                   : "--"}
               </span>
               <span>
-                最新同步：
-                {historySyncStatus?.hasLog
-                  ? `${historySyncStatus.syncAt ?? "--"}（${historySyncStatus.mode ?? "--"}，${historySyncStatus.upserted}条）`
+                Tushare：
+                {tushareSummary
+                  ? `${tushareSummary.cbTradeDays} 天（因子 ${tushareSummary.factorTradeDays} 天，事件 ${tushareSummary.eventRows} 条）`
+                  : "暂无"}
+              </span>
+              <span>
+                Tushare 最近：
+                {tushareSyncStatus?.hasLog
+                  ? `${tushareSyncStatus.syncAt ?? "--"}（cb ${tushareSyncStatus.cbDailyRows} / factor ${tushareSyncStatus.factorRows} / event ${tushareSyncStatus.eventRows}）`
                   : "暂无"}
               </span>
               <button
                 type="button"
-                onClick={handleSyncHistory}
-                disabled={syncingHistory}
-                className="rounded-lg border border-brand-500 px-3 py-1 text-xs font-medium text-brand-600 hover:bg-brand-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-brand-400 dark:text-brand-300"
+                onClick={handleSyncTushareHistory}
+                disabled={syncingTushareHistory}
+                className="rounded-lg border border-green-500 px-3 py-1 text-xs font-medium text-green-600 hover:bg-green-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-green-400 dark:text-green-300"
               >
-                {syncingHistory ? "同步中..." : "立即同步历史快照"}
+                {syncingTushareHistory ? "Tushare同步中..." : "立即同步Tushare"}
               </button>
             </div>
           </div>
@@ -763,6 +874,137 @@ export default function CbQuantBacktestEvaluationPage() {
           </div>
         </div>
 
+        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
+          <div className="border-b border-gray-200 px-5 py-4 dark:border-gray-800">
+            <h3 className="text-lg font-semibold text-gray-800 dark:text-white/90">回测执行任务（可取消 + 业务日期筛选）</h3>
+            <p className="text-xs text-gray-500 dark:text-gray-400">对应 `/api/v1/cb-quant/backtest/jobs`。</p>
+          </div>
+          <div className="space-y-4 p-5">
+            <div className="grid gap-3 md:grid-cols-5">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">状态</label>
+                <select
+                  value={backtestJobStatusFilter}
+                  onChange={(event) => {
+                    setBacktestJobStatusFilter(event.target.value);
+                    setBacktestJobsPage(1);
+                  }}
+                  className="h-10 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                >
+                  <option value="all">all</option>
+                  <option value="queued">queued</option>
+                  <option value="running">running</option>
+                  <option value="finished">finished</option>
+                  <option value="failed">failed</option>
+                  <option value="cancelled">cancelled</option>
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">业务日期</label>
+                <input
+                  type="date"
+                  value={backtestBusinessDate}
+                  onChange={(event) => {
+                    setBacktestBusinessDate(event.target.value);
+                    setBacktestJobsPage(1);
+                  }}
+                  className="h-10 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">业务日期从</label>
+                <input
+                  type="date"
+                  value={backtestBusinessDateFrom}
+                  onChange={(event) => {
+                    setBacktestBusinessDateFrom(event.target.value);
+                    setBacktestJobsPage(1);
+                  }}
+                  className="h-10 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">业务日期至</label>
+                <input
+                  type="date"
+                  value={backtestBusinessDateTo}
+                  onChange={(event) => {
+                    setBacktestBusinessDateTo(event.target.value);
+                    setBacktestJobsPage(1);
+                  }}
+                  className="h-10 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                />
+              </div>
+              <div className="flex items-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBacktestBusinessDate("");
+                    setBacktestBusinessDateFrom("");
+                    setBacktestBusinessDateTo("");
+                    setBacktestJobStatusFilter("all");
+                    setBacktestJobsPage(1);
+                  }}
+                  className="h-10 rounded-lg border border-gray-300 px-3 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300"
+                >
+                  重置筛选
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void loadBacktestJobs()}
+                  className="h-10 rounded-lg border border-brand-500 px-3 text-xs font-medium text-brand-600 hover:bg-brand-50 dark:border-brand-400 dark:text-brand-300"
+                >
+                  手动刷新
+                </button>
+              </div>
+            </div>
+
+            <ScrollableDataTable
+              headers={["任务ID", "组合", "规则包", "窗口", "状态", "进度", "业务日期", "ETA", "Worker", "创建时间", "操作"]}
+              minTableWidthClass="min-w-[1380px]"
+              colSpan={11}
+              isEmpty={!loadingBacktestJobs && backtestJobs.length === 0}
+              emptyText="暂无回测执行任务"
+            >
+              {backtestJobs.map((row) => {
+                const cancellable = row.status === "queued" || row.status === "running";
+                return (
+                  <TableRow key={row.jobId} className="border-b border-gray-100 dark:border-gray-800">
+                    <TableCell className="px-4 py-3 text-sm font-semibold text-gray-900 dark:text-white">{row.jobId}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.comboId}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.rulePackId}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.window}</TableCell>
+                    <TableCell className="px-4 py-3">
+                      <StatusTag label={row.status} tone={backtestJobTone(row.status)} />
+                    </TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.progress}%</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.businessDate ?? "--"}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.eta}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.worker}</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{row.createdAt ?? "--"}</TableCell>
+                    <TableCell className="px-4 py-3">
+                      <button
+                        type="button"
+                        onClick={() => void handleCancelBacktestJob(row.jobId)}
+                        disabled={!cancellable || cancellingBacktestJobId === row.jobId}
+                        className="rounded-lg border border-red-500 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-400 dark:text-red-300"
+                      >
+                        {cancellingBacktestJobId === row.jobId ? "取消中..." : "取消"}
+                      </button>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </ScrollableDataTable>
+            <TablePaginationBar
+              totalItems={backtestJobsTotal}
+              currentPage={backtestJobsPage}
+              totalPages={backtestJobsTotalPages}
+              onPageChange={setBacktestJobsPage}
+            />
+          </div>
+        </div>
+
         <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-white/[0.03]">
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -802,7 +1044,7 @@ export default function CbQuantBacktestEvaluationPage() {
           ) : null}
         </div>
 
-        <div className="grid gap-6 xl:grid-cols-2">
+        <div className="grid grid-cols-1 gap-6">
           <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
             <div className="border-b border-gray-200 px-5 py-4 dark:border-gray-800">
               <h3 className="text-lg font-semibold text-gray-800 dark:text-white/90">

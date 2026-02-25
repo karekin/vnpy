@@ -14,6 +14,10 @@ from vnpy.web.schemas import (
     HistorySyncResponse,
     HistorySyncStatusResponse,
     OperationResponse,
+    TushareDataSummaryResponse,
+    TushareSyncRequest,
+    TushareSyncResponse,
+    TushareSyncStatusResponse,
     StrategyOptimizeTaskCreateRequest,
     StrategyOptimizeTaskCreateResponse,
     StrategyOptimizeTaskAnalysisResponse,
@@ -33,7 +37,7 @@ from vnpy.web.schemas import (
     StrategyTemplateRow,
     StrategyTemplateUpdateRequest,
 )
-from vnpy.web.services import cb_catalog_service, cb_history_service, cb_market_service, cb_quant_service
+from vnpy.web.services import cb_catalog_service, cb_history_service, cb_market_service, cb_quant_service, cb_tushare_service
 
 router = APIRouter(prefix="/cb-quant", tags=["cb-quant"])
 
@@ -209,6 +213,62 @@ def get_history_sync_status() -> HistorySyncStatusResponse:
     )
 
 
+@router.post("/strategy/history-sync/tushare", response_model=TushareSyncResponse)
+def trigger_tushare_history_sync(
+    request: TushareSyncRequest,
+) -> TushareSyncResponse:
+    try:
+        payload = cb_tushare_service.sync_range(
+            start_date=request.start_date,
+            end_date=request.end_date,
+            mode="manual",
+            max_trade_days=request.max_trade_days,
+        )
+        return TushareSyncResponse.model_validate(payload)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"tushare sync failed: {exc}") from exc
+
+
+@router.get("/strategy/history-sync/tushare/status", response_model=TushareSyncStatusResponse)
+def get_tushare_history_sync_status() -> TushareSyncStatusResponse:
+    log = cb_tushare_service.latest_sync_log()
+    if not log:
+        return TushareSyncStatusResponse(has_log=False)
+    return TushareSyncStatusResponse(
+        has_log=True,
+        sync_at=log.sync_at,
+        mode=log.mode,
+        source=log.source,
+        start_date=log.start_date,
+        end_date=log.end_date,
+        trade_days=log.trade_days,
+        cb_daily_rows=log.cb_daily_rows,
+        stock_daily_rows=log.stock_daily_rows,
+        event_rows=log.event_rows,
+        factor_rows=log.factor_rows,
+        snapshot_rows=log.snapshot_rows,
+        status=log.status,
+        message=log.message,
+    )
+
+
+@router.get("/strategy/history-sync/tushare/summary", response_model=TushareDataSummaryResponse)
+def get_tushare_history_summary() -> TushareDataSummaryResponse:
+    summary = cb_tushare_service.get_summary()
+    return TushareDataSummaryResponse(
+        cb_trade_days=summary.cb_trade_days,
+        cb_date_start=summary.cb_date_start,
+        cb_date_end=summary.cb_date_end,
+        factor_trade_days=summary.factor_trade_days,
+        factor_date_start=summary.factor_date_start,
+        factor_date_end=summary.factor_date_end,
+        event_rows=summary.event_rows,
+        db_path=summary.db_path,
+    )
+
+
 @router.post("/strategy/optimize-tasks", response_model=StrategyOptimizeTaskCreateResponse)
 def create_optimize_task(
     request: StrategyOptimizeTaskCreateRequest,
@@ -270,12 +330,18 @@ def get_optimize_summary(
 def list_backtest_jobs(
     keyword: str = Query(default=""),
     status: str = Query(default="all"),
+    business_date: str = Query(default=""),
+    business_date_from: str | None = Query(default=None),
+    business_date_to: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
 ) -> BacktestJobListResponse:
     return cb_quant_service.list_jobs(
         keyword=keyword,
         status=status,
+        business_date=business_date,
+        business_date_from=business_date_from,
+        business_date_to=business_date_to,
         page=page,
         page_size=page_size,
     )
@@ -286,6 +352,14 @@ def create_backtest_jobs(
     request: BacktestCreateJobsRequest,
 ) -> BacktestCreateJobsResponse:
     return cb_quant_service.create_jobs(request)
+
+
+@router.post("/backtest/jobs/{job_id}/cancel", response_model=OperationResponse)
+def cancel_backtest_job(job_id: str) -> OperationResponse:
+    job = cb_quant_service.cancel_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"backtest job not found: {job_id}")
+    return OperationResponse(ok=True, message=f"job {job_id} -> {job.status}")
 
 
 @router.get("/backtest/leaderboard", response_model=BacktestLeaderboardResponse)

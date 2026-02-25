@@ -12,8 +12,18 @@ from vnpy.web.services import cb_history_service
 from vnpy.web.ws.router import ws_router
 
 
+def _legacy_history_sync_enabled() -> bool:
+    value = os.getenv("CB_LEGACY_HISTORY_SYNC", "0").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
+    if not _legacy_history_sync_enabled():
+        # Default to tushare-only data pipeline to avoid mixed sources.
+        yield
+        return
+
     def _bootstrap_and_sync() -> None:
         try:
             cb_history_service.bootstrap_from_crawler_snapshots()

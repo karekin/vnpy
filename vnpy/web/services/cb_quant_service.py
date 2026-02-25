@@ -10,6 +10,7 @@ from threading import Event, Lock, Thread
 from typing import Any, Iterable, TypeVar
 
 from vnpy.web.adapters import CrawlerPhaseABacktestAdapter
+from vnpy.web.domain.cb_quant.quant_store import CbQuantStore
 from vnpy.web.services.cb_market_service import CbMarketService
 from vnpy.web.schemas import (
     BacktestCompareResponse,
@@ -80,7 +81,7 @@ def _now_compact() -> str:
 
 
 class CbQuantService:
-    """In-memory CB Quant service for frontend-backend integration."""
+    """CB Quant service with SQLite-backed templates and backtest tasks."""
 
     def __init__(self) -> None:
         self._lock: Lock = Lock()
@@ -92,8 +93,10 @@ class CbQuantService:
         self._opt_task_seq: int = 0
         self._candidate_settings: dict[str, dict[str, Any]] = {}
         self._job_context: dict[str, dict[str, Any]] = {}
+        self._leaderboard_business_dates: dict[tuple[str, str, str], str] = {}
         self._storage_dir: Path = self._adapter.data_dir / "_cb_quant"
         self._storage_dir.mkdir(parents=True, exist_ok=True)
+        self._store: CbQuantStore = CbQuantStore(self._storage_dir / "cb_quant.db")
         self._templates_file: Path = self._storage_dir / "templates.json"
 
         self._templates, self._template_configs = self._load_templates_and_configs()
@@ -103,8 +106,10 @@ class CbQuantService:
         self._candidates: list[CandidateRow] = []
         self._rebuild_candidate_settings()
 
-        self._jobs: list[BacktestJobRow] = []
-        self._leaderboard: list[BacktestLeaderboardRow] = []
+        self._jobs, self._job_context = self._load_jobs_and_context()
+        self._seq = self._derive_job_seq(self._jobs)
+        self._leaderboard, self._leaderboard_business_dates = self._load_leaderboard_rows()
+        self._mark_unfinished_jobs_as_failed_after_restart()
         self._compare: list[BacktestCompareRow] = []
         self._refresh_compare_rows()
 
@@ -1144,14 +1149,27 @@ class CbQuantService:
         self,
         keyword: str = "",
         status: str = "all",
+        business_date: str = "",
+        business_date_from: str | None = None,
+        business_date_to: str | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> BacktestJobListResponse:
         rows: list[BacktestJobRow] = []
         needle = keyword.strip().lower()
+        biz = business_date.strip()
+        biz_from = (business_date_from or "").strip() or None
+        biz_to = (business_date_to or "").strip() or None
 
         for row in self._jobs:
             if status != "all" and row.status != status:
+                continue
+            job_biz_date = str(row.business_date or "")
+            if biz and job_biz_date != biz:
+                continue
+            if biz_from and (not job_biz_date or job_biz_date < biz_from):
+                continue
+            if biz_to and (not job_biz_date or job_biz_date > biz_to):
                 continue
             if needle:
                 raw = f"{row.job_id}|{row.strategy_id}|{row.combo_id}|{row.rule_pack_id}|{row.template}|{row.worker}".lower()
@@ -1204,6 +1222,7 @@ class CbQuantService:
         queued = sum(1 for row in self._jobs if row.status == "queued")
         finished = sum(1 for row in self._jobs if row.status == "finished")
         failed = sum(1 for row in self._jobs if row.status == "failed")
+        cancelled = sum(1 for row in self._jobs if row.status == "cancelled")
         rule_pack_count = len({row.rule_pack_id for row in self._jobs})
         top_cagr = max((row.cagr for row in self._leaderboard), default=0.0)
 
@@ -1212,6 +1231,7 @@ class CbQuantService:
             queued_jobs=queued,
             finished_jobs=finished,
             failed_jobs=failed,
+            cancelled_jobs=cancelled,
             rule_pack_count=rule_pack_count,
             top_cagr=top_cagr,
         )
@@ -1220,6 +1240,7 @@ class CbQuantService:
         windows = self._normalize_windows(request.windows)
         if not windows:
             windows = ["full", "3y", "1y"]
+        business_date = request.business_date.isoformat() if request.business_date else date.today().isoformat()
 
         candidate = self._find_candidate(request.combo_id)
         template_name = request.template or (candidate.template if candidate else "未命名模板")
@@ -1231,6 +1252,7 @@ class CbQuantService:
                 combo_id=request.combo_id,
                 template_name=template_name,
             )
+            created_at = _now_readable()
             for window_name in windows:
                 self._seq += 1
                 seq = self._seq
@@ -1243,17 +1265,24 @@ class CbQuantService:
                     window=self._window_label(window_name),
                     status="queued",
                     progress=0,
+                    business_date=business_date,
+                    created_at=created_at,
                     started_at=_now_hms(),
                     eta="--",
                     worker=f"wk-0{(seq % 5) + 1}",
                 )
                 created.append(row)
-                self._job_context[row.job_id] = {
+                context = {
                     "window_name": window_name,
                     "start_date": request.start_date,
                     "end_date": request.end_date,
                     "setting": setting,
+                    "cancel_requested": False,
+                    "business_date": business_date,
+                    "created_at": created_at,
                 }
+                self._job_context[row.job_id] = context
+                self._store.upsert_job(row=row.model_dump(), context=context)
 
             self._jobs = [*created, *self._jobs]
 
@@ -1274,15 +1303,50 @@ class CbQuantService:
             message=message,
         )
 
+    def cancel_job(self, job_id: str) -> BacktestJobRow | None:
+        cancelled_job: BacktestJobRow | None = None
+        with self._lock:
+            for index, row in enumerate(self._jobs):
+                if row.job_id != job_id:
+                    continue
+
+                if row.status in {"finished", "failed", "cancelled"}:
+                    cancelled_job = row
+                    break
+
+                context = self._job_context.get(job_id) or self._store.get_job_context(job_id) or {}
+                context["cancel_requested"] = True
+                self._job_context[job_id] = context
+                cancelled_job = row.model_copy(
+                    update={
+                        "status": "cancelled",
+                        "eta": "cancelled",
+                    }
+                )
+                self._jobs[index] = cancelled_job
+                self._store.upsert_job(row=cancelled_job.model_dump(), context=context)
+                break
+
+        if cancelled_job:
+            self._refresh_candidate_status(cancelled_job.combo_id)
+            self._refresh_compare_rows()
+        return cancelled_job
+
     def _run_job(self, job_id: str) -> None:
-        context = self._job_context.get(job_id)
+        context = self._job_context.get(job_id) or self._store.get_job_context(job_id)
         if not context:
             self._update_job(job_id, status="failed", eta="missing context")
             return
 
+        if bool(context.get("cancel_requested")):
+            self._update_job(job_id, status="cancelled", eta="cancelled")
+            return
+
         window_name = str(context.get("window_name", "full"))
-        start_date = context.get("start_date")
-        end_date = context.get("end_date")
+        start_raw = context.get("start_date")
+        end_raw = context.get("end_date")
+        start_date = self._parse_iso_date(start_raw) if isinstance(start_raw, str) else start_raw
+        end_date = self._parse_iso_date(end_raw) if isinstance(end_raw, str) else end_raw
         setting = dict(context.get("setting", self._adapter.default_setting()))
 
         ticker_stop = Event()
@@ -1296,15 +1360,24 @@ class CbQuantService:
         ticker.start()
 
         try:
+            if self._is_job_cancel_requested(job_id):
+                self._update_job(job_id, status="cancelled", eta="cancelled")
+                return
             stats = self._adapter.run_backtest(
                 setting=setting,
                 window_name=window_name,
                 start_date=start_date,
                 end_date=end_date,
             )
+            if self._is_job_cancel_requested(job_id):
+                self._update_job(job_id, status="cancelled", eta="cancelled")
+                return
             metrics = self._derive_leaderboard_metrics(stats=stats, window_name=window_name)
             job = self._get_job(job_id)
             if not job:
+                return
+            if job.status == "cancelled" or self._is_job_cancel_requested(job_id):
+                self._update_job(job_id, status="cancelled", eta="cancelled")
                 return
             row = BacktestLeaderboardRow(
                 rank=0,
@@ -1321,7 +1394,7 @@ class CbQuantService:
                 robust_score=metrics["robust_score"],
                 window=window_name,
             )
-            self._upsert_leaderboard_row(row)
+            self._upsert_leaderboard_row(row, business_date=job.business_date)
             done_eta = "done"
             if bool(stats.get("fallback_used")):
                 done_eta = "done (auto-range)"
@@ -1329,6 +1402,9 @@ class CbQuantService:
             self._refresh_candidate_status(job.combo_id)
             self._refresh_compare_rows()
         except Exception as exc:
+            if self._is_job_cancel_requested(job_id):
+                self._update_job(job_id, status="cancelled", eta="cancelled")
+                return
             reason = str(exc).splitlines()[0][:42] if str(exc) else "error"
             self._update_job(job_id, status="failed", eta=f"error: {reason}")
             job = self._get_job(job_id)
@@ -1336,8 +1412,6 @@ class CbQuantService:
                 self._refresh_candidate_status(job.combo_id)
         finally:
             ticker_stop.set()
-            with self._lock:
-                self._job_context.pop(job_id, None)
 
     def _progress_ticker(self, job_id: str, stop: Event) -> None:
         while not stop.wait(timeout=2.0):
@@ -1362,6 +1436,19 @@ class CbQuantService:
                     continue
                 merged = row.model_copy(update=updates)
                 self._jobs[index] = merged
+                context = self._job_context.get(job_id) or self._store.get_job_context(job_id) or {
+                    "window_name": "full",
+                    "setting": self._adapter.default_setting(),
+                    "start_date": None,
+                    "end_date": None,
+                    "cancel_requested": False,
+                    "business_date": merged.business_date or date.today().isoformat(),
+                    "created_at": merged.created_at or _now_readable(),
+                }
+                if "cancel_requested" in updates:
+                    context["cancel_requested"] = bool(updates["cancel_requested"])
+                self._job_context[job_id] = context
+                self._store.upsert_job(row=merged.model_dump(), context=context)
                 return merged
         return None
 
@@ -2230,7 +2317,8 @@ class CbQuantService:
             score += 2.0
         return round(max(0.0, min(100.0, score)), 1)
 
-    def _upsert_leaderboard_row(self, row: BacktestLeaderboardRow) -> None:
+    def _upsert_leaderboard_row(self, row: BacktestLeaderboardRow, *, business_date: str | None = None) -> None:
+        persisted_entries: list[dict[str, Any]] = []
         with self._lock:
             replaced = False
             for index, item in enumerate(self._leaderboard):
@@ -2242,10 +2330,16 @@ class CbQuantService:
                 if not same_key:
                     continue
                 self._leaderboard[index] = row
+                self._leaderboard_business_dates[(row.combo_id, row.rule_pack_id, row.window)] = (
+                    business_date or self._leaderboard_business_dates.get((row.combo_id, row.rule_pack_id, row.window)) or date.today().isoformat()
+                )
                 replaced = True
                 break
             if not replaced:
                 self._leaderboard.append(row)
+                self._leaderboard_business_dates[(row.combo_id, row.rule_pack_id, row.window)] = (
+                    business_date or date.today().isoformat()
+                )
 
             ordered = sorted(
                 self._leaderboard,
@@ -2256,6 +2350,16 @@ class CbQuantService:
                 item.model_copy(update={"rank": idx + 1})
                 for idx, item in enumerate(ordered)
             ]
+            for item in self._leaderboard:
+                key = (item.combo_id, item.rule_pack_id, item.window)
+                persisted_entries.append(
+                    {
+                        "business_date": self._leaderboard_business_dates.get(key, date.today().isoformat()),
+                        "row": item.model_dump(),
+                    }
+                )
+
+        self._store.replace_leaderboard(persisted_entries)
 
     def _refresh_compare_rows(self) -> None:
         with self._lock:
@@ -2331,10 +2435,11 @@ class CbQuantService:
             total = len(combo_jobs)
             finished = sum(1 for row in combo_jobs if row.status == "finished")
             failed = sum(1 for row in combo_jobs if row.status == "failed")
+            cancelled = sum(1 for row in combo_jobs if row.status == "cancelled")
             running = sum(1 for row in combo_jobs if row.status == "running")
             queued = sum(1 for row in combo_jobs if row.status == "queued")
 
-            done = finished + failed
+            done = finished + failed + cancelled
             has_running = running > 0 or queued > 0
             combo_rows = [
                 row
@@ -2346,6 +2451,8 @@ class CbQuantService:
             if has_running:
                 status = "running_backtest"
             elif failed > 0 and finished == 0:
+                status = "backtest_failed"
+            elif cancelled > 0 and finished == 0:
                 status = "backtest_failed"
             elif done >= total and finished > 0:
                 status = "backtested"
@@ -2608,6 +2715,16 @@ class CbQuantService:
     def _load_templates_and_configs(
         self,
     ) -> tuple[list[StrategyTemplateRow], dict[str, StrategyTemplateConfigResponse]]:
+        # Prefer SQLite store; fallback to legacy JSON once for migration.
+        stored_templates, stored_configs = self._store.load_templates_and_configs()
+        if stored_templates:
+            templates = [StrategyTemplateRow.model_validate(item) for item in stored_templates]
+            configs = {
+                template_id: StrategyTemplateConfigResponse.model_validate(config)
+                for template_id, config in stored_configs.items()
+            }
+            return templates, configs
+
         if self._templates_file.exists():
             try:
                 payload = json.loads(self._templates_file.read_text(encoding="utf-8"))
@@ -2617,6 +2734,10 @@ class CbQuantService:
                     for template_id, config in (payload.get("configs", {}) or {}).items()
                 }
                 if templates:
+                    self._store.replace_templates_and_configs(
+                        templates=[row.model_dump() for row in templates],
+                        configs={key: value.model_dump() for key, value in configs.items()},
+                    )
                     return templates, configs
             except Exception:
                 pass
@@ -2638,27 +2759,16 @@ class CbQuantService:
         template = template.model_copy(
             update={"factor_count": len(config.factor_keys), "combo_size": config.combo_size}
         )
-        self._templates_file.write_text(
-            json.dumps(
-                {
-                    "templates": [template.model_dump()],
-                    "configs": {template.id: config.model_dump()},
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
+        self._store.replace_templates_and_configs(
+            templates=[template.model_dump()],
+            configs={template.id: config.model_dump()},
         )
         return [template], {template.id: config}
 
     def _save_templates_and_configs(self) -> None:
-        payload = {
-            "templates": [row.model_dump() for row in self._templates],
-            "configs": {key: value.model_dump() for key, value in self._template_configs.items()},
-        }
-        self._templates_file.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        self._store.replace_templates_and_configs(
+            templates=[row.model_dump() for row in self._templates],
+            configs={key: value.model_dump() for key, value in self._template_configs.items()},
         )
 
     @staticmethod
@@ -2671,4 +2781,95 @@ class CbQuantService:
                 max_seq = max(max_seq, int(item.id.split("-", 1)[1]))
             except Exception:
                 continue
+        return max_seq
+
+    def _load_jobs_and_context(self) -> tuple[list[BacktestJobRow], dict[str, dict[str, Any]]]:
+        jobs: list[BacktestJobRow] = []
+        context_map: dict[str, dict[str, Any]] = {}
+        for item in self._store.load_jobs():
+            payload = dict(item.get("row") or {})
+            payload.setdefault("business_date", item.get("business_date") or date.today().isoformat())
+            payload.setdefault("created_at", item.get("created_at") or _now_readable())
+            try:
+                row = BacktestJobRow.model_validate(payload)
+            except Exception:
+                continue
+            jobs.append(row)
+            context_map[row.job_id] = {
+                "window_name": item.get("window_name") or "full",
+                "start_date": self._parse_iso_date(item.get("start_date")),
+                "end_date": self._parse_iso_date(item.get("end_date")),
+                "setting": dict(item.get("setting") or self._adapter.default_setting()),
+                "cancel_requested": bool(item.get("cancel_requested")),
+                "business_date": row.business_date or date.today().isoformat(),
+                "created_at": row.created_at or _now_readable(),
+            }
+        return jobs, context_map
+
+    def _load_leaderboard_rows(self) -> tuple[list[BacktestLeaderboardRow], dict[tuple[str, str, str], str]]:
+        rows: list[BacktestLeaderboardRow] = []
+        business_dates: dict[tuple[str, str, str], str] = {}
+        for item in self._store.load_leaderboard():
+            payload = item.get("row") or {}
+            try:
+                row = BacktestLeaderboardRow.model_validate(payload)
+            except Exception:
+                continue
+            rows.append(row)
+            key = (row.combo_id, row.rule_pack_id, row.window)
+            business_dates[key] = str(item.get("business_date") or date.today().isoformat())
+
+        ordered = sorted(
+            rows,
+            key=lambda item: (item.robust_score, item.cagr, -item.mdd),
+            reverse=True,
+        )
+        ranked = [row.model_copy(update={"rank": idx + 1}) for idx, row in enumerate(ordered)]
+        return ranked, business_dates
+
+    def _mark_unfinished_jobs_as_failed_after_restart(self) -> None:
+        stale: list[tuple[BacktestJobRow, dict[str, Any]]] = []
+        with self._lock:
+            updated_rows: list[BacktestJobRow] = []
+            for row in self._jobs:
+                if row.status not in {"queued", "running"}:
+                    updated_rows.append(row)
+                    continue
+                recovered = row.model_copy(
+                    update={
+                        "status": "failed",
+                        "eta": "interrupted-after-restart",
+                    }
+                )
+                updated_rows.append(recovered)
+                context = self._job_context.get(row.job_id, {})
+                stale.append((recovered, context))
+            self._jobs = updated_rows
+
+        for row, context in stale:
+            self._store.upsert_job(row=row.model_dump(), context=context)
+
+    def _is_job_cancel_requested(self, job_id: str) -> bool:
+        with self._lock:
+            context = self._job_context.get(job_id)
+            if context is not None:
+                return bool(context.get("cancel_requested"))
+        context = self._store.get_job_context(job_id)
+        if not context:
+            return False
+        return bool(context.get("cancel_requested"))
+
+    @staticmethod
+    def _derive_job_seq(jobs: list[BacktestJobRow]) -> int:
+        max_seq = 0
+        for item in jobs:
+            try:
+                max_seq = max(max_seq, int(item.strategy_id.split("-", 1)[1]))
+            except Exception:
+                pass
+            try:
+                suffix = item.job_id.rsplit("-", 1)[1]
+                max_seq = max(max_seq, int(suffix))
+            except Exception:
+                pass
         return max_seq

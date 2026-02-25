@@ -54,6 +54,7 @@ web = [
     "uvicorn>=0.30.0",
     "pydantic>=2.9.0",
     "requests>=2.32.0",
+    "tushare>=1.4.24",
 ]
 dev = [
     "pandas-stubs>=2.2.3.250308",

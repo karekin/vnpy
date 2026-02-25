@@ -6,7 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 WindowName = Literal["full", "3y", "1y"]
-JobStatus = Literal["queued", "running", "finished", "failed"]
+JobStatus = Literal["queued", "running", "finished", "failed", "cancelled"]
 OptimizeTaskStatus = Literal["queued", "running", "finished", "failed"]
 CompareCategory = Literal["return", "risk", "trade"]
 RuleSourceMode = Literal["inherit", "candidate", "custom"]
@@ -53,6 +53,8 @@ class BacktestJobRow(BaseModel):
     window: str
     status: JobStatus
     progress: int = Field(ge=0, le=100)
+    business_date: str | None = None
+    created_at: str | None = None
     started_at: str
     eta: str
     worker: str
@@ -108,6 +110,7 @@ class BacktestCreateJobsRequest(BaseModel):
     source_mode: RuleSourceMode = "candidate"
     rule_pack_id: str | None = None
     windows: list[WindowName] = Field(default_factory=lambda: ["full", "3y", "1y"])
+    business_date: date | None = None
     start_date: date | None = None
     end_date: date | None = None
     capital_wan: float | None = Field(default=100, gt=0)
@@ -132,6 +135,7 @@ class BacktestStatsResponse(BaseModel):
     queued_jobs: int
     finished_jobs: int
     failed_jobs: int
+    cancelled_jobs: int = 0
     rule_pack_count: int
     top_cagr: float
 
@@ -275,6 +279,55 @@ class HistorySyncStatusResponse(BaseModel):
     upserted: int = 0
     status: str | None = None
     message: str | None = None
+
+
+class TushareSyncRequest(BaseModel):
+    start_date: date | None = None
+    end_date: date | None = None
+    max_trade_days: int = Field(default=1500, ge=0, le=5000)
+
+
+class TushareSyncResponse(BaseModel):
+    ok: bool = True
+    mode: str
+    source: str
+    start_date: str
+    end_date: str
+    trade_days: int
+    cb_daily_rows: int
+    stock_daily_rows: int
+    event_rows: int = 0
+    factor_rows: int
+    snapshot_rows: int
+    message: str
+
+
+class TushareSyncStatusResponse(BaseModel):
+    has_log: bool
+    sync_at: str | None = None
+    mode: str | None = None
+    source: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    trade_days: int = 0
+    cb_daily_rows: int = 0
+    stock_daily_rows: int = 0
+    event_rows: int = 0
+    factor_rows: int = 0
+    snapshot_rows: int = 0
+    status: str | None = None
+    message: str | None = None
+
+
+class TushareDataSummaryResponse(BaseModel):
+    cb_trade_days: int
+    cb_date_start: str | None = None
+    cb_date_end: str | None = None
+    factor_trade_days: int
+    factor_date_start: str | None = None
+    factor_date_end: str | None = None
+    event_rows: int = 0
+    db_path: str
 
 
 class StrategyOptimizeTaskCreateRequest(BaseModel):

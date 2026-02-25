@@ -1,6 +1,6 @@
 export type WindowName = "full" | "3y" | "1y";
 export type StrategyTemplateStatus = "active" | "draft" | "archived";
-export type BacktestJobStatus = "queued" | "running" | "finished" | "failed";
+export type BacktestJobStatus = "queued" | "running" | "finished" | "failed" | "cancelled";
 
 export type StrategyParamSpaceRow = {
   factorKey: string;
@@ -80,6 +80,8 @@ export type BacktestJob = {
   window: string;
   status: BacktestJobStatus;
   progress: number;
+  businessDate: string | null;
+  createdAt: string | null;
   startedAt: string;
   eta: string;
   worker: string;
@@ -115,6 +117,7 @@ export type BacktestStats = {
   queuedJobs: number;
   finishedJobs: number;
   failedJobs: number;
+  cancelledJobs: number;
   rulePackCount: number;
   topCagr: number;
 };
@@ -125,6 +128,7 @@ export type BacktestQueueRequest = {
   sourceMode: "inherit" | "candidate" | "custom";
   rulePackId?: string;
   windows: WindowName[];
+  businessDate?: string;
   startDate: string;
   endDate: string;
   capitalWan: number;
@@ -162,6 +166,49 @@ export type HistorySyncStatus = {
   upserted: number;
   status: string | null;
   message: string | null;
+};
+
+export type TushareDataSummary = {
+  cbTradeDays: number;
+  cbDateStart: string | null;
+  cbDateEnd: string | null;
+  factorTradeDays: number;
+  factorDateStart: string | null;
+  factorDateEnd: string | null;
+  eventRows: number;
+  dbPath: string;
+};
+
+export type TushareSyncStatus = {
+  hasLog: boolean;
+  syncAt: string | null;
+  mode: string | null;
+  source: string | null;
+  startDate: string | null;
+  endDate: string | null;
+  tradeDays: number;
+  cbDailyRows: number;
+  stockDailyRows: number;
+  eventRows: number;
+  factorRows: number;
+  snapshotRows: number;
+  status: string | null;
+  message: string | null;
+};
+
+export type TushareSyncResult = {
+  ok: boolean;
+  mode: string;
+  source: string;
+  startDate: string;
+  endDate: string;
+  tradeDays: number;
+  cbDailyRows: number;
+  stockDailyRows: number;
+  eventRows: number;
+  factorRows: number;
+  snapshotRows: number;
+  message: string;
 };
 
 export type StrategyOptimizeTaskStatus = "queued" | "running" | "finished" | "failed";
@@ -393,6 +440,8 @@ type BacktestJobApi = {
   window: string;
   status: BacktestJobStatus;
   progress: number;
+  business_date?: string | null;
+  created_at?: string | null;
   started_at: string;
   eta: string;
   worker: string;
@@ -482,6 +531,34 @@ type HistorySyncStatusApi = {
   source: string | null;
   trade_date: string | null;
   upserted: number;
+  status: string | null;
+  message: string | null;
+};
+
+type TushareDataSummaryApi = {
+  cb_trade_days: number;
+  cb_date_start: string | null;
+  cb_date_end: string | null;
+  factor_trade_days: number;
+  factor_date_start: string | null;
+  factor_date_end: string | null;
+  event_rows: number;
+  db_path: string;
+};
+
+type TushareSyncStatusApi = {
+  has_log: boolean;
+  sync_at: string | null;
+  mode: string | null;
+  source: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  trade_days: number;
+  cb_daily_rows: number;
+  stock_daily_rows: number;
+  event_rows: number;
+  factor_rows: number;
+  snapshot_rows: number;
   status: string | null;
   message: string | null;
 };
@@ -733,6 +810,8 @@ function mapBacktestJob(row: BacktestJobApi): BacktestJob {
     window: row.window,
     status: row.status,
     progress: row.progress,
+    businessDate: row.business_date ?? null,
+    createdAt: row.created_at ?? null,
     startedAt: row.started_at,
     eta: row.eta,
     worker: row.worker,
@@ -814,6 +893,38 @@ function mapHistorySyncStatus(row: HistorySyncStatusApi): HistorySyncStatus {
     source: row.source,
     tradeDate: row.trade_date,
     upserted: row.upserted,
+    status: row.status,
+    message: row.message,
+  };
+}
+
+function mapTushareSummary(row: TushareDataSummaryApi): TushareDataSummary {
+  return {
+    cbTradeDays: row.cb_trade_days,
+    cbDateStart: row.cb_date_start,
+    cbDateEnd: row.cb_date_end,
+    factorTradeDays: row.factor_trade_days,
+    factorDateStart: row.factor_date_start,
+    factorDateEnd: row.factor_date_end,
+    eventRows: row.event_rows,
+    dbPath: row.db_path,
+  };
+}
+
+function mapTushareSyncStatus(row: TushareSyncStatusApi): TushareSyncStatus {
+  return {
+    hasLog: row.has_log,
+    syncAt: row.sync_at,
+    mode: row.mode,
+    source: row.source,
+    startDate: row.start_date,
+    endDate: row.end_date,
+    tradeDays: row.trade_days,
+    cbDailyRows: row.cb_daily_rows,
+    stockDailyRows: row.stock_daily_rows,
+    eventRows: row.event_rows,
+    factorRows: row.factor_rows,
+    snapshotRows: row.snapshot_rows,
     status: row.status,
     message: row.message,
   };
@@ -981,6 +1092,62 @@ export async function getHistorySyncStatus(): Promise<HistorySyncStatus> {
     buildUrl("/api/v1/cb-quant/strategy/history-sync/status"),
   );
   return mapHistorySyncStatus(payload);
+}
+
+export async function triggerTushareHistorySync(payload?: {
+  startDate?: string;
+  endDate?: string;
+  maxTradeDays?: number;
+}): Promise<TushareSyncResult> {
+  const response = await requestJson<{
+    ok: boolean;
+    mode: string;
+    source: string;
+    start_date: string;
+    end_date: string;
+    trade_days: number;
+    cb_daily_rows: number;
+    stock_daily_rows: number;
+    event_rows: number;
+    factor_rows: number;
+    snapshot_rows: number;
+    message: string;
+  }>(buildUrl("/api/v1/cb-quant/strategy/history-sync/tushare"), {
+    method: "POST",
+    body: JSON.stringify({
+      start_date: payload?.startDate,
+      end_date: payload?.endDate,
+      max_trade_days: payload?.maxTradeDays ?? 1500,
+    }),
+  }, { timeoutMs: 10 * 60_000 });
+  return {
+    ok: response.ok,
+    mode: response.mode,
+    source: response.source,
+    startDate: response.start_date,
+    endDate: response.end_date,
+    tradeDays: response.trade_days,
+    cbDailyRows: response.cb_daily_rows,
+    stockDailyRows: response.stock_daily_rows,
+    eventRows: response.event_rows,
+    factorRows: response.factor_rows,
+    snapshotRows: response.snapshot_rows,
+    message: response.message,
+  };
+}
+
+export async function getTushareHistorySyncStatus(): Promise<TushareSyncStatus> {
+  const payload = await requestJson<TushareSyncStatusApi>(
+    buildUrl("/api/v1/cb-quant/strategy/history-sync/tushare/status"),
+  );
+  return mapTushareSyncStatus(payload);
+}
+
+export async function getTushareHistorySummary(): Promise<TushareDataSummary> {
+  const payload = await requestJson<TushareDataSummaryApi>(
+    buildUrl("/api/v1/cb-quant/strategy/history-sync/tushare/summary"),
+  );
+  return mapTushareSummary(payload);
 }
 
 export async function listFactorCatalog(params?: {
@@ -1404,6 +1571,7 @@ export async function getBacktestStats(): Promise<BacktestStats> {
     queued_jobs: number;
     finished_jobs: number;
     failed_jobs: number;
+    cancelled_jobs?: number;
     rule_pack_count: number;
     top_cagr: number;
   }>(buildUrl("/api/v1/cb-quant/backtest/stats"));
@@ -1413,6 +1581,7 @@ export async function getBacktestStats(): Promise<BacktestStats> {
     queuedJobs: payload.queued_jobs,
     finishedJobs: payload.finished_jobs,
     failedJobs: payload.failed_jobs,
+    cancelledJobs: payload.cancelled_jobs ?? 0,
     rulePackCount: payload.rule_pack_count,
     topCagr: payload.top_cagr,
   };
@@ -1421,6 +1590,9 @@ export async function getBacktestStats(): Promise<BacktestStats> {
 export async function listBacktestJobs(params?: {
   keyword?: string;
   status?: string;
+  businessDate?: string;
+  businessDateFrom?: string;
+  businessDateTo?: string;
   page?: number;
   pageSize?: number;
 }): Promise<{ items: BacktestJob[]; total: number; page: number; pageSize: number }> {
@@ -1433,6 +1605,9 @@ export async function listBacktestJobs(params?: {
     buildUrl("/api/v1/cb-quant/backtest/jobs", {
       keyword: params?.keyword ?? "",
       status: params?.status ?? "all",
+      business_date: params?.businessDate ?? "",
+      business_date_from: params?.businessDateFrom ?? "",
+      business_date_to: params?.businessDateTo ?? "",
       page: params?.page ?? 1,
       page_size: params?.pageSize ?? 20,
     }),
@@ -1464,6 +1639,7 @@ export async function queueBacktestJobs(payload: BacktestQueueRequest): Promise<
       source_mode: payload.sourceMode,
       rule_pack_id: payload.rulePackId,
       windows: payload.windows,
+      business_date: payload.businessDate,
       start_date: payload.startDate,
       end_date: payload.endDate,
       capital_wan: payload.capitalWan,
@@ -1483,6 +1659,15 @@ export async function queueBacktestJobs(payload: BacktestQueueRequest): Promise<
     jobs: response.jobs.map(mapBacktestJob),
     message: response.message,
   };
+}
+
+export async function cancelBacktestJob(jobId: string): Promise<{ ok: boolean; message: string }> {
+  return requestJson<{ ok: boolean; message: string }>(
+    buildUrl(`/api/v1/cb-quant/backtest/jobs/${encodeURIComponent(jobId)}/cancel`),
+    {
+      method: "POST",
+    },
+  );
 }
 
 export async function listBacktestLeaderboard(params?: {
