@@ -387,11 +387,12 @@ export default function CbQuantBacktestEvaluationPage() {
         page: tasksPage,
         pageSize: 10,
       });
-      setTasks(response.items);
-      setTasksTotal(response.total);
-      setTasksTotalPages(getTotalPages(response.total, 10));
-      if (!selectedTaskId && response.items.length) {
-        setSelectedTaskId(response.items[0].taskId);
+      const activeItems = response.items.filter((item) => item.status === "queued" || item.status === "running");
+      setTasks(activeItems);
+      setTasksTotal(activeItems.length);
+      setTasksTotalPages(getTotalPages(activeItems.length, 10));
+      if (!selectedTaskId && activeItems.length) {
+        setSelectedTaskId(activeItems[0].taskId);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "任务列表加载失败");
@@ -818,7 +819,7 @@ export default function CbQuantBacktestEvaluationPage() {
         <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
           <div className="border-b border-gray-200 px-5 py-4 dark:border-gray-800">
             <h3 className="text-lg font-semibold text-gray-800 dark:text-white/90">回测任务队列（轮询刷新）</h3>
-            <p className="text-xs text-gray-500 dark:text-gray-400">当前显示全量任务队列。</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">当前显示本次操作暂存区（queued/running）。</p>
           </div>
           <div className="p-5">
             <ScrollableDataTable
@@ -967,7 +968,9 @@ export default function CbQuantBacktestEvaluationPage() {
               emptyText="暂无回测执行任务"
             >
               {backtestJobs.map((row) => {
-                const cancellable = row.status === "queued" || row.status === "running";
+                const isOptimizeHistoryJob = row.jobId.startsWith("OPT-");
+                const cancellable = !isOptimizeHistoryJob && (row.status === "queued" || row.status === "running");
+                const canViewResult = isOptimizeHistoryJob && row.status === "finished";
                 return (
                   <TableRow key={row.jobId} className="border-b border-gray-100 dark:border-gray-800">
                     <TableCell className="px-4 py-3 text-sm font-semibold text-gray-900 dark:text-white">{row.jobId}</TableCell>
@@ -983,14 +986,28 @@ export default function CbQuantBacktestEvaluationPage() {
                     <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.worker}</TableCell>
                     <TableCell className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{row.createdAt ?? "--"}</TableCell>
                     <TableCell className="px-4 py-3">
-                      <button
-                        type="button"
-                        onClick={() => void handleCancelBacktestJob(row.jobId)}
-                        disabled={!cancellable || cancellingBacktestJobId === row.jobId}
-                        className="rounded-lg border border-red-500 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-400 dark:text-red-300"
-                      >
-                        {cancellingBacktestJobId === row.jobId ? "取消中..." : "取消"}
-                      </button>
+                      {canViewResult ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedTaskId(row.jobId);
+                            setResultMode("task");
+                            void loadTaskDetailById(row.jobId);
+                          }}
+                          className="rounded-lg border border-brand-500 px-3 py-1.5 text-xs font-medium text-brand-600 hover:bg-brand-50 dark:border-brand-400 dark:text-brand-300"
+                        >
+                          查看结果
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => void handleCancelBacktestJob(row.jobId)}
+                          disabled={!cancellable || cancellingBacktestJobId === row.jobId}
+                          className="rounded-lg border border-red-500 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-400 dark:text-red-300"
+                        >
+                          {cancellingBacktestJobId === row.jobId ? "取消中..." : "取消"}
+                        </button>
+                      )}
                     </TableCell>
                   </TableRow>
                 );

@@ -36,6 +36,12 @@ class _DummyExecutor:
         self.submitted.append((func, args))
 
 
+class _DummyAdapter:
+    @staticmethod
+    def default_setting() -> dict[str, Any]:
+        return {"price_bemchmark": 110.0}
+
+
 def _build_service() -> CbQuantService:
     service = object.__new__(CbQuantService)
     service._lock = Lock()
@@ -68,6 +74,9 @@ def _build_service() -> CbQuantService:
             updated_at="2026-02-25 12:00",
         )
     }
+    service._optimize_tasks = []
+    service._optimize_results = {}
+    service._adapter = _DummyAdapter()
     service._store = _DummyStore()
     service._executor = _DummyExecutor()
     return service

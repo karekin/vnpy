@@ -249,6 +249,132 @@ class CbQuantStore:
                 )
         return rows
 
+    def load_optimize_tasks(self) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        with self._connect() as conn:
+            for row in conn.execute(
+                "SELECT row_json FROM cb_optimize_task ORDER BY created_at DESC, task_id DESC"
+            ).fetchall():
+                try:
+                    rows.append(json.loads(str(row[0])))
+                except Exception:
+                    continue
+        return rows
+
+    def upsert_optimize_task(self, *, row: dict[str, Any]) -> None:
+        task_id = str(row.get("task_id") or "").strip()
+        if not task_id:
+            return
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        created_at = str(row.get("created_at") or now)
+        status = str(row.get("status") or "queued")
+        template_id = str(row.get("template_id") or "")
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT INTO cb_optimize_task ("
+                "task_id, template_id, status, created_at, updated_at, row_json"
+                ") VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(task_id) DO UPDATE SET "
+                "template_id=excluded.template_id, status=excluded.status, "
+                "created_at=excluded.created_at, updated_at=excluded.updated_at, "
+                "row_json=excluded.row_json",
+                (
+                    task_id,
+                    template_id,
+                    status,
+                    created_at,
+                    now,
+                    json.dumps(row, ensure_ascii=False, separators=(",", ":")),
+                ),
+            )
+            conn.commit()
+
+    def load_optimize_result_rows(self) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        with self._connect() as conn:
+            for row in conn.execute(
+                "SELECT task_id, row_json FROM cb_optimize_result ORDER BY task_id, rank ASC"
+            ).fetchall():
+                try:
+                    payload = json.loads(str(row[1]))
+                except Exception:
+                    continue
+                rows.append(
+                    {
+                        "task_id": str(row[0]),
+                        "row": payload,
+                    }
+                )
+        return rows
+
+    def replace_optimize_result_rows(self, *, task_id: str, rows: list[dict[str, Any]]) -> None:
+        if not task_id:
+            return
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock, self._connect() as conn:
+            conn.execute("DELETE FROM cb_optimize_result WHERE task_id = ?", (task_id,))
+            for row in rows:
+                combo_id = str(row.get("combo_id") or "").strip()
+                if not combo_id:
+                    continue
+                rank = int(row.get("rank") or 0)
+                conn.execute(
+                    "INSERT INTO cb_optimize_result ("
+                    "task_id, combo_id, rank, updated_at, row_json"
+                    ") VALUES (?, ?, ?, ?, ?)",
+                    (
+                        task_id,
+                        combo_id,
+                        rank,
+                        now,
+                        json.dumps(row, ensure_ascii=False, separators=(",", ":")),
+                    ),
+                )
+            conn.commit()
+
+    def load_optimize_top_bond_rows(self) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        with self._connect() as conn:
+            for row in conn.execute(
+                "SELECT task_id, row_json FROM cb_optimize_top_bond ORDER BY task_id, rank ASC"
+            ).fetchall():
+                try:
+                    payload = json.loads(str(row[1]))
+                except Exception:
+                    continue
+                rows.append(
+                    {
+                        "task_id": str(row[0]),
+                        "row": payload,
+                    }
+                )
+        return rows
+
+    def replace_optimize_top_bond_rows(self, *, task_id: str, rows: list[dict[str, Any]]) -> None:
+        if not task_id:
+            return
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock, self._connect() as conn:
+            conn.execute("DELETE FROM cb_optimize_top_bond WHERE task_id = ?", (task_id,))
+            for row in rows:
+                bond_id = str(row.get("bond_id") or "").strip()
+                if not bond_id:
+                    continue
+                rank = int(row.get("rank") or 0)
+                conn.execute(
+                    "INSERT INTO cb_optimize_top_bond ("
+                    "task_id, bond_id, rank, updated_at, row_json"
+                    ") VALUES (?, ?, ?, ?, ?)",
+                    (
+                        task_id,
+                        bond_id,
+                        rank,
+                        now,
+                        json.dumps(row, ensure_ascii=False, separators=(",", ":")),
+                    ),
+                )
+            conn.commit()
+
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self._db_path, check_same_thread=False)
 
@@ -324,5 +450,50 @@ class CbQuantStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_cb_backtest_leaderboard_date "
                 "ON cb_backtest_leaderboard (business_date, updated_at DESC)"
+            )
+
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS cb_optimize_task ("
+                "task_id TEXT PRIMARY KEY, "
+                "template_id TEXT NOT NULL, "
+                "status TEXT NOT NULL, "
+                "created_at TEXT NOT NULL, "
+                "updated_at TEXT NOT NULL, "
+                "row_json TEXT NOT NULL"
+                ")"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_cb_optimize_task_status "
+                "ON cb_optimize_task (status, created_at DESC)"
+            )
+
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS cb_optimize_result ("
+                "task_id TEXT NOT NULL, "
+                "combo_id TEXT NOT NULL, "
+                "rank INTEGER NOT NULL DEFAULT 0, "
+                "updated_at TEXT NOT NULL, "
+                "row_json TEXT NOT NULL, "
+                "PRIMARY KEY (task_id, combo_id)"
+                ")"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_cb_optimize_result_task_rank "
+                "ON cb_optimize_result (task_id, rank ASC)"
+            )
+
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS cb_optimize_top_bond ("
+                "task_id TEXT NOT NULL, "
+                "bond_id TEXT NOT NULL, "
+                "rank INTEGER NOT NULL DEFAULT 0, "
+                "updated_at TEXT NOT NULL, "
+                "row_json TEXT NOT NULL, "
+                "PRIMARY KEY (task_id, bond_id)"
+                ")"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_cb_optimize_top_bond_task_rank "
+                "ON cb_optimize_top_bond (task_id, rank ASC)"
             )
             conn.commit()

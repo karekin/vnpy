@@ -114,9 +114,8 @@ class CbQuantService:
         self._compare: list[BacktestCompareRow] = []
         self._refresh_compare_rows()
 
-        self._optimize_tasks: list[StrategyOptimizeTaskRow] = []
-        self._optimize_results: dict[str, list[StrategyOptimizeResultRow]] = {}
-        self._optimize_top_bonds: dict[str, list[StrategyTopBondRow]] = {}
+        self._optimize_tasks, self._optimize_results, self._optimize_top_bonds = self._load_optimize_state()
+        self._opt_task_seq = self._derive_opt_task_seq(self._optimize_tasks)
         self._optimize_analysis_cache: dict[tuple[str, str, float, str], StrategyOptimizeTaskAnalysisResponse] = {}
 
     # ---------- strategy templates ----------
@@ -686,6 +685,8 @@ class CbQuantService:
             self._optimize_tasks = [task, *self._optimize_tasks]
             self._optimize_results[task_id] = []
             self._optimize_top_bonds[task_id] = []
+        self._store.upsert_optimize_task(row=task.model_dump())
+        self._sync_optimize_task_as_backtest_job(task)
 
         self._executor.submit(
             self._run_optimize_task,
@@ -1232,6 +1233,8 @@ class CbQuantService:
             if not ranked:
                 self._optimize_results[task_id] = []
                 self._optimize_top_bonds[task_id] = []
+                self._store.replace_optimize_result_rows(task_id=task_id, rows=[])
+                self._store.replace_optimize_top_bond_rows(task_id=task_id, rows=[])
                 self._update_optimize_task(
                     task_id,
                     status="finished",
@@ -1257,6 +1260,14 @@ class CbQuantService:
                 except Exception as exc:
                     market_warning = f"；实时Top20计算失败: {str(exc)[:80]}"
             self._optimize_top_bonds[task_id] = top_bonds
+            self._store.replace_optimize_result_rows(
+                task_id=task_id,
+                rows=[row.model_dump() for row in ranked],
+            )
+            self._store.replace_optimize_top_bond_rows(
+                task_id=task_id,
+                rows=[row.model_dump() for row in top_bonds],
+            )
             self._update_optimize_task(
                 task_id,
                 status="finished",
@@ -1292,6 +1303,7 @@ class CbQuantService:
         page: int = 1,
         page_size: int = 20,
     ) -> BacktestJobListResponse:
+        self._ensure_optimize_tasks_synced_as_backtest_jobs()
         rows: list[BacktestJobRow] = []
         needle = keyword.strip().lower()
         biz = business_date.strip()
@@ -1357,6 +1369,7 @@ class CbQuantService:
         return BacktestCompareResponse(items=rows, total=len(rows))
 
     def get_stats(self) -> BacktestStatsResponse:
+        self._ensure_optimize_tasks_synced_as_backtest_jobs()
         visible_jobs = [row for row in self._jobs if self._is_displayable_backtest_job(row)]
         running = sum(1 for row in visible_jobs if row.status == "running")
         queued = sum(1 for row in visible_jobs if row.status == "queued")
@@ -1616,14 +1629,71 @@ class CbQuantService:
         return None
 
     def _update_optimize_task(self, task_id: str, **updates: Any) -> StrategyOptimizeTaskRow | None:
+        merged_row: StrategyOptimizeTaskRow | None = None
         with self._lock:
             for index, row in enumerate(self._optimize_tasks):
                 if row.task_id != task_id:
                     continue
-                merged = row.model_copy(update=updates)
-                self._optimize_tasks[index] = merged
-                return merged
-        return None
+                merged_row = row.model_copy(update=updates)
+                self._optimize_tasks[index] = merged_row
+                break
+        if merged_row is not None:
+            self._store.upsert_optimize_task(row=merged_row.model_dump())
+            self._sync_optimize_task_as_backtest_job(merged_row)
+        return merged_row
+
+    def _ensure_optimize_tasks_synced_as_backtest_jobs(self) -> None:
+        with self._lock:
+            tasks_snapshot = list(self._optimize_tasks)
+        for task in tasks_snapshot:
+            self._sync_optimize_task_as_backtest_job(task)
+
+    def _sync_optimize_task_as_backtest_job(self, task: StrategyOptimizeTaskRow) -> None:
+        best_row = (self._optimize_results.get(task.task_id) or [None])[0]
+        combo_id = best_row.combo_id if best_row is not None else "--"
+        setting = dict(best_row.params) if best_row is not None else self._adapter.default_setting()
+        status = task.status if task.status in {"queued", "running", "finished", "failed"} else "failed"
+        business_date = (task.created_at or "")[:10] or date.today().isoformat()
+        window_text = "/".join(task.windows) if task.windows else "full"
+        row = BacktestJobRow(
+            job_id=task.task_id,
+            strategy_id=task.template_id,
+            combo_id=combo_id,
+            rule_pack_id=f"OPT-{task.template_id}",
+            template=task.template_name,
+            window=window_text,
+            status=status,
+            progress=max(0, min(100, int(task.progress))),
+            business_date=business_date,
+            created_at=task.created_at,
+            started_at=task.started_at or "",
+            eta=task.eta or "--",
+            worker="optimize",
+        )
+
+        context = {
+            "window_name": window_text,
+            "start_date": task.start_date,
+            "end_date": task.end_date,
+            "setting": setting,
+            "cancel_requested": False,
+            "business_date": business_date,
+            "created_at": task.created_at or _now_readable(),
+        }
+
+        with self._lock:
+            replaced = False
+            for index, item in enumerate(self._jobs):
+                if item.job_id != row.job_id:
+                    continue
+                self._jobs[index] = row
+                replaced = True
+                break
+            if not replaced:
+                self._jobs = [row, *self._jobs]
+            self._job_context[row.job_id] = context
+
+        self._store.upsert_job(row=row.model_dump(), context=context)
 
     @staticmethod
     def _rank_optimize_rows(rows: list[StrategyOptimizeResultRow]) -> list[StrategyOptimizeResultRow]:
@@ -3090,6 +3160,8 @@ class CbQuantService:
         return matched[0]
 
     def _is_displayable_backtest_job(self, row: BacktestJobRow) -> bool:
+        if str(row.job_id).startswith("OPT-"):
+            return self._get_optimize_task(row.job_id) is not None
         if not row.combo_id or not row.template:
             return False
 
@@ -3443,6 +3515,53 @@ class CbQuantService:
         ranked = [row.model_copy(update={"rank": idx + 1}) for idx, row in enumerate(ordered)]
         return ranked, business_dates
 
+    def _load_optimize_state(
+        self,
+    ) -> tuple[
+        list[StrategyOptimizeTaskRow],
+        dict[str, list[StrategyOptimizeResultRow]],
+        dict[str, list[StrategyTopBondRow]],
+    ]:
+        tasks: list[StrategyOptimizeTaskRow] = []
+        for payload in self._store.load_optimize_tasks():
+            try:
+                row = StrategyOptimizeTaskRow.model_validate(payload)
+            except Exception:
+                continue
+            tasks.append(row)
+        tasks.sort(key=lambda item: (item.created_at, item.task_id), reverse=True)
+
+        results: dict[str, list[StrategyOptimizeResultRow]] = {}
+        for item in self._store.load_optimize_result_rows():
+            task_id = str(item.get("task_id") or "")
+            payload = item.get("row") or {}
+            if not task_id:
+                continue
+            try:
+                row = StrategyOptimizeResultRow.model_validate(payload)
+            except Exception:
+                continue
+            results.setdefault(task_id, []).append(row)
+        for task_id, rows in results.items():
+            results[task_id] = self._rank_optimize_rows(rows)
+
+        top_bonds: dict[str, list[StrategyTopBondRow]] = {}
+        for item in self._store.load_optimize_top_bond_rows():
+            task_id = str(item.get("task_id") or "")
+            payload = item.get("row") or {}
+            if not task_id:
+                continue
+            try:
+                row = StrategyTopBondRow.model_validate(payload)
+            except Exception:
+                continue
+            top_bonds.setdefault(task_id, []).append(row)
+        for task_id, rows in top_bonds.items():
+            ordered = sorted(rows, key=lambda item: item.rank)
+            top_bonds[task_id] = [row.model_copy(update={"rank": idx + 1}) for idx, row in enumerate(ordered)]
+
+        return tasks, results, top_bonds
+
     def _mark_unfinished_jobs_as_failed_after_restart(self) -> None:
         stale: list[tuple[BacktestJobRow, dict[str, Any]]] = []
         with self._lock:
@@ -3488,4 +3607,18 @@ class CbQuantService:
                 max_seq = max(max_seq, int(suffix))
             except Exception:
                 pass
+        return max_seq
+
+    @staticmethod
+    def _derive_opt_task_seq(tasks: list[StrategyOptimizeTaskRow]) -> int:
+        max_seq = 0
+        for item in tasks:
+            task_id = str(item.task_id or "")
+            if not task_id.startswith("OPT-"):
+                continue
+            try:
+                suffix = task_id.rsplit("-", 1)[1]
+                max_seq = max(max_seq, int(suffix))
+            except Exception:
+                continue
         return max_seq
