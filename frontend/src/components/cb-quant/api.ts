@@ -620,9 +620,13 @@ function buildUrl(path: string, params?: Record<string, string | number | boolea
   return `${apiBase}${path}${qs ? `?${qs}` : ""}`;
 }
 
-async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
+async function requestJson<T>(
+  url: string,
+  init?: RequestInit,
+  options?: { timeoutMs?: number },
+): Promise<T> {
   const controller = new AbortController();
-  const timeoutMs = 15_000;
+  const timeoutMs = options?.timeoutMs ?? 15_000;
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let response: Response;
   try {
@@ -1374,6 +1378,8 @@ export async function getStrategyOptimizeTaskAnalysis(
       combo_id: params?.comboId,
       initial_capital_wan: params?.initialCapitalWan ?? 100,
     }),
+    undefined,
+    { timeoutMs: 60_000 },
   );
   return {
     taskId: payload.task_id,

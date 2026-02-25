@@ -149,11 +149,11 @@ export default function CbQuantBacktestEvaluationPage() {
       return [];
     }
     return [
-      { name: "策略累计收益", type: "line" as const, data: analysis.curve.map((row) => row.strategyCumReturnPct) },
-      { name: "基准累计收益", type: "line" as const, data: analysis.curve.map((row) => row.benchmarkCumReturnPct) },
-      { name: "相对超额", type: "line" as const, data: analysis.curve.map((row) => row.relativeExcessPct) },
-      { name: "绝对超额", type: "line" as const, data: analysis.curve.map((row) => row.absoluteExcessPct) },
-      { name: "回撤", type: "area" as const, data: analysis.curve.map((row) => row.drawdownPct) },
+      { name: "策略累计收益", data: analysis.curve.map((row) => row.strategyCumReturnPct) },
+      { name: "基准累计收益", data: analysis.curve.map((row) => row.benchmarkCumReturnPct) },
+      { name: "相对超额", data: analysis.curve.map((row) => row.relativeExcessPct) },
+      { name: "绝对超额", data: analysis.curve.map((row) => row.absoluteExcessPct) },
+      { name: "回撤", data: analysis.curve.map((row) => row.drawdownPct) },
     ];
   }, [analysis]);
 
@@ -172,23 +172,12 @@ export default function CbQuantBacktestEvaluationPage() {
         categories: analysis?.curve.map((row) => row.date) ?? [],
         labels: { rotate: -45, hideOverlappingLabels: true },
       },
-      yaxis: [
-        {
-          seriesName: "策略累计收益",
-          title: { text: "收益率(%)" },
-          labels: {
-            formatter: (value) => `${value.toFixed(1)}%`,
-          },
+      yaxis: {
+        title: { text: "收益率/回撤(%)" },
+        labels: {
+          formatter: (value) => `${value.toFixed(1)}%`,
         },
-        {
-          seriesName: "回撤",
-          opposite: true,
-          title: { text: "回撤(%)" },
-          labels: {
-            formatter: (value) => `${value.toFixed(1)}%`,
-          },
-        },
-      ],
+      },
       tooltip: {
         y: {
           formatter: (value) => `${value.toFixed(2)}%`,
@@ -252,12 +241,10 @@ export default function CbQuantBacktestEvaluationPage() {
     return [
       {
         name: "换手率",
-        type: "column" as const,
         data: rotationRows.map((row) => row.turnoverPct),
       },
       {
         name: "持仓涨跌幅",
-        type: "line" as const,
         data: rotationRows.map((row) => row.periodReturnPct),
       },
     ];
@@ -269,28 +256,17 @@ export default function CbQuantBacktestEvaluationPage() {
         toolbar: { show: false },
         animations: { enabled: false },
       },
-      stroke: {
-        width: [0, 2],
-      },
+      stroke: { width: 2 },
       xaxis: {
         categories: rotationRows.map((row) => row.rebalanceDate),
         labels: { rotate: -45, hideOverlappingLabels: true },
       },
-      yaxis: [
-        {
-          title: { text: "换手率(%)" },
-          labels: {
-            formatter: (value) => `${value.toFixed(1)}%`,
-          },
+      yaxis: {
+        title: { text: "百分比(%)" },
+        labels: {
+          formatter: (value) => `${value.toFixed(1)}%`,
         },
-        {
-          opposite: true,
-          title: { text: "持仓涨跌幅(%)" },
-          labels: {
-            formatter: (value) => `${value.toFixed(1)}%`,
-          },
-        },
-      ],
+      },
       legend: { position: "top" },
       tooltip: {
         y: {
@@ -475,14 +451,29 @@ export default function CbQuantBacktestEvaluationPage() {
 
     const taskId = detail?.task.taskId ?? selectedTaskId;
     const comboId = detail?.topStrategies[0]?.comboId;
-    if (!taskId || !comboId) {
+    if (!taskId) {
       return;
     }
-    if (analysis?.taskId === taskId && analysis?.comboId === comboId) {
+    const taskFinished = detail?.task.status === "finished";
+    if (
+      taskFinished
+      && analysis?.taskId === taskId
+      && (comboId ? analysis?.comboId === comboId : true)
+      && analysis.metricRows.length > 0
+    ) {
       return;
     }
     void loadAnalysis(taskId, comboId);
-  }, [analysis?.comboId, analysis?.taskId, detail, loadAnalysis, selectedTaskId, showingGlobal, summary]);
+  }, [
+    analysis?.comboId,
+    analysis?.taskId,
+    analysis?.metricRows.length,
+    detail,
+    loadAnalysis,
+    selectedTaskId,
+    showingGlobal,
+    summary,
+  ]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {

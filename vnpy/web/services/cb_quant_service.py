@@ -111,6 +111,7 @@ class CbQuantService:
         self._optimize_tasks: list[StrategyOptimizeTaskRow] = []
         self._optimize_results: dict[str, list[StrategyOptimizeResultRow]] = {}
         self._optimize_top_bonds: dict[str, list[StrategyTopBondRow]] = {}
+        self._optimize_analysis_cache: dict[tuple[str, str, float, str], StrategyOptimizeTaskAnalysisResponse] = {}
 
     # ---------- strategy templates ----------
     def list_templates(
@@ -716,6 +717,12 @@ class CbQuantService:
         task = self._get_optimize_task(task_id)
         if not task:
             return None
+        if task.status != "finished":
+            return StrategyOptimizeTaskDetailResponse(
+                task=task,
+                top_strategies=[],
+                top_bonds=[],
+            )
         rows = [
             row
             for row in self._optimize_results.get(task_id, [])
@@ -738,6 +745,27 @@ class CbQuantService:
         if not task:
             return None
 
+        # Keep analysis semantics strict: only finished task has official analysis output.
+        if task.status != "finished":
+            return StrategyOptimizeTaskAnalysisResponse(
+                task_id=task.task_id,
+                template_id=task.template_id,
+                template_name=task.template_name,
+                combo_id=combo_id or "--",
+                benchmark_name="转债等权",
+                window="full" if "full" in task.windows else (task.windows[0] if task.windows else "full"),
+                metric_rows=[],
+                curve=[],
+                yearly_distribution=[],
+                monthly_distribution=[],
+                weekly_distribution=[],
+                rotations=[],
+                message=(
+                    f"任务尚未完成（{task.evaluated_combinations}/{task.total_combinations}，状态 {task.status}），"
+                    "请等待任务完成后再查看正式回测分析。"
+                ),
+            )
+
         ranked_rows = self._optimize_results.get(task_id, [])
         selected_row = None
         if combo_id:
@@ -746,6 +774,12 @@ class CbQuantService:
             selected_row = ranked_rows[0]
 
         selected_combo_id = combo_id or (selected_row.combo_id if selected_row else "CMB-000001")
+        state_marker = f"{task.status}:{task.evaluated_combinations}/{task.total_combinations}"
+        cache_key = (task_id, selected_combo_id, round(float(initial_capital_wan), 4), state_marker)
+        cached = self._optimize_analysis_cache.get(cache_key)
+        if cached:
+            return cached
+
         if selected_row is not None:
             setting = dict(selected_row.params)
         else:
@@ -776,7 +810,7 @@ class CbQuantService:
                 )
 
         if not sliced:
-            return StrategyOptimizeTaskAnalysisResponse(
+            response = StrategyOptimizeTaskAnalysisResponse(
                 task_id=task.task_id,
                 template_id=task.template_id,
                 template_name=task.template_name,
@@ -791,6 +825,8 @@ class CbQuantService:
                 rotations=[],
                 message="没有可用历史快照，请先同步历史快照后重试。",
             )
+            self._optimize_analysis_cache[cache_key] = response
+            return response
 
         module = self._adapter._load_module()
         strategy = self._simulate_detailed_strategy(
@@ -865,7 +901,7 @@ class CbQuantService:
         if strategy["effective_trade_count"] <= 0:
             message_parts.append("未产生有效交易策略，请放宽阈值或调整参数范围。")
 
-        return StrategyOptimizeTaskAnalysisResponse(
+        response = StrategyOptimizeTaskAnalysisResponse(
             task_id=task.task_id,
             template_id=task.template_id,
             template_name=task.template_name,
@@ -880,6 +916,10 @@ class CbQuantService:
             rotations=strategy["rotations"],
             message=" ".join(message_parts).strip(),
         )
+        self._optimize_analysis_cache[cache_key] = response
+        if len(self._optimize_analysis_cache) > 200:
+            self._optimize_analysis_cache.clear()
+        return response
 
     def get_optimize_summary(
         self,
@@ -2034,7 +2074,10 @@ class CbQuantService:
                         row = row.iloc[0]
                     except Exception:
                         pass
-                name = str(row.get("cb_name", "")).strip()
+                if hasattr(row, "to_dict"):
+                    row = row.to_dict()
+                if isinstance(row, dict):
+                    name = str(row.get("cb_name", "")).strip()
             if not name:
                 name = code
             labels.append(f"{name}({code})")
