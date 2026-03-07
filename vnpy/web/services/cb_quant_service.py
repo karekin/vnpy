@@ -1145,19 +1145,39 @@ class CbQuantService:
     ) -> None:
         """优化任务工作线程入口。
 
-        核心思路：
-        - 参数空间较大时，先做 stage1 粗筛，再做 stage2 精筛
-        - 参数空间较小时，直接全量遍历
-        - 全程不断刷新任务进度与阶段性结果，供前端轮询展示
+        这是 `create_optimize_task(...)` 提交到线程池后的真正执行入口。
+
+        它负责把“一个待执行优化任务”完整跑完，主流程如下：
+
+        1. 读取任务记录与模板，校验任务仍然存在
+        2. 加载 phase_a 策略模块与历史快照数据集
+        3. 按用户选择的回测窗口切好历史数据
+        4. 决定是否启用两阶段筛选
+           - 参数空间大：stage1 粗筛 + stage2 复评
+           - 参数空间小：直接全量遍历
+        5. 对每个参数组合调用 `_evaluate_combo(...)`
+        6. 持续刷新任务进度、ETA、阶段性排行榜
+        7. 汇总最终最优策略、实时 Top 债，并持久化结果
+        8. 失败时写回 failed 状态，供前端和任务列表查询
+
+        这层本身不直接做逐日回测，真正的单组合评估在：
+        - `_iter_combo_results_parallel(...)`
+        - `_evaluate_combo(...)`
+        - `_run_backtest_from_candidate_map(...)`
         """
+        # 先从内存/持久化恢复的任务列表里取出任务实体。
+        # 如果任务已经不存在（例如进程状态变化后被清理），这里直接退出。
         task = self._get_optimize_task(task_id)
         if not task:
             return
+
+        # 模板是参数空间和展示名称的根来源；模板不存在时，本任务已经无法继续执行。
         template = self._find_template(task.template_id)
         if not template:
             self._update_optimize_task(task_id, status="failed", eta="--", message="template not found")
             return
 
+        # 任务进入 running，说明已经从线程池真正出队开始执行。
         self._update_optimize_task(
             task_id,
             status="running",
@@ -1167,16 +1187,27 @@ class CbQuantService:
             message="任务已出队，正在初始化引擎与加载数据",
         )
 
+        # 加载 crawler 侧的 phase_a 脚本模块；这是策略逻辑、候选池生成逻辑的真正来源。
         module = self._adapter._load_module()
+
+        # 读取历史快照数据集。adapter 会优先从 cb_snapshots.db 读取标准化日快照，
+        # 如果本地快照库没有数据，才会回退到 crawler 脚本自己的历史数据加载逻辑。
         dataset = self._adapter.load_market_data()
         total = max(1, task.total_combinations)
+
+        # workers 控制参数组合评估时的并行度；不是数据库连接数，也不是 Web 请求并发数。
         workers = self._optimize_worker_count()
+
+        # 这里把一整份历史数据预先切成多个窗口数据集，避免每个组合再重复切片。
+        # 例如 full / 3y / 1y / 1w 都会得到一份独立的 dataset。
         window_dataset_map = self._prepare_window_dataset_map(
             dataset=dataset,
             windows=task.windows,
             start_date=start_date,
             end_date=end_date,
         )
+
+        # 如果所有窗口都切不出数据，说明历史快照覆盖范围不足，任务直接失败。
         if not any(bool(window_dataset_map.get(window_name)) for window_name in task.windows):
             self._update_optimize_task(
                 task_id,
@@ -1187,6 +1218,7 @@ class CbQuantService:
             )
             return
 
+        # 到这里说明：模块已加载、历史快照已读取、窗口切片已准备完毕。
         self._update_optimize_task(
             task_id,
             status="running",
@@ -1202,7 +1234,10 @@ class CbQuantService:
         start_at = datetime.now()
 
         try:
-            # Stage1 的目标不是得到最终答案，而是用较短窗口快速淘汰大部分差组合。
+            # 这里决定是否启用“两阶段评估”：
+            # - 开：先拿短窗口做低成本粗筛，再对 shortlist 做全窗口复评
+            # - 关：直接全量遍历所有组合
+            # 这个判断只和参数空间大小、窗口数量有关，不和数据库有关。
             screening_enabled = self._should_enable_stage1_screening(total=total, windows=task.windows)
             stage1_window = self._pick_stage1_window(task.windows)
             stage1_windows: list[WindowName] = [stage1_window]
@@ -1214,6 +1249,7 @@ class CbQuantService:
             )
 
             if screening_enabled:
+                # stage1_best_rows 只保存粗筛阶段表现最好的 shortlist，不保存全部组合。
                 stage1_best_rows: list[StrategyOptimizeResultRow] = []
                 stage1_combo_iter = self._iter_sampled_template_settings(
                     template_id=task.template_id,
@@ -1237,7 +1273,11 @@ class CbQuantService:
                     workers=workers,
                     task_config=task_config,
                 ):
+                    # evaluated_primary 记录“主筛阶段”已经评估了多少个组合。
                     evaluated_primary += 1
+
+                    # 零收益且零换手的组合，通常意味着根本没有触发有效交易。
+                    # 这类组合会计入统计，但不放进候选排行榜。
                     if abs(row.total_return_pct) < 1e-9 and row.turnover <= 1e-9:
                         skipped_no_trade += 1
                     else:
@@ -1248,6 +1288,8 @@ class CbQuantService:
                         )
                         stage1_best_rows = stage1_best_rows[:stage2_shortlist_limit]
 
+                    # 不是每评估一个组合都刷新前端状态，否则锁竞争和持久化开销会偏大。
+                    # 这里只在关键节点或固定步长更新一次任务进度和临时排行榜。
                     should_emit = (
                         evaluated_primary == 1
                         or evaluated_primary == stage1_sample_limit
@@ -1260,6 +1302,8 @@ class CbQuantService:
                     remain = max(0, stage1_sample_limit - evaluated_primary)
                     per_cost = elapsed_seconds / max(1, evaluated_primary)
                     eta_minutes = int((remain * per_cost) / 60)
+
+                    # 优化过程中，前端列表看到的是“阶段性 top_n”，不是最终结果。
                     self._optimize_results[task_id] = self._rank_optimize_rows(stage1_best_rows[:top_n])
                     self._update_optimize_task(
                         task_id,
@@ -1281,8 +1325,11 @@ class CbQuantService:
                 )[:stage2_shortlist_limit]
                 stage2_total = len(shortlist)
                 if stage2_total == 0:
+                    # 粗筛完全没有留下可复评组合时，最终结果必然为空。
                     ranking_rows = []
                 else:
+                    # 阶段2直接复用 stage1 已经挑出来的参数 settings，
+                    # 不再重新遍历整个模板参数空间。
                     stage2_combo_iter = (
                         (row.combo_id, dict(row.params))
                         for row in shortlist
@@ -1301,6 +1348,7 @@ class CbQuantService:
                         workers=workers,
                         task_config=task_config,
                     ):
+                        # evaluated_secondary 只统计复评阶段数量。
                         evaluated_secondary += 1
                         if abs(row.total_return_pct) < 1e-9 and row.turnover <= 1e-9:
                             skipped_no_trade += 1
@@ -1312,6 +1360,7 @@ class CbQuantService:
                         )
                         ranking_rows = ranking_rows[:top_n]
 
+                        # 复评阶段的进度区间固定映射到 70%~99%，和 stage1 区分开。
                         should_emit = (
                             evaluated_secondary == 1
                             or evaluated_secondary == stage2_total
@@ -1335,10 +1384,20 @@ class CbQuantService:
                         )
             else:
                 # 参数空间不大时直接全量遍历，避免两阶段策略带来的额外复杂度和重复计算。
+                # 这里 `combo_iter` 会按模板配置展开全部参数组合。
+                # 这一分支的特点是：
+                # - 不做 stage1 抽样
+                # - 不做 shortlist 复评
+                # - 所有组合都直接进入 `_evaluate_combo(...)`
+                # 因此逻辑更直观，但当组合数较大时耗时也会线性增长。
                 combo_iter = self._iter_template_settings(
                     template_id=task.template_id,
                     limit=task.total_combinations,
                 )
+                # `_iter_combo_results_parallel(...)` 会逐个取出参数组合并执行评估：
+                # - workers=1 时实际是串行
+                # - workers>1 时会并行提交多个 `_evaluate_combo(...)`
+                # 无论底层是否并行，这里拿到的都是“一个组合评估完成后的结果行”。
                 for row in self._iter_combo_results_parallel(
                     module=module,
                     task_id=task_id,
@@ -1353,28 +1412,61 @@ class CbQuantService:
                     workers=workers,
                     task_config=task_config,
                 ):
+                    # 这里的 evaluated_primary 表示：
+                    # “全量遍历分支已经完成了多少个组合评估”。
+                    # 因为当前没有 stage2，所以它也等同于主进度计数器。
                     evaluated_primary += 1
+
+                    # total_return_pct≈0 且 turnover≈0，通常意味着：
+                    # - 这个组合没有真正形成交易
+                    # - 或者交易极少，几乎没有形成有效收益曲线
+                    # 这类组合会计入“无交易组合”统计，但不参与排行榜。
                     if abs(row.total_return_pct) < 1e-9 and row.turnover <= 1e-9:
                         skipped_no_trade += 1
                         continue
+
+                    # 把当前组合结果加入候选排行榜。
                     ranking_rows.append(row)
+
+                    # 每加入一个结果，都立即按核心排序规则重排一次：
+                    # 1. robust_score 越高越好
+                    # 2. cagr 越高越好
+                    # 3. mdd 越低越好（因此这里用 -item.mdd）
                     ranking_rows.sort(
                         key=lambda item: (item.robust_score, item.cagr, -item.mdd),
                         reverse=True,
                     )
+
+                    # 只保留前 top_n 条临时最优结果，避免内存里累计保存全部组合结果。
+                    # 这一步是优化过程中“滚动维护 TopN”的关键。
                     ranking_rows = ranking_rows[:top_n]
 
+                    # 不是每评估一个组合都写一次任务状态。
+                    # 否则频繁更新会带来额外锁竞争和持久化开销。
+                    # 这里选择几个关键时刻更新：
+                    # - 第 1 个组合完成时
+                    # - 最后 1 个组合完成时
+                    # - 按总量的 1% 步长更新
+                    # - 或每满 200 个组合更新一次
                     if (
                         evaluated_primary == 1
                         or evaluated_primary == total
                         or evaluated_primary % max(1, total // 100) == 0
                         or evaluated_primary % 200 == 0
                     ):
+                        # 先把当前临时 TopN 写回内存态，供前端轮询查看“过程中的排行榜”。
                         self._optimize_results[task_id] = self._rank_optimize_rows(ranking_rows)
+
+                        # 用“当前累计耗时 / 已完成组合数”估算单组合平均耗时，
+                        # 再乘以剩余组合数，得到粗略 ETA。
                         elapsed_seconds = max(1.0, (datetime.now() - start_at).total_seconds())
                         remain = max(0, total - evaluated_primary)
                         per_cost = elapsed_seconds / max(1, evaluated_primary)
                         eta_minutes = int((remain * per_cost) / 60)
+
+                        # progress 在这个分支里近似等于：
+                        # 已完成组合数 / 总组合数
+                        # 但上限先卡到 99%，把 100% 留给最终收尾和持久化完成时统一写入。
                         self._update_optimize_task(
                             task_id,
                             evaluated_combinations=evaluated_primary,
@@ -1383,6 +1475,7 @@ class CbQuantService:
                             message=f"已评估 {evaluated_primary}/{total}",
                         )
 
+            # 统一按稳健分 / CAGR / MDD 对最终候选结果排序，并补 rank 字段。
             ranked = [
                 row.model_copy(update={"rank": idx + 1})
                 for idx, row in enumerate(
@@ -1390,6 +1483,7 @@ class CbQuantService:
                 )
             ]
             if not ranked:
+                # 没有任何有效策略时，清空持久化结果表，避免前端看到旧任务残留结果。
                 self._optimize_results[task_id] = []
                 self._optimize_top_bonds[task_id] = []
                 self._store.replace_optimize_result_rows(task_id=task_id, rows=[])
@@ -1404,6 +1498,8 @@ class CbQuantService:
                     message=f"优化完成，但未产生有效交易策略（无交易组合 {skipped_no_trade}/{max(1, evaluated_primary + evaluated_secondary)}）。",
                 )
                 return
+
+            # best_setting 是后续生成“当前市场 Top 债”的输入，不再重新求最佳参数。
             best_setting = ranked[0].params if ranked else {}
             self._optimize_results[task_id] = ranked
             top_bonds: list[StrategyTopBondRow] = []
@@ -1413,11 +1509,16 @@ class CbQuantService:
                 strategy_warning = "；当前参数空间未产生有效交易，建议放宽筛选阈值或调整因子范围"
             if best_setting:
                 try:
+                    # 这里的 Top 债不是历史回测结果，而是“当前市场快照 + 最优参数”的即时评分结果。
                     top_bonds, market_source = self._score_current_market(best_setting, limit=current_top_n)
                     if not market_source.startswith("eastmoney."):
                         market_warning = f"；Top20基于 {market_source}（非实时）"
                 except Exception as exc:
+                    # Top 债生成失败不应让整个优化任务失败，所以这里只记录 warning。
                     market_warning = f"；实时Top20计算失败: {str(exc)[:80]}"
+
+            # 排行榜结果和 Top 债都要同时写入内存态与 SQLite，
+            # 这样前端刷新页面或服务重启后都能恢复。
             self._optimize_top_bonds[task_id] = top_bonds
             self._store.replace_optimize_result_rows(
                 task_id=task_id,
@@ -1441,6 +1542,8 @@ class CbQuantService:
                 ),
             )
         except Exception as exc:
+            # 任意阶段抛出的异常都会统一落到这里，任务状态改为 failed。
+            # 这里不会抛回到 Web 请求，因为这是后台线程。
             self._update_optimize_task(
                 task_id,
                 status="failed",
@@ -2015,9 +2118,23 @@ class CbQuantService:
         workers: int,
         task_config: BacktestTaskConfig,
     ) -> Iterable[StrategyOptimizeResultRow]:
+        """按给定参数组合迭代器，逐个产出组合评估结果。
+
+        这个方法的职责很单一：
+        - 输入：一串待评估的 `(combo_id, setting)`
+        - 调度：按串行或线程池并行方式调用 `_evaluate_combo(...)`
+        - 输出：谁先评估完，就先 yield 谁的 `StrategyOptimizeResultRow`
+
+        它本身不关心 stage1/stage2，也不负责排序，只负责“把组合送去评估”。
+        """
+        # 先把任意 Iterable 统一转成显式迭代器，便于后面串行/并行两种模式共用。
         combo_iterator = iter(combo_iter)
         if workers <= 1:
+            # workers <= 1 时不启用线程池，完全按顺序逐个评估。
+            # 这种模式最容易调试，也最稳定，但速度取决于单核串行执行能力。
             for combo_id, setting in combo_iterator:
+                # 每取出一个组合，就直接调用 `_evaluate_combo(...)` 得到结果。
+                # yield 返回后，调用方可以立刻更新进度和临时排行榜。
                 yield self._evaluate_combo(
                     module=module,
                     task_id=task_id,
@@ -2034,14 +2151,23 @@ class CbQuantService:
                 )
             return
 
+        # workers > 1 时启用线程池并行评估。
+        # 注意：这里是“组合级并行”，不是交易日级并行。
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="cbq-opt-eval") as pool:
+            # inflight 保存“已经提交到线程池、但还没返回结果”的 future。
+            # value 里记 combo_id 主要是为了调试和后续扩展时可追踪。
             inflight: dict[Any, str] = {}
 
             def submit_next() -> bool:
+                # 从组合迭代器里继续取下一个参数组合。
                 try:
                     combo_id, setting = next(combo_iterator)
                 except StopIteration:
+                    # 没有更多组合可提交了。
                     return False
+
+                # 把单个组合评估任务提交给线程池。
+                # 真正耗时的逻辑仍然在 `_evaluate_combo(...)` 里。
                 future = pool.submit(
                     self._evaluate_combo,
                     module=module,
@@ -2057,18 +2183,33 @@ class CbQuantService:
                     window_dataset_map=window_dataset_map,
                     task_config=task_config,
                 )
+
+                # 记录这个 future 对应哪个 combo_id，表示它已经在执行中了。
                 inflight[future] = combo_id
                 return True
 
+            # 先预填一批任务到线程池，避免线程池空转。
+            # 这里用 `workers * 2`，是为了让“已执行中 + 等待调度”保持一定流水深度，
+            # 通常比只提交 workers 个任务更容易把线程池喂满。
             for _ in range(max(1, workers * 2)):
                 if not submit_next():
                     break
 
+            # 只要还有任何未完成任务，就持续等待最先完成的一批结果。
             while inflight:
+                # FIRST_COMPLETED 表示：只要有任意一个 future 完成，就立刻返回。
+                # 这样可以做到“谁先算完，谁先进入下一轮处理”，提升整体吞吐。
                 done, _ = wait(set(inflight.keys()), return_when=FIRST_COMPLETED)
                 for future in done:
+                    # 先把已完成任务从 inflight 中移除，避免重复处理。
                     inflight.pop(future, None)
+
+                    # 这里 yield 的顺序不是 combo_iter 的原始顺序，而是“完成顺序”。
+                    # 因此上层如果要做排行榜维护，必须按结果内容重排，不能依赖输入顺序。
                     yield future.result()
+
+                    # 每消费掉一个已完成任务，就立刻补提交一个新任务，
+                    # 尽量让线程池始终维持满载或接近满载状态。
                     submit_next()
 
     def _build_candidate_code_map(
@@ -2277,19 +2418,42 @@ class CbQuantService:
         window_dataset_map: dict[WindowName, list[tuple[str, Any]]] | None = None,
         task_config: BacktestTaskConfig,
     ) -> StrategyOptimizeResultRow:
-        """评估单个参数组合在多个窗口下的综合表现。"""
+        """评估单个参数组合在多个窗口下的综合表现。
+
+        这是优化链路里的“单组合评估核心”。
+
+        输入是一组已经展开好的参数 setting，输出是一条可直接参与排行榜排序的
+        `StrategyOptimizeResultRow`。它本身不负责模板展开，也不负责任务调度，只负责：
+
+        1. 把任务级配置覆盖到当前组合 setting 上
+        2. 构造策略模块能识别的 cfg
+        3. 预先生成每日候选池代码映射 `candidate_code_map`
+        4. 按每个 window 执行轻量回测
+        5. 把多窗口结果聚合成 CAGR / MDD / Calmar / 稳健分等指标
+        6. 返回一条最终结果行给 `_run_optimize_task(...)`
+
+        这里的结果是“优化排序用结果”，不是分析页那种带净值曲线和轮动明细的结果。
+        """
+        # 先把任务级运行配置叠加到参数组合 setting 上。
+        # 例如调仓频率、仓位、止盈止损等，最终都要以这里的 setting 为准。
         setting = self._apply_task_config_to_setting(setting, task_config)
         head_count = max(1, int(round(self._to_float(setting.get("head_count"), 10.0))))
         max_hold_num = max(1, int(round(self._to_float(setting.get("max_hold_num"), 12.0))))
         until_win = bool(setting.get("until_win", False))
+
+        # 把通用 setting 转成 crawler 脚本真正用于筛债的 cfg。
+        # 后面 `build_candidates(...)` 会直接使用这个 cfg。
         cfg = module.build_strategy_config(setting)
         base_dataset: list[tuple[str, Any]] = []
         if window_dataset_map is not None:
+            # 当调用方已经提前准备好多个窗口切片时，这里优先挑“长度最大”的一份数据集，
+            # 用来一次性预计算候选池，避免每个窗口都重复 build_candidates。
             for window_name in windows:
                 candidate_dataset = window_dataset_map.get(window_name) or []
                 if len(candidate_dataset) > len(base_dataset):
                     base_dataset = candidate_dataset
         if not base_dataset:
+            # 如果没有传入预切片，就退回到整份 dataset 自己做候选池预计算。
             base_dataset = dataset
         # 候选池基于“可用范围最大的一份数据集”预计算一次，避免多窗口重复生成。
         candidate_code_map = self._build_candidate_code_map(
@@ -2301,11 +2465,16 @@ class CbQuantService:
 
         all_metrics: list[dict[str, float]] = []
         all_returns: list[float] = []
+
+        # 逐个窗口执行轻量回测。
+        # 这里不会直接生成详细曲线，而是只提取优化排序需要的核心指标。
         for window_name in windows:
             sliced = None
             if window_dataset_map is not None:
+                # 优先复用上层提前切好的窗口数据，减少重复切片开销。
                 sliced = window_dataset_map.get(window_name)
             if sliced is None:
+                # 如果调用方没提供该窗口数据，这里再现场切一遍。
                 sliced = self._adapter._slice_dataset(
                     dataset=dataset,
                     window_name=window_name,
@@ -2313,18 +2482,27 @@ class CbQuantService:
                     end_date=end_date,
                 )
             if not sliced:
+                # 当前窗口没有可用样本时，不直接报错，先跳过，
+                # 后面还有一轮“兜底重切”的 fallback。
                 continue
+
+            # 轻量回测会基于 candidate_code_map 逐日回放，产出收益、回撤、胜率、换手等统计。
             stats = self._run_backtest_from_candidate_map(
                 dataset=sliced,
                 candidate_code_map=candidate_code_map,
                 setting=setting,
             )
             stats["sample_days"] = len(sliced)
+
+            # 不同窗口下的原始回测结果会先统一转换成排行榜口径的 metrics。
             metrics = self._derive_leaderboard_metrics(stats=stats, window_name=window_name)
             all_metrics.append(metrics)
             all_returns.append(self._to_float(stats.get("total_return_pct"), 0.0))
 
         if not all_metrics:
+            # 如果按用户指定的日期范围/窗口切片后一个结果都没拿到，
+            # 再退回到“忽略 start/end 限制，只按窗口默认范围切片”重试一次。
+            # 这样可以兼容用户选了过窄日期，或者历史库覆盖范围不足的情况。
             for window_name in windows:
                 sliced = None
                 if window_dataset_map is not None:
@@ -2349,17 +2527,25 @@ class CbQuantService:
                 all_returns.append(self._to_float(stats.get("total_return_pct"), 0.0))
 
         if not all_metrics:
+            # 连 fallback 之后都没有数据，说明该组合在当前任务窗口下完全无法评估。
             raise RuntimeError("No market snapshots available for selected window")
 
+        # 下面开始把多个窗口结果聚合成一条总结果：
+        # - CAGR / win_rate / turnover 取均值
+        # - MDD 取最差窗口（最大回撤最大）
+        # - Calmar 用聚合后的 CAGR / MDD 计算
         cagr = sum(item["cagr"] for item in all_metrics) / len(all_metrics)
         mdd = max(item["mdd"] for item in all_metrics)
         calmar = cagr / mdd if mdd > 0 else cagr
         win_rate = sum(item["win_rate"] for item in all_metrics) / len(all_metrics)
         turnover = sum(item["turnover"] for item in all_metrics) / len(all_metrics)
+
+        # recent_1y 优先拿 1y / 1w 这样的“近期窗口”结果；如果没有近期窗口，就退回 CAGR。
         recent_1y = next((item["recent_1y"] for item, w in zip(all_metrics, windows) if w in {"1y", "1w"}), cagr)
         robust_score = sum(item["robust_score"] for item in all_metrics) / len(all_metrics)
         total_return_pct = sum(all_returns) / len(all_returns)
 
+        # params 只保留可序列化字段，便于后续写入结果表和前端展示。
         return StrategyOptimizeResultRow(
             rank=0,
             task_id=task_id,
