@@ -242,6 +242,29 @@ class CbTushareStore:
                     result[code] = price
         return result
 
+    def load_trade_row_map(self, *, table: str, trade_date: str) -> dict[str, dict[str, Any]]:
+        allowed = {"ts_cb_daily_ods", "ts_stock_daily_ods", "ts_stock_daily_basic_ods"}
+        if table not in allowed:
+            raise ValueError(f"unsupported trade row table: {table}")
+
+        td = trade_date.replace("-", "")
+        result: dict[str, dict[str, Any]] = {}
+        with self._connect() as conn:
+            cursor = conn.execute(
+                f"SELECT ts_code, row_json FROM {table} WHERE trade_date = ?",
+                (td,),
+            )
+            for row in cursor.fetchall():
+                ts_code = str(row[0] or "").strip()
+                if not ts_code:
+                    continue
+                try:
+                    payload = json.loads(str(row[1] or ""))
+                except Exception:
+                    payload = {}
+                result[ts_code] = payload
+        return result
+
     def get_summary(self) -> TushareStoreSummary:
         with self._connect() as conn:
             cb_row = conn.execute(
@@ -367,6 +390,45 @@ class CbTushareStore:
             )
             conn.commit()
         return len(values)
+
+    def load_cb_event_rows(
+        self,
+        *,
+        event_type: str,
+        ts_codes: list[str],
+        end_date: str | None = None,
+    ) -> list[dict[str, Any]]:
+        seen: set[str] = set()
+        normalized: list[str] = []
+        for raw in ts_codes:
+            code = str(raw or "").strip()
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            normalized.append(code)
+        if not normalized:
+            return []
+
+        placeholders = ",".join("?" for _ in normalized)
+        sql = (
+            "SELECT row_json FROM ts_cb_event_ods "
+            f"WHERE event_type = ? AND ts_code IN ({placeholders})"
+        )
+        params: list[Any] = [event_type, *normalized]
+        if end_date:
+            sql += " AND biz_date <= ?"
+            params.append(end_date.replace("-", ""))
+        sql += " ORDER BY ts_code ASC, biz_date DESC, updated_at DESC"
+
+        rows: list[dict[str, Any]] = []
+        with self._connect() as conn:
+            cursor = conn.execute(sql, params)
+            for item in cursor.fetchall():
+                try:
+                    rows.append(json.loads(str(item[0])))
+                except Exception:
+                    continue
+        return rows
 
     def _upsert_trade_rows(
         self,

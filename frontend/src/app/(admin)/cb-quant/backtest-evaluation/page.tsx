@@ -14,6 +14,7 @@ import {
   listStrategyTemplates,
   triggerTushareHistorySync,
   type BacktestJob,
+  type BacktestTaskConfig,
   type StrategyBacktestDistributionRow,
   type StrategyBacktestMetricRow,
   type StrategyBacktestRotationRow,
@@ -73,19 +74,25 @@ function defaultDateRange(): { start: string; end: string } {
   };
 }
 
-function estimateTradeDays(startDate?: string, endDate?: string): number {
-  if (!startDate || !endDate) {
-    return 1500;
-  }
-  const start = new Date(startDate);
-  const end = new Date(endDate);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
-    return 1500;
-  }
-  const diff = Math.abs(end.getTime() - start.getTime());
-  const days = Math.floor(diff / (24 * 60 * 60 * 1000)) + 1;
-  const estimated = Math.ceil(days * 0.75) + 20;
-  return Math.max(30, Math.min(5000, estimated));
+function defaultTaskConfig(): BacktestTaskConfig {
+  return {
+    initialCapitalWan: 100,
+    feePermille: 1,
+    benchmarkName: "转债等权",
+    symbolPoolMode: "all",
+    symbolPoolName: "",
+    rebalanceFrequencyType: "trade_day",
+    rebalanceFrequencyValue: 1,
+    holdingWeight: "equal_amount",
+    maxSinglePositionPct: 20,
+    minHoldCount: 5,
+    maxHoldCount: 12,
+    rebalanceThreshold: 0,
+    rebalanceTiming: "close",
+    excludeRedeemRemainDays: null,
+    takeProfitPct: null,
+    stopLossPct: null,
+  };
 }
 
 function formatPercent(value: number | null | undefined, digits = 2): string {
@@ -115,7 +122,13 @@ export default function CbQuantBacktestEvaluationPage() {
   const [endDate, setEndDate] = useState<string>("");
   const [topN, setTopN] = useState<number>(20);
   const [currentTopN, setCurrentTopN] = useState<number>(20);
-  const [windows, setWindows] = useState<Record<WindowName, boolean>>({ full: true, "3y": true, "1y": true });
+  const [windows, setWindows] = useState<Record<WindowName, boolean>>({
+    full: true,
+    "3y": true,
+    "1y": true,
+    "1w": false,
+  });
+  const [taskConfig, setTaskConfig] = useState<BacktestTaskConfig>(() => defaultTaskConfig());
 
   const [tasks, setTasks] = useState<StrategyOptimizeTask[]>([]);
   const [tasksPage, setTasksPage] = useState<number>(1);
@@ -152,6 +165,7 @@ export default function CbQuantBacktestEvaluationPage() {
 
   const enabledStrategies = useMemo(() => strategies.filter((row) => row.status === "active"), [strategies]);
   const strategyById = useMemo(() => new Map(strategies.map((row) => [row.id, row])), [strategies]);
+  const taskById = useMemo(() => new Map(tasks.map((row) => [row.taskId, row])), [tasks]);
   const totalCombinations = useMemo(
     () => enabledStrategies.reduce((sum, row) => sum + row.comboSize, 0),
     [enabledStrategies],
@@ -461,7 +475,7 @@ export default function CbQuantBacktestEvaluationPage() {
     }
   }, [topN, currentTopN]);
 
-  const loadAnalysis = useCallback(async (taskId: string, comboId?: string) => {
+  const loadAnalysis = useCallback(async (taskId: string, comboId?: string, initialCapitalWan = 100) => {
     if (!taskId) {
       setAnalysis(null);
       return;
@@ -471,7 +485,7 @@ export default function CbQuantBacktestEvaluationPage() {
     try {
       const response = await getStrategyOptimizeTaskAnalysis(taskId, {
         comboId,
-        initialCapitalWan: 100,
+        initialCapitalWan,
       });
       setAnalysis(response);
     } catch (err) {
@@ -490,7 +504,7 @@ export default function CbQuantBacktestEvaluationPage() {
       const response = await getStrategyOptimizeTaskDetail(taskId);
       setDetail(response);
       const defaultCombo = response.topStrategies[0]?.comboId;
-      await loadAnalysis(taskId, defaultCombo);
+      await loadAnalysis(taskId, defaultCombo, response.task.taskConfig.initialCapitalWan);
     } catch (err) {
       setDetail(null);
       setError(err instanceof Error ? err.message : "任务详情加载失败");
@@ -526,7 +540,8 @@ export default function CbQuantBacktestEvaluationPage() {
       if (analysis?.taskId === first.taskId && analysis?.comboId === first.comboId) {
         return;
       }
-      void loadAnalysis(first.taskId, first.comboId);
+      const initialCapitalWan = taskById.get(first.taskId)?.taskConfig.initialCapitalWan ?? 100;
+      void loadAnalysis(first.taskId, first.comboId, initialCapitalWan);
       return;
     }
 
@@ -544,7 +559,8 @@ export default function CbQuantBacktestEvaluationPage() {
     ) {
       return;
     }
-    void loadAnalysis(taskId, comboId);
+    const initialCapitalWan = detail?.task.taskConfig.initialCapitalWan ?? taskById.get(taskId)?.taskConfig.initialCapitalWan ?? 100;
+    void loadAnalysis(taskId, comboId, initialCapitalWan);
   }, [
     analysis?.comboId,
     analysis?.taskId,
@@ -554,6 +570,7 @@ export default function CbQuantBacktestEvaluationPage() {
     selectedTaskId,
     showingGlobal,
     summary,
+    taskById,
   ]);
 
   useEffect(() => {
@@ -576,7 +593,10 @@ export default function CbQuantBacktestEvaluationPage() {
 
   useEffect(() => {
     const timer = window.setInterval(() => {
-      void loadStrategies();
+      void loadStrategies().catch((err) => {
+        const reason = err instanceof Error ? err.message : "策略列表刷新失败";
+        setError((prev) => prev || reason);
+      });
     }, 30000);
     return () => window.clearInterval(timer);
   }, [loadStrategies]);
@@ -588,6 +608,10 @@ export default function CbQuantBacktestEvaluationPage() {
     }
     if (!activeWindows.length) {
       setError("至少选择一个回测窗口");
+      return;
+    }
+    if (taskConfig.minHoldCount > taskConfig.maxHoldCount) {
+      setError("持有范围设置不合法：最少持仓数不能大于最多持仓数。");
       return;
     }
 
@@ -609,6 +633,7 @@ export default function CbQuantBacktestEvaluationPage() {
             topN,
             maxCombinations: strategyData?.comboSize ?? undefined,
             currentTopN,
+            taskConfig,
           });
           createdTaskIds.push(result.task.taskId);
         } catch {
@@ -645,11 +670,9 @@ export default function CbQuantBacktestEvaluationPage() {
     setSyncingTushareHistory(true);
     setError("");
     try {
-      const maxTradeDays = estimateTradeDays(startDate, endDate);
       const payload = await triggerTushareHistorySync({
-        startDate: startDate || undefined,
-        endDate: endDate || undefined,
-        maxTradeDays,
+        incremental: true,
+        maxTradeDays: 90,
       });
       setHint(payload.message);
       const [tsSummary, tsSyncStatus, history] = await Promise.all([
@@ -746,6 +769,50 @@ export default function CbQuantBacktestEvaluationPage() {
               />
             </div>
             <div>
+              <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">初始资金(万)</label>
+              <input
+                type="number"
+                min={0.01}
+                step="1"
+                value={taskConfig.initialCapitalWan}
+                onChange={(event) =>
+                  setTaskConfig((prev) => ({
+                    ...prev,
+                    initialCapitalWan: Math.max(0.01, Number(event.target.value) || 0.01),
+                  }))
+                }
+                className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+              />
+            </div>
+            <div>
+              <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">手续费(单边, ‰)</label>
+              <input
+                type="number"
+                min={0}
+                step="0.1"
+                value={taskConfig.feePermille}
+                onChange={(event) =>
+                  setTaskConfig((prev) => ({
+                    ...prev,
+                    feePermille: Math.max(0, Number(event.target.value) || 0),
+                  }))
+                }
+                className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+              />
+            </div>
+            <div>
+              <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">基准指标</label>
+              <select
+                value={taskConfig.benchmarkName}
+                onChange={(event) => setTaskConfig((prev) => ({ ...prev, benchmarkName: event.target.value }))}
+                className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+              >
+                <option value="转债等权">转债等权</option>
+                <option value="中证转债">中证转债</option>
+                <option value="沪深300">沪深300</option>
+              </select>
+            </div>
+            <div>
               <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">窗口</label>
               <div className="flex h-11 items-center gap-2 rounded-lg border border-gray-300 px-3 text-sm dark:border-gray-700">
                 <label className="flex items-center gap-1">
@@ -759,6 +826,10 @@ export default function CbQuantBacktestEvaluationPage() {
                 <label className="flex items-center gap-1">
                   <input type="checkbox" checked={windows["1y"]} onChange={() => setWindows((prev) => ({ ...prev, "1y": !prev["1y"] }))} />
                   近1年
+                </label>
+                <label className="flex items-center gap-1">
+                  <input type="checkbox" checked={windows["1w"]} onChange={() => setWindows((prev) => ({ ...prev, "1w": !prev["1w"] }))} />
+                  近1周
                 </label>
               </div>
             </div>
@@ -802,6 +873,201 @@ export default function CbQuantBacktestEvaluationPage() {
               >
                 {creating ? "任务创建中..." : "开始回测搜索"}
               </button>
+            </div>
+          </div>
+          <div className="border-t border-gray-200 px-5 py-4 dark:border-gray-800">
+            <div className="mb-3">
+              <h4 className="text-base font-semibold text-gray-800 dark:text-white/90">任务级基础参数</h4>
+              <p className="text-xs text-gray-500 dark:text-gray-400">这些参数随本次回测任务一起保存，用于任务级仓位与调仓控制。</p>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <div>
+                <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">标的池</label>
+                <select
+                  value={taskConfig.symbolPoolMode}
+                  onChange={(event) =>
+                    setTaskConfig((prev) => ({ ...prev, symbolPoolMode: event.target.value as BacktestTaskConfig["symbolPoolMode"] }))
+                  }
+                  className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                >
+                  <option value="all">全部标的</option>
+                  <option value="custom">自定义筛选池</option>
+                </select>
+              </div>
+              <div>
+                <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">自定义池名称</label>
+                <input
+                  type="text"
+                  value={taskConfig.symbolPoolName}
+                  onChange={(event) => setTaskConfig((prev) => ({ ...prev, symbolPoolName: event.target.value }))}
+                  placeholder={taskConfig.symbolPoolMode === "custom" ? "例如：双低池/评级池" : "默认沿用全部标的"}
+                  className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                />
+              </div>
+              <div>
+                <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">换仓频率类型</label>
+                <select
+                  value={taskConfig.rebalanceFrequencyType}
+                  onChange={(event) =>
+                    setTaskConfig((prev) => ({
+                      ...prev,
+                      rebalanceFrequencyType: event.target.value as BacktestTaskConfig["rebalanceFrequencyType"],
+                    }))
+                  }
+                  className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                >
+                  <option value="trade_day">按交易日</option>
+                  <option value="calendar_day">按自然日</option>
+                  <option value="week">按周</option>
+                  <option value="month">按月</option>
+                </select>
+              </div>
+              <div>
+                <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">换仓频率</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={365}
+                  value={taskConfig.rebalanceFrequencyValue}
+                  onChange={(event) =>
+                    setTaskConfig((prev) => ({
+                      ...prev,
+                      rebalanceFrequencyValue: Math.max(1, Number(event.target.value) || 1),
+                    }))
+                  }
+                  className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                />
+              </div>
+              <div>
+                <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">持有权重</label>
+                <select
+                  value={taskConfig.holdingWeight}
+                  onChange={(event) =>
+                    setTaskConfig((prev) => ({ ...prev, holdingWeight: event.target.value as BacktestTaskConfig["holdingWeight"] }))
+                  }
+                  className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                >
+                  <option value="equal_amount">等金额</option>
+                  <option value="equal_weight">等权重</option>
+                </select>
+              </div>
+              <div>
+                <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">单标的最大仓位(%)</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step="0.1"
+                  value={taskConfig.maxSinglePositionPct}
+                  onChange={(event) =>
+                    setTaskConfig((prev) => ({
+                      ...prev,
+                      maxSinglePositionPct: Math.min(100, Math.max(0, Number(event.target.value) || 0)),
+                    }))
+                  }
+                  className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                />
+              </div>
+              <div>
+                <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">最少持仓数</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={200}
+                  value={taskConfig.minHoldCount}
+                  onChange={(event) =>
+                    setTaskConfig((prev) => ({ ...prev, minHoldCount: Math.max(1, Number(event.target.value) || 1) }))
+                  }
+                  className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                />
+              </div>
+              <div>
+                <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">最多持仓数</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={200}
+                  value={taskConfig.maxHoldCount}
+                  onChange={(event) =>
+                    setTaskConfig((prev) => ({ ...prev, maxHoldCount: Math.max(1, Number(event.target.value) || 1) }))
+                  }
+                  className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                />
+              </div>
+              <div>
+                <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">换仓阈值</label>
+                <input
+                  type="number"
+                  min={0}
+                  step="0.1"
+                  value={taskConfig.rebalanceThreshold}
+                  onChange={(event) =>
+                    setTaskConfig((prev) => ({ ...prev, rebalanceThreshold: Math.max(0, Number(event.target.value) || 0) }))
+                  }
+                  className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                />
+              </div>
+              <div>
+                <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">{"排除强赎剩余计数 <= N"}</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={365}
+                  value={taskConfig.excludeRedeemRemainDays ?? ""}
+                  onChange={(event) => {
+                    const value = event.target.value.trim();
+                    setTaskConfig((prev) => ({
+                      ...prev,
+                      excludeRedeemRemainDays: value ? Math.max(0, Number(value) || 0) : null,
+                    }));
+                  }}
+                  placeholder="留空=不排除"
+                  className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                />
+              </div>
+              <div>
+                <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">换仓时间</label>
+                <select
+                  value={taskConfig.rebalanceTiming}
+                  onChange={(event) =>
+                    setTaskConfig((prev) => ({ ...prev, rebalanceTiming: event.target.value as BacktestTaskConfig["rebalanceTiming"] }))
+                  }
+                  className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                >
+                  <option value="close">每日收盘买卖</option>
+                  <option value="open">每日开盘买卖</option>
+                </select>
+              </div>
+              <div>
+                <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">止盈(%)</label>
+                <input
+                  type="number"
+                  min={0}
+                  step="0.1"
+                  value={taskConfig.takeProfitPct ?? ""}
+                  onChange={(event) => {
+                    const value = event.target.value.trim();
+                    setTaskConfig((prev) => ({ ...prev, takeProfitPct: value ? Math.max(0, Number(value) || 0) : null }));
+                  }}
+                  placeholder="留空=关闭"
+                  className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                />
+              </div>
+              <div>
+                <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">止损(%)</label>
+                <input
+                  type="number"
+                  min={0}
+                  step="0.1"
+                  value={taskConfig.stopLossPct ?? ""}
+                  onChange={(event) => {
+                    const value = event.target.value.trim();
+                    setTaskConfig((prev) => ({ ...prev, stopLossPct: value ? Math.max(0, Number(value) || 0) : null }));
+                  }}
+                  placeholder="留空=关闭"
+                  className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                />
+              </div>
             </div>
           </div>
           {error ? (
@@ -1100,7 +1366,11 @@ export default function CbQuantBacktestEvaluationPage() {
                           }
                           setSelectedTaskId(taskId);
                           setResultMode("task");
-                          void loadAnalysis(taskId, row.comboId);
+                          const initialCapitalWan =
+                            detail?.task.taskId === taskId
+                              ? detail.task.taskConfig.initialCapitalWan
+                              : taskById.get(taskId)?.taskConfig.initialCapitalWan ?? 100;
+                          void loadAnalysis(taskId, row.comboId, initialCapitalWan);
                         }}
                         className="rounded-lg border border-brand-500 px-3 py-1.5 text-xs font-medium text-brand-600 hover:bg-brand-50 dark:border-brand-400 dark:text-brand-300"
                       >

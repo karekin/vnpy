@@ -1,6 +1,6 @@
 import { strategyTemplates, type StrategyTemplateRow } from "@/components/cb-quant/mockData";
 
-export type CandidateWindow = "full" | "3y" | "1y";
+export type CandidateWindow = "full" | "3y" | "1y" | "1w";
 
 export type StoredTemplateConfig = {
   templateId: string;

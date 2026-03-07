@@ -34,7 +34,7 @@ export type StrategyCandidateRow = {
   estCombos: number;
   passRate: number;
   robustScore: number;
-  window: "full" | "3y" | "1y";
+  window: "full" | "3y" | "1y" | "1w";
 };
 
 export type BacktestJobRow = {
@@ -64,7 +64,7 @@ export type BacktestLeaderboardRow = {
   turnover: number;
   recent1y: number;
   robustScore: number;
-  window: "full" | "3y" | "1y";
+  window: "full" | "3y" | "1y" | "1w";
 };
 
 export type BacktestCompareRow = {

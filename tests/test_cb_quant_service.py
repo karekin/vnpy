@@ -6,12 +6,15 @@ from typing import Any
 
 import pytest
 
+from vnpy.web.adapters.crawler_phase_a_adapter import CrawlerPhaseABacktestAdapter
 from vnpy.web.schemas import (
     BacktestCreateJobsRequest,
     BacktestJobRow,
     CandidateRow,
     JobStatus,
+    StrategyOptimizeTaskCreateRequest,
     StrategyTemplateConfigResponse,
+    StrategyOptimizeTaskRow,
     StrategyTemplateRow,
 )
 from vnpy.web.services.cb_quant_service import CbQuantService
@@ -20,9 +23,13 @@ from vnpy.web.services.cb_quant_service import CbQuantService
 class _DummyStore:
     def __init__(self) -> None:
         self.saved: list[dict[str, Any]] = []
+        self.saved_optimize: list[dict[str, Any]] = []
 
     def upsert_job(self, *, row: dict[str, Any], context: dict[str, Any]) -> None:
         self.saved.append({"row": row, "context": context})
+
+    def upsert_optimize_task(self, *, row: dict[str, Any]) -> None:
+        self.saved_optimize.append(row)
 
     def get_job_context(self, job_id: str) -> dict[str, Any] | None:
         return None
@@ -74,8 +81,10 @@ def _build_service() -> CbQuantService:
             updated_at="2026-02-25 12:00",
         )
     }
+    service._opt_task_seq = 0
     service._optimize_tasks = []
     service._optimize_results = {}
+    service._optimize_top_bonds = {}
     service._adapter = _DummyAdapter()
     service._store = _DummyStore()
     service._executor = _DummyExecutor()
@@ -189,6 +198,27 @@ class TestBacktestCreateJobsStrictCandidate:
         assert service._store.saved[0]["context"]["setting"]["price_bemchmark"] == 110.0
         assert len(service._executor.submitted) == 1
 
+    def test_create_jobs_should_support_one_week_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        service = _build_service()
+        service._candidates = [_candidate(combo_id="CMB-000001", template="实盘模板", template_id="TPL-001")]
+        monkeypatch.setattr(
+            service,
+            "_resolve_setting_for_combo",
+            lambda **_kwargs: {"price_bemchmark": 110.0, "premium_bemchmark": 25.0},
+        )
+
+        request = BacktestCreateJobsRequest(
+            combo_id="CMB-000001",
+            template="实盘模板",
+            windows=["1w"],
+            business_date=date(2026, 2, 25),
+        )
+        payload = service.create_jobs(request)
+
+        assert payload.created_count == 1
+        assert payload.jobs[0].window == "近1周"
+        assert service._store.saved[0]["context"]["window_name"] == "1w"
+
 
 class TestOptimizeSamplingHelpers:
     def test_sample_combo_indices_should_be_unique_and_cover_range(self) -> None:
@@ -205,3 +235,99 @@ class TestOptimizeSamplingHelpers:
         assert service._should_enable_stage1_screening(total=600, windows=["full", "3y", "1y"]) is True
         assert service._should_enable_stage1_screening(total=400, windows=["full", "3y", "1y"]) is False
         assert service._should_enable_stage1_screening(total=600, windows=["full"]) is False
+
+
+class TestWindowHelpers:
+    def test_slice_dataset_should_support_one_week_window(self) -> None:
+        dataset = [
+            ("2026-02-20", object()),
+            ("2026-02-24", object()),
+            ("2026-02-27", object()),
+            ("2026-03-02", object()),
+            ("2026-03-06", object()),
+        ]
+
+        sliced = CrawlerPhaseABacktestAdapter._slice_dataset(
+            dataset=dataset,
+            window_name="1w",
+            start_date=None,
+            end_date=None,
+        )
+
+        assert [item[0] for item in sliced] == ["2026-02-27", "2026-03-02", "2026-03-06"]
+
+    def test_pick_stage1_window_should_prefer_shorter_window(self) -> None:
+        assert CbQuantService._pick_stage1_window(["full", "3y", "1y", "1w"]) == "1w"
+
+
+class TestOptimizeRestartRecovery:
+    def test_mark_unfinished_optimize_tasks_as_failed_after_restart(self) -> None:
+        service = _build_service()
+        service._optimize_tasks = [
+            StrategyOptimizeTaskRow(
+                task_id="OPT-20260226-0001",
+                template_id="TPL-001",
+                template_name="实盘模板",
+                status="queued",
+                progress=0,
+                total_combinations=68,
+                evaluated_combinations=0,
+                windows=["1y"],
+                start_date=None,
+                end_date=None,
+                eta="--",
+                message="任务已入队",
+                created_at="2026-02-26 00:00",
+                started_at=None,
+                finished_at=None,
+            ),
+            StrategyOptimizeTaskRow(
+                task_id="OPT-20260226-0002",
+                template_id="TPL-001",
+                template_name="实盘模板",
+                status="finished",
+                progress=100,
+                total_combinations=68,
+                evaluated_combinations=68,
+                windows=["1y"],
+                start_date=None,
+                end_date=None,
+                eta="done",
+                message="ok",
+                created_at="2026-02-26 00:01",
+                started_at="2026-02-26 00:01",
+                finished_at="2026-02-26 00:10",
+            ),
+        ]
+        service._optimize_results = {}
+        service._optimize_top_bonds = {}
+
+        service._mark_unfinished_optimize_tasks_as_failed_after_restart()
+
+        statuses = {row.task_id: row.status for row in service._optimize_tasks}
+        assert statuses["OPT-20260226-0001"] == "failed"
+        assert statuses["OPT-20260226-0002"] == "finished"
+
+
+class TestOptimizeTaskSubmit:
+    def test_create_optimize_task_should_mark_failed_when_submit_error(self) -> None:
+        service = _build_service()
+
+        class _FailingExecutor:
+            def submit(self, *_args: Any, **_kwargs: Any) -> None:
+                raise RuntimeError("executor closed")
+
+        service._executor = _FailingExecutor()
+        request = StrategyOptimizeTaskCreateRequest(
+            template_id="TPL-001",
+            windows=["1y"],
+            max_combinations=1,
+            top_n=5,
+            current_top_n=5,
+        )
+
+        payload = service.create_optimize_task(request)
+
+        assert payload is not None
+        assert payload.task.status == "failed"
+        assert "提交执行失败" in payload.message

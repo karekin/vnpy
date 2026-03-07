@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-WindowName = Literal["full", "3y", "1y"]
+WindowName = Literal["full", "3y", "1y", "1w"]
 JobStatus = Literal["queued", "running", "finished", "failed", "cancelled"]
 OptimizeTaskStatus = Literal["queued", "running", "finished", "failed"]
 CompareCategory = Literal["return", "risk", "trade"]
@@ -285,6 +285,7 @@ class TushareSyncRequest(BaseModel):
     start_date: date | None = None
     end_date: date | None = None
     max_trade_days: int = Field(default=1500, ge=0, le=5000)
+    incremental: bool = False
 
 
 class TushareSyncResponse(BaseModel):
@@ -330,6 +331,25 @@ class TushareDataSummaryResponse(BaseModel):
     db_path: str
 
 
+class BacktestTaskConfig(BaseModel):
+    initial_capital_wan: float = Field(default=100.0, gt=0)
+    fee_permille: float = Field(default=1.0, ge=0)
+    benchmark_name: str = "转债等权"
+    symbol_pool_mode: Literal["all", "custom"] = "all"
+    symbol_pool_name: str = ""
+    rebalance_frequency_type: Literal["trade_day", "calendar_day", "week", "month"] = "trade_day"
+    rebalance_frequency_value: int = Field(default=1, ge=1, le=365)
+    holding_weight: Literal["equal_amount", "equal_weight"] = "equal_amount"
+    max_single_position_pct: float = Field(default=20.0, ge=0, le=100)
+    min_hold_count: int = Field(default=5, ge=1, le=200)
+    max_hold_count: int = Field(default=12, ge=1, le=200)
+    rebalance_threshold: float = Field(default=0.0, ge=0)
+    rebalance_timing: Literal["close", "open"] = "close"
+    exclude_redeem_remain_days: int | None = Field(default=None, ge=0, le=365)
+    take_profit_pct: float | None = Field(default=None, ge=0)
+    stop_loss_pct: float | None = Field(default=None, ge=0)
+
+
 class StrategyOptimizeTaskCreateRequest(BaseModel):
     template_id: str = Field(min_length=3)
     windows: list[WindowName] = Field(default_factory=lambda: ["full", "3y", "1y"])
@@ -338,6 +358,7 @@ class StrategyOptimizeTaskCreateRequest(BaseModel):
     top_n: int = Field(default=20, ge=1, le=200)
     max_combinations: int | None = Field(default=None, ge=1)
     current_top_n: int = Field(default=20, ge=1, le=200)
+    task_config: BacktestTaskConfig = Field(default_factory=BacktestTaskConfig)
 
 
 class StrategyOptimizeTaskRow(BaseModel):
@@ -356,6 +377,7 @@ class StrategyOptimizeTaskRow(BaseModel):
     created_at: str
     started_at: str | None = None
     finished_at: str | None = None
+    task_config: BacktestTaskConfig = Field(default_factory=BacktestTaskConfig)
 
 
 class StrategyOptimizeTaskListResponse(BaseModel):

@@ -7,6 +7,7 @@ from math import ceil
 import requests
 
 from vnpy.web.adapters import CrawlerPhaseABacktestAdapter
+from vnpy.web.services.cb_tushare_service import CbTushareService
 from vnpy.web.schemas import BondMarketResponse, BondMarketRow
 
 EM_BOND_LIST_URL = "https://16.push2.eastmoney.com/api/qt/clist/get"
@@ -107,13 +108,14 @@ def _chunks(values: list[str], size: int) -> list[list[str]]:
 
 
 class CbMarketService:
-    """Convertible-bond market data service with Eastmoney realtime source."""
+    """Convertible-bond market data service with Tushare primary source."""
 
     def __init__(self) -> None:
         self._session = requests.Session()
         # In many desktop/dev environments HTTP(S)_PROXY points to an unavailable local proxy.
         # Disable implicit proxy usage by default; can be re-enabled via env when needed.
         self._session.trust_env = os.getenv("VNPY_CB_HTTP_TRUST_ENV", "0") == "1"
+        self._tushare_service = CbTushareService()
 
     def _http_get(self, url: str, *, params: dict[str, str]) -> requests.Response:
         return self._session.get(url, params=params, timeout=EM_TIMEOUT)
@@ -123,25 +125,16 @@ class CbMarketService:
         allow_fallback = os.getenv("VNPY_CB_ALLOW_FALLBACK_MOCK", "0") == "1"
 
         try:
-            raw_rows = self._fetch_realtime_rows()
-            rating_map = self._fetch_rating_map()
-            stock_metrics_map = self._fetch_stock_metrics_map(raw_rows)
-            rows = self._normalize_rows(
-                raw_rows,
-                rating_map,
-                stock_metrics_map,
-                snapshot_time,
-                min_volume_wan,
-            )
+            rows, source = self._tushare_service.load_latest_market_rows(min_volume_wan=min_volume_wan)
             if rows:
                 return BondMarketResponse(
                     items=rows,
                     total=len(rows),
-                    source="eastmoney.push2 + eastmoney.datacenter",
+                    source=source,
                     snapshot_time=snapshot_time,
                     fallback_used=False,
                 )
-            raise RuntimeError("no bond rows returned from eastmoney")
+            raise RuntimeError("no bond rows returned from tushare")
         except Exception as exc:  # noqa: BLE001
             snapshot_rows, snapshot_date = self._load_rows_from_local_snapshot(
                 snapshot_time=snapshot_time,
@@ -154,7 +147,7 @@ class CbMarketService:
                     source=f"snapshot.local({snapshot_date})" if snapshot_date else "snapshot.local",
                     snapshot_time=snapshot_time,
                     fallback_used=True,
-                    fallback_reason=f"eastmoney unavailable: {str(exc)[:160]}",
+                    fallback_reason=f"tushare unavailable: {str(exc)[:160]}",
                 )
 
             if not allow_fallback:

@@ -1,4 +1,4 @@
-export type WindowName = "full" | "3y" | "1y";
+export type WindowName = "full" | "3y" | "1y" | "1w";
 export type StrategyTemplateStatus = "active" | "draft" | "archived";
 export type BacktestJobStatus = "queued" | "running" | "finished" | "failed" | "cancelled";
 
@@ -213,6 +213,25 @@ export type TushareSyncResult = {
 
 export type StrategyOptimizeTaskStatus = "queued" | "running" | "finished" | "failed";
 
+export type BacktestTaskConfig = {
+  initialCapitalWan: number;
+  feePermille: number;
+  benchmarkName: string;
+  symbolPoolMode: "all" | "custom";
+  symbolPoolName: string;
+  rebalanceFrequencyType: "trade_day" | "calendar_day" | "week" | "month";
+  rebalanceFrequencyValue: number;
+  holdingWeight: "equal_amount" | "equal_weight";
+  maxSinglePositionPct: number;
+  minHoldCount: number;
+  maxHoldCount: number;
+  rebalanceThreshold: number;
+  rebalanceTiming: "close" | "open";
+  excludeRedeemRemainDays: number | null;
+  takeProfitPct: number | null;
+  stopLossPct: number | null;
+};
+
 export type StrategyOptimizeTask = {
   taskId: string;
   templateId: string;
@@ -229,6 +248,7 @@ export type StrategyOptimizeTask = {
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
+  taskConfig: BacktestTaskConfig;
 };
 
 export type StrategyOptimizeResultRow = {
@@ -579,6 +599,24 @@ type StrategyOptimizeTaskApi = {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  task_config?: {
+    initial_capital_wan: number;
+    fee_permille: number;
+    benchmark_name: string;
+    symbol_pool_mode: "all" | "custom";
+    symbol_pool_name: string;
+    rebalance_frequency_type: "trade_day" | "calendar_day" | "week" | "month";
+    rebalance_frequency_value: number;
+    holding_weight: "equal_amount" | "equal_weight";
+    max_single_position_pct: number;
+    min_hold_count: number;
+    max_hold_count: number;
+    rebalance_threshold: number;
+    rebalance_timing: "close" | "open";
+    exclude_redeem_remain_days: number | null;
+    take_profit_pct: number | null;
+    stop_loss_pct: number | null;
+  };
 };
 
 type StrategyOptimizeResultRowApi = {
@@ -931,6 +969,24 @@ function mapTushareSyncStatus(row: TushareSyncStatusApi): TushareSyncStatus {
 }
 
 function mapOptimizeTask(row: StrategyOptimizeTaskApi): StrategyOptimizeTask {
+  const taskConfig = row.task_config ?? {
+    initial_capital_wan: 100,
+    fee_permille: 1,
+    benchmark_name: "转债等权",
+    symbol_pool_mode: "all",
+    symbol_pool_name: "",
+    rebalance_frequency_type: "trade_day",
+    rebalance_frequency_value: 1,
+    holding_weight: "equal_amount",
+    max_single_position_pct: 20,
+    min_hold_count: 5,
+    max_hold_count: 12,
+    rebalance_threshold: 0,
+    rebalance_timing: "close",
+    exclude_redeem_remain_days: null,
+    take_profit_pct: null,
+    stop_loss_pct: null,
+  };
   return {
     taskId: row.task_id,
     templateId: row.template_id,
@@ -947,6 +1003,24 @@ function mapOptimizeTask(row: StrategyOptimizeTaskApi): StrategyOptimizeTask {
     createdAt: row.created_at,
     startedAt: row.started_at,
     finishedAt: row.finished_at,
+    taskConfig: {
+      initialCapitalWan: taskConfig.initial_capital_wan,
+      feePermille: taskConfig.fee_permille,
+      benchmarkName: taskConfig.benchmark_name,
+      symbolPoolMode: taskConfig.symbol_pool_mode,
+      symbolPoolName: taskConfig.symbol_pool_name,
+      rebalanceFrequencyType: taskConfig.rebalance_frequency_type,
+      rebalanceFrequencyValue: taskConfig.rebalance_frequency_value,
+      holdingWeight: taskConfig.holding_weight,
+      maxSinglePositionPct: taskConfig.max_single_position_pct,
+      minHoldCount: taskConfig.min_hold_count,
+      maxHoldCount: taskConfig.max_hold_count,
+      rebalanceThreshold: taskConfig.rebalance_threshold,
+      rebalanceTiming: taskConfig.rebalance_timing,
+      excludeRedeemRemainDays: taskConfig.exclude_redeem_remain_days,
+      takeProfitPct: taskConfig.take_profit_pct,
+      stopLossPct: taskConfig.stop_loss_pct,
+    },
   };
 }
 
@@ -1058,6 +1132,8 @@ export async function listStrategyTemplates(params?: {
       page: params?.page ?? 1,
       page_size: params?.pageSize ?? 50,
     }),
+    undefined,
+    { timeoutMs: 60_000 },
   );
 
   return {
@@ -1098,6 +1174,7 @@ export async function triggerTushareHistorySync(payload?: {
   startDate?: string;
   endDate?: string;
   maxTradeDays?: number;
+  incremental?: boolean;
 }): Promise<TushareSyncResult> {
   const response = await requestJson<{
     ok: boolean;
@@ -1118,6 +1195,7 @@ export async function triggerTushareHistorySync(payload?: {
       start_date: payload?.startDate,
       end_date: payload?.endDate,
       max_trade_days: payload?.maxTradeDays ?? 1500,
+      incremental: payload?.incremental ?? false,
     }),
   }, { timeoutMs: 10 * 60_000 });
   return {
@@ -1449,7 +1527,26 @@ export async function createStrategyOptimizeTask(payload: {
   topN?: number;
   maxCombinations?: number;
   currentTopN?: number;
+  taskConfig?: BacktestTaskConfig;
 }): Promise<{ task: StrategyOptimizeTask; message: string }> {
+  const taskConfig = payload.taskConfig ?? {
+    initialCapitalWan: 100,
+    feePermille: 1,
+    benchmarkName: "转债等权",
+    symbolPoolMode: "all",
+    symbolPoolName: "",
+    rebalanceFrequencyType: "trade_day",
+    rebalanceFrequencyValue: 1,
+    holdingWeight: "equal_amount",
+    maxSinglePositionPct: 20,
+    minHoldCount: 5,
+    maxHoldCount: 12,
+    rebalanceThreshold: 0,
+    rebalanceTiming: "close",
+    excludeRedeemRemainDays: null,
+    takeProfitPct: null,
+    stopLossPct: null,
+  };
   const response = await requestJson<{
     task: StrategyOptimizeTaskApi;
     message: string;
@@ -1463,6 +1560,24 @@ export async function createStrategyOptimizeTask(payload: {
       top_n: payload.topN ?? 20,
       max_combinations: payload.maxCombinations,
       current_top_n: payload.currentTopN ?? 20,
+      task_config: {
+        initial_capital_wan: taskConfig.initialCapitalWan,
+        fee_permille: taskConfig.feePermille,
+        benchmark_name: taskConfig.benchmarkName,
+        symbol_pool_mode: taskConfig.symbolPoolMode,
+        symbol_pool_name: taskConfig.symbolPoolName,
+        rebalance_frequency_type: taskConfig.rebalanceFrequencyType,
+        rebalance_frequency_value: taskConfig.rebalanceFrequencyValue,
+        holding_weight: taskConfig.holdingWeight,
+        max_single_position_pct: taskConfig.maxSinglePositionPct,
+        min_hold_count: taskConfig.minHoldCount,
+        max_hold_count: taskConfig.maxHoldCount,
+        rebalance_threshold: taskConfig.rebalanceThreshold,
+        rebalance_timing: taskConfig.rebalanceTiming,
+        exclude_redeem_remain_days: taskConfig.excludeRedeemRemainDays,
+        take_profit_pct: taskConfig.takeProfitPct,
+        stop_loss_pct: taskConfig.stopLossPct,
+      },
     }),
   });
   return {
@@ -1526,6 +1641,8 @@ export async function getStrategyOptimizeSummary(params?: {
       top_n: params?.topN ?? 20,
       current_top_n: params?.currentTopN ?? 20,
     }),
+    undefined,
+    { timeoutMs: 60_000 },
   );
   return {
     topStrategies: payload.top_strategies.map(mapOptimizeResultRow),

@@ -14,6 +14,7 @@ from vnpy.web.adapters import CrawlerPhaseABacktestAdapter
 from vnpy.web.domain.cb_quant.quant_store import CbQuantStore
 from vnpy.web.services.cb_market_service import CbMarketService
 from vnpy.web.schemas import (
+    BacktestTaskConfig,
     BacktestCompareResponse,
     BacktestCompareRow,
     BacktestCreateJobsRequest,
@@ -116,6 +117,7 @@ class CbQuantService:
 
         self._optimize_tasks, self._optimize_results, self._optimize_top_bonds = self._load_optimize_state()
         self._opt_task_seq = self._derive_opt_task_seq(self._optimize_tasks)
+        self._mark_unfinished_optimize_tasks_as_failed_after_restart()
         self._optimize_analysis_cache: dict[tuple[str, str, float, str], StrategyOptimizeTaskAnalysisResponse] = {}
 
     # ---------- strategy templates ----------
@@ -663,6 +665,7 @@ class CbQuantService:
             ),
         )
         capped_total = combo_size if request.max_combinations is None else min(combo_size, request.max_combinations)
+        task_config = self._normalize_task_config(request.task_config)
 
         with self._lock:
             self._opt_task_seq += 1
@@ -681,6 +684,7 @@ class CbQuantService:
                 eta="--",
                 message="任务已入队",
                 created_at=_now_readable(),
+                task_config=task_config,
             )
             self._optimize_tasks = [task, *self._optimize_tasks]
             self._optimize_results[task_id] = []
@@ -688,17 +692,37 @@ class CbQuantService:
         self._store.upsert_optimize_task(row=task.model_dump())
         self._sync_optimize_task_as_backtest_job(task)
 
-        self._executor.submit(
-            self._run_optimize_task,
-            task_id,
-            request.top_n,
-            request.current_top_n,
-            request.start_date,
-            request.end_date,
+        submit_error: str | None = None
+        try:
+            self._executor.submit(
+                self._run_optimize_task,
+                task_id,
+                request.top_n,
+                request.current_top_n,
+                request.start_date,
+                request.end_date,
+                task_config,
+            )
+        except Exception as exc:
+            submit_error = str(exc)[:120]
+            self._update_optimize_task(
+                task_id,
+                status="failed",
+                progress=0,
+                eta="submit-failed",
+                finished_at=_now_readable(),
+                message=f"任务提交失败: {submit_error}",
+            )
+
+        response_task = self._get_optimize_task(task_id) or task
+        response_message = (
+            f"已创建优化任务 {task_id}，但提交执行失败：{submit_error}"
+            if submit_error
+            else f"已创建优化任务 {task_id}，待评估参数组合数={capped_total}"
         )
         return StrategyOptimizeTaskCreateResponse(
-            task=task,
-            message=f"已创建优化任务 {task_id}，待评估参数组合数={capped_total}",
+            task=response_task,
+            message=response_message,
         )
 
     def list_optimize_tasks(
@@ -746,11 +770,17 @@ class CbQuantService:
         *,
         task_id: str,
         combo_id: str | None = None,
-        initial_capital_wan: float = 100.0,
+        initial_capital_wan: float | None = None,
     ) -> StrategyOptimizeTaskAnalysisResponse | None:
         task = self._get_optimize_task(task_id)
         if not task:
             return None
+        if initial_capital_wan is None:
+            initial_capital_wan = self._normalize_task_config(task.task_config).initial_capital_wan
+        task_config = self._normalize_task_config(task.task_config)
+        benchmark_name = "转债等权"
+        if task_config.benchmark_name and task_config.benchmark_name != "转债等权":
+            benchmark_name = f"{task_config.benchmark_name}（暂按转债等权测算）"
 
         # Keep analysis semantics strict: only finished task has official analysis output.
         if task.status != "finished":
@@ -759,7 +789,7 @@ class CbQuantService:
                 template_id=task.template_id,
                 template_name=task.template_name,
                 combo_id=combo_id or "--",
-                benchmark_name="转债等权",
+                benchmark_name=benchmark_name,
                 window="full" if "full" in task.windows else (task.windows[0] if task.windows else "full"),
                 metric_rows=[],
                 curve=[],
@@ -791,6 +821,7 @@ class CbQuantService:
             setting = dict(selected_row.params)
         else:
             setting = self._resolve_setting_for_combo(combo_id=selected_combo_id, template_name=task.template_name)
+        setting = self._apply_task_config_to_setting(setting, task_config)
 
         window = "full" if "full" in task.windows else (task.windows[0] if task.windows else "full")
         start_date = self._parse_iso_date(task.start_date)
@@ -822,7 +853,7 @@ class CbQuantService:
                 template_id=task.template_id,
                 template_name=task.template_name,
                 combo_id=selected_combo_id,
-                benchmark_name="转债等权",
+                benchmark_name=benchmark_name,
                 window=window,
                 metric_rows=[],
                 curve=[],
@@ -907,13 +938,17 @@ class CbQuantService:
             message_parts.append("当前任务尚未生成榜单，分析结果基于当前参数直接重算。")
         if strategy["effective_trade_count"] <= 0:
             message_parts.append("未产生有效交易策略，请放宽阈值或调整参数范围。")
+        if task_config.benchmark_name and task_config.benchmark_name != "转债等权":
+            message_parts.append(f"已记录任务基准“{task_config.benchmark_name}”，当前分析暂按转债等权进行对比。")
+        if task_config.fee_permille > 0:
+            message_parts.append(f"已记录单边手续费 {task_config.fee_permille:.3f}‰，当前分析尚未扣减手续费成本。")
 
         response = StrategyOptimizeTaskAnalysisResponse(
             task_id=task.task_id,
             template_id=task.template_id,
             template_name=task.template_name,
             combo_id=selected_combo_id,
-            benchmark_name="转债等权",
+            benchmark_name=benchmark_name,
             window=window,
             metric_rows=metric_rows,
             curve=curve_rows,
@@ -983,8 +1018,18 @@ class CbQuantService:
 
         top_bonds: list[StrategyTopBondRow] = []
         market_warning = ""
-        best_params = ranked_top[0].params if ranked_top else {}
-        if best_params:
+        best_row = ranked_top[0] if ranked_top else None
+        best_params = best_row.params if best_row else {}
+        best_task_id = str(best_row.task_id or "") if best_row else ""
+
+        persisted_top = self._optimize_top_bonds.get(best_task_id, []) if best_task_id else []
+        if persisted_top:
+            top_bonds = [
+                row.model_copy(update={"rank": idx + 1})
+                for idx, row in enumerate(persisted_top[:safe_current_top_n])
+            ]
+            market_warning = "；Top20沿用任务完成时快照"
+        elif best_params:
             try:
                 top_bonds, market_source = self._score_current_market(best_params, limit=safe_current_top_n)
                 if not market_source.startswith("eastmoney."):
@@ -1007,6 +1052,7 @@ class CbQuantService:
         current_top_n: int,
         start_date: date | None,
         end_date: date | None,
+        task_config: BacktestTaskConfig,
     ) -> None:
         task = self._get_optimize_task(task_id)
         if not task:
@@ -1015,6 +1061,15 @@ class CbQuantService:
         if not template:
             self._update_optimize_task(task_id, status="failed", eta="--", message="template not found")
             return
+
+        self._update_optimize_task(
+            task_id,
+            status="running",
+            progress=1,
+            started_at=task.started_at or _now_readable(),
+            eta="initializing",
+            message="任务已出队，正在初始化引擎与加载数据",
+        )
 
         module = self._adapter._load_module()
         dataset = self._adapter.load_market_data()
@@ -1039,8 +1094,7 @@ class CbQuantService:
         self._update_optimize_task(
             task_id,
             status="running",
-            progress=1,
-            started_at=_now_readable(),
+            progress=3,
             eta="loading",
             message=f"正在加载历史快照并初始化参数空间（workers={workers}）",
         )
@@ -1082,6 +1136,7 @@ class CbQuantService:
                     end_date=end_date,
                     window_dataset_map=stage1_map,
                     workers=workers,
+                    task_config=task_config,
                 ):
                     evaluated_primary += 1
                     if abs(row.total_return_pct) < 1e-9 and row.turnover <= 1e-9:
@@ -1143,6 +1198,7 @@ class CbQuantService:
                         end_date=end_date,
                         window_dataset_map=window_dataset_map,
                         workers=workers,
+                        task_config=task_config,
                     ):
                         evaluated_secondary += 1
                         if abs(row.total_return_pct) < 1e-9 and row.turnover <= 1e-9:
@@ -1193,6 +1249,7 @@ class CbQuantService:
                     end_date=end_date,
                     window_dataset_map=window_dataset_map,
                     workers=workers,
+                    task_config=task_config,
                 ):
                     evaluated_primary += 1
                     if abs(row.total_return_pct) < 1e-9 and row.turnover <= 1e-9:
@@ -1652,6 +1709,7 @@ class CbQuantService:
         best_row = (self._optimize_results.get(task.task_id) or [None])[0]
         combo_id = best_row.combo_id if best_row is not None else "--"
         setting = dict(best_row.params) if best_row is not None else self._adapter.default_setting()
+        setting = self._apply_task_config_to_setting(setting, task.task_config)
         status = task.status if task.status in {"queued", "running", "finished", "failed"} else "failed"
         business_date = (task.created_at or "")[:10] or date.today().isoformat()
         window_text = "/".join(task.windows) if task.windows else "full"
@@ -1732,6 +1790,8 @@ class CbQuantService:
 
     @staticmethod
     def _pick_stage1_window(windows: list[WindowName]) -> WindowName:
+        if "1w" in windows:
+            return "1w"
         if "1y" in windows:
             return "1y"
         if "3y" in windows:
@@ -1844,6 +1904,7 @@ class CbQuantService:
         end_date: date | None,
         window_dataset_map: dict[WindowName, list[tuple[str, Any]]] | None,
         workers: int,
+        task_config: BacktestTaskConfig,
     ) -> Iterable[StrategyOptimizeResultRow]:
         combo_iterator = iter(combo_iter)
         if workers <= 1:
@@ -1860,6 +1921,7 @@ class CbQuantService:
                     end_date=end_date,
                     setting=setting,
                     window_dataset_map=window_dataset_map,
+                    task_config=task_config,
                 )
             return
 
@@ -1884,6 +1946,7 @@ class CbQuantService:
                     end_date=end_date,
                     setting=setting,
                     window_dataset_map=window_dataset_map,
+                    task_config=task_config,
                 )
                 inflight[future] = combo_id
                 return True
@@ -1929,18 +1992,29 @@ class CbQuantService:
         *,
         dataset: list[tuple[str, Any]],
         candidate_code_map: dict[str, list[str]],
-        max_hold_num: int,
-        until_win: bool,
+        setting: dict[str, Any],
     ) -> dict[str, Any]:
         holdings: list[dict[str, Any]] = []
-        per_position = 1.0 / max_hold_num if max_hold_num > 0 else 0.0
+        max_hold_num = max(1, int(round(self._to_float(setting.get("max_hold_num"), 12.0))))
+        until_win = bool(setting.get("until_win", False))
+        per_position = self._position_ratio(setting=setting, max_hold_num=max_hold_num)
         daily_returns: list[float] = []
         sell_win = 0
         sell_loss = 0
+        rebalanced_days = 0
+        last_rebalance_date: str | None = None
+        last_rebalance_index = 0
 
         for index, (trade_date, frame) in enumerate(dataset):
             ranked_codes = [code for code in candidate_code_map.get(trade_date, []) if code in frame.index]
             ranked_set = set(ranked_codes)
+            rebalance_due = self._should_rebalance(
+                index=index,
+                trade_date=trade_date,
+                last_rebalance_date=last_rebalance_date,
+                last_rebalance_index=last_rebalance_index,
+                setting=setting,
+            )
 
             if index == 0:
                 for code in ranked_codes:
@@ -1958,6 +2032,7 @@ class CbQuantService:
                             "ratio": per_position,
                         }
                     )
+                last_rebalance_date = trade_date
                 continue
 
             daily_ret = 0.0
@@ -1987,7 +2062,13 @@ class CbQuantService:
                 if is_ransom:
                     sell_list.append(item)
                     continue
+                if self._should_exit_by_price_limits(setting=setting, item=item, current_price=cur_price):
+                    sell_list.append(item)
+                    continue
                 if until_win and cur_price <= self._to_float(item.get("buy_price"), cur_price):
+                    keep_list.append(item)
+                    continue
+                if not rebalance_due:
                     keep_list.append(item)
                     continue
                 if code in ranked_set:
@@ -2010,26 +2091,31 @@ class CbQuantService:
                     sell_loss += 1
 
             existing_codes = {str(item.get("code", "")) for item in keep_list}
-            for code in ranked_codes:
-                if len(keep_list) >= max_hold_num:
-                    break
-                if code in existing_codes:
-                    continue
-                row = frame.loc[code]
-                price = self._to_float(row.get("price"), 0.0)
-                if price <= 0:
-                    continue
-                keep_list.append(
-                    {
-                        "code": code,
-                        "buy_price": price,
-                        "last_price": price,
-                        "ratio": per_position,
-                    }
-                )
-                existing_codes.add(code)
+            if rebalance_due:
+                for code in ranked_codes:
+                    if len(keep_list) >= max_hold_num:
+                        break
+                    if code in existing_codes:
+                        continue
+                    row = frame.loc[code]
+                    price = self._to_float(row.get("price"), 0.0)
+                    if price <= 0:
+                        continue
+                    keep_list.append(
+                        {
+                            "code": code,
+                            "buy_price": price,
+                            "last_price": price,
+                            "ratio": per_position,
+                        }
+                    )
+                    existing_codes.add(code)
 
             holdings = keep_list
+            if rebalance_due:
+                rebalanced_days += 1
+                last_rebalance_date = trade_date
+                last_rebalance_index = index
 
         equity = 1.0
         max_equity = 1.0
@@ -2051,7 +2137,7 @@ class CbQuantService:
             "trade_count": int(trade_count),
             "win_rate_pct": round(win_rate_pct, 4),
             "sample_days": len(dataset),
-            "rebalanced_days": len(daily_returns),
+            "rebalanced_days": rebalanced_days,
         }
 
     def _evaluate_combo(
@@ -2068,7 +2154,9 @@ class CbQuantService:
         end_date: date | None,
         setting: dict[str, Any],
         window_dataset_map: dict[WindowName, list[tuple[str, Any]]] | None = None,
+        task_config: BacktestTaskConfig,
     ) -> StrategyOptimizeResultRow:
+        setting = self._apply_task_config_to_setting(setting, task_config)
         head_count = max(1, int(round(self._to_float(setting.get("head_count"), 10.0))))
         max_hold_num = max(1, int(round(self._to_float(setting.get("max_hold_num"), 12.0))))
         until_win = bool(setting.get("until_win", False))
@@ -2106,11 +2194,9 @@ class CbQuantService:
             stats = self._run_backtest_from_candidate_map(
                 dataset=sliced,
                 candidate_code_map=candidate_code_map,
-                max_hold_num=max_hold_num,
-                until_win=until_win,
+                setting=setting,
             )
             stats["sample_days"] = len(sliced)
-            stats["rebalanced_days"] = max(0, len(sliced) - 1)
             metrics = self._derive_leaderboard_metrics(stats=stats, window_name=window_name)
             all_metrics.append(metrics)
             all_returns.append(self._to_float(stats.get("total_return_pct"), 0.0))
@@ -2132,11 +2218,9 @@ class CbQuantService:
                 stats = self._run_backtest_from_candidate_map(
                     dataset=sliced,
                     candidate_code_map=candidate_code_map,
-                    max_hold_num=max_hold_num,
-                    until_win=until_win,
+                    setting=setting,
                 )
                 stats["sample_days"] = len(sliced)
-                stats["rebalanced_days"] = max(0, len(sliced) - 1)
                 metrics = self._derive_leaderboard_metrics(stats=stats, window_name=window_name)
                 all_metrics.append(metrics)
                 all_returns.append(self._to_float(stats.get("total_return_pct"), 0.0))
@@ -2149,7 +2233,7 @@ class CbQuantService:
         calmar = cagr / mdd if mdd > 0 else cagr
         win_rate = sum(item["win_rate"] for item in all_metrics) / len(all_metrics)
         turnover = sum(item["turnover"] for item in all_metrics) / len(all_metrics)
-        recent_1y = next((item["recent_1y"] for item, w in zip(all_metrics, windows) if w == "1y"), cagr)
+        recent_1y = next((item["recent_1y"] for item, w in zip(all_metrics, windows) if w in {"1y", "1w"}), cagr)
         robust_score = sum(item["robust_score"] for item in all_metrics) / len(all_metrics)
         total_return_pct = sum(all_returns) / len(all_returns)
 
@@ -2336,7 +2420,7 @@ class CbQuantService:
         head_count = max(1, int(round(self._to_float(setting.get("head_count"), 10.0))))
         max_hold_num = max(1, int(round(self._to_float(setting.get("max_hold_num"), 12.0))))
         until_win = bool(setting.get("until_win", False))
-        per_position = 1.0 / max_hold_num if max_hold_num > 0 else 0.0
+        per_position = self._position_ratio(setting=setting, max_hold_num=max_hold_num)
 
         dates: list[str] = []
         daily_returns: list[float] = []
@@ -2355,6 +2439,9 @@ class CbQuantService:
         drawdown_count = 0
         effective_trade_count = 0
         prev_codes: set[str] = set()
+        rebalanced_days = 0
+        last_rebalance_date: str | None = None
+        last_rebalance_index = 0
 
         for index, (trade_date, df_all) in enumerate(dataset):
             candidate = module.build_candidates(df_all, trade_date, cfg, head_count)
@@ -2364,6 +2451,13 @@ class CbQuantService:
                 candidate_codes: set[str] = set()
             else:
                 candidate_codes = set(candidate["cb_code"].astype(str).tolist())
+            rebalance_due = self._should_rebalance(
+                index=index,
+                trade_date=trade_date,
+                last_rebalance_date=last_rebalance_date,
+                last_rebalance_index=last_rebalance_index,
+                setting=setting,
+            )
 
             if index == 0:
                 if candidate is not None and not candidate.empty:
@@ -2380,6 +2474,7 @@ class CbQuantService:
                             }
                         )
                 prev_codes = {item["code"] for item in holdings}
+                last_rebalance_date = trade_date
                 dates.append(trade_date)
                 daily_returns.append(0.0)
                 nav_series.append(nav)
@@ -2435,7 +2530,13 @@ class CbQuantService:
                 if is_ransom:
                     sell_list.append(item)
                     continue
+                if self._should_exit_by_price_limits(setting=setting, item=item, current_price=cur_price):
+                    sell_list.append(item)
+                    continue
                 if until_win and cur_price <= self._to_float(item.get("buy_price"), cur_price):
+                    keep_list.append(item)
+                    continue
+                if not rebalance_due:
                     keep_list.append(item)
                     continue
                 if code in candidate_codes:
@@ -2456,24 +2557,25 @@ class CbQuantService:
                 effective_trade_count += 1
 
             existing_codes = {str(item.get("code", "")) for item in keep_list}
-            for _, row in candidate.iterrows():
-                if len(keep_list) >= max_hold_num:
-                    break
-                code = str(row.get("cb_code", ""))
-                if code in existing_codes:
-                    continue
-                price = self._to_float(row.get("price"), 0.0)
-                if price <= 0:
-                    continue
-                keep_list.append(
-                    {
-                        "code": code,
-                        "buy_price": price,
-                        "last_price": price,
-                        "ratio": per_position,
-                    }
-                )
-                existing_codes.add(code)
+            if rebalance_due:
+                for _, row in candidate.iterrows():
+                    if len(keep_list) >= max_hold_num:
+                        break
+                    code = str(row.get("cb_code", ""))
+                    if code in existing_codes:
+                        continue
+                    price = self._to_float(row.get("price"), 0.0)
+                    if price <= 0:
+                        continue
+                    keep_list.append(
+                        {
+                            "code": code,
+                            "buy_price": price,
+                            "last_price": price,
+                            "ratio": per_position,
+                        }
+                    )
+                    existing_codes.add(code)
 
             current_codes = {str(item.get("code", "")) for item in keep_list}
             if prev_codes:
@@ -2485,6 +2587,10 @@ class CbQuantService:
 
             holdings = keep_list
             prev_codes = current_codes
+            if rebalance_due:
+                rebalanced_days += 1
+                last_rebalance_date = trade_date
+                last_rebalance_index = index
 
             dates.append(trade_date)
             daily_returns.append(day_return)
@@ -2519,6 +2625,7 @@ class CbQuantService:
             "trade_pnls_pct": trade_pnls_pct,
             "rotations": rotations,
             "effective_trade_count": effective_trade_count,
+            "rebalanced_days": rebalanced_days,
         }
 
     def _simulate_equal_weight_benchmark(
@@ -2796,6 +2903,129 @@ class CbQuantService:
         except ValueError:
             return None
 
+    @staticmethod
+    def _normalize_task_config(task_config: BacktestTaskConfig | dict[str, Any] | None) -> BacktestTaskConfig:
+        if isinstance(task_config, BacktestTaskConfig):
+            config = task_config
+        else:
+            try:
+                config = BacktestTaskConfig.model_validate(task_config or {})
+            except Exception:
+                config = BacktestTaskConfig()
+        min_hold = max(1, int(config.min_hold_count))
+        max_hold = max(min_hold, int(config.max_hold_count))
+        freq_value = max(1, int(config.rebalance_frequency_value))
+        initial_capital_wan = max(0.0001, float(config.initial_capital_wan))
+        fee_permille = max(0.0, float(config.fee_permille))
+        max_single_position_pct = max(0.0, min(100.0, float(config.max_single_position_pct)))
+        exclude_redeem_remain_days = config.exclude_redeem_remain_days
+        if exclude_redeem_remain_days is not None:
+            exclude_redeem_remain_days = max(0, int(exclude_redeem_remain_days))
+        take_profit_pct = config.take_profit_pct
+        stop_loss_pct = config.stop_loss_pct
+        if take_profit_pct is not None:
+            take_profit_pct = max(0.0, float(take_profit_pct))
+        if stop_loss_pct is not None:
+            stop_loss_pct = max(0.0, float(stop_loss_pct))
+        return config.model_copy(
+            update={
+                "initial_capital_wan": initial_capital_wan,
+                "fee_permille": fee_permille,
+                "min_hold_count": min_hold,
+                "max_hold_count": max_hold,
+                "rebalance_frequency_value": freq_value,
+                "max_single_position_pct": max_single_position_pct,
+                "exclude_redeem_remain_days": exclude_redeem_remain_days,
+                "take_profit_pct": take_profit_pct,
+                "stop_loss_pct": stop_loss_pct,
+            }
+        )
+
+    def _apply_task_config_to_setting(
+        self,
+        setting: dict[str, Any],
+        task_config: BacktestTaskConfig | dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        config = self._normalize_task_config(task_config)
+        merged = dict(setting)
+        merged["initial_capital_wan"] = config.initial_capital_wan
+        merged["fee_permille"] = config.fee_permille
+        merged["benchmark_name"] = config.benchmark_name
+        merged["symbol_pool_mode"] = config.symbol_pool_mode
+        merged["symbol_pool_name"] = config.symbol_pool_name
+        merged["rebalance_frequency_type"] = config.rebalance_frequency_type
+        merged["rebalance_frequency_value"] = config.rebalance_frequency_value
+        merged["holding_weight"] = config.holding_weight
+        merged["max_single_position_pct"] = config.max_single_position_pct
+        merged["min_hold_count"] = config.min_hold_count
+        merged["max_hold_num"] = config.max_hold_count
+        merged["rebalance_threshold"] = float(config.rebalance_threshold)
+        merged["rebalance_timing"] = config.rebalance_timing
+        merged["redeem_remain_days_limit"] = config.exclude_redeem_remain_days
+        merged["take_profit_pct"] = config.take_profit_pct
+        merged["stop_loss_pct"] = config.stop_loss_pct
+        merged["head_count"] = max(
+            int(round(self._to_float(merged.get("head_count"), float(config.max_hold_count)))),
+            config.max_hold_count,
+        )
+        return merged
+
+    def _position_ratio(self, *, setting: dict[str, Any], max_hold_num: int) -> float:
+        if max_hold_num <= 0:
+            return 0.0
+        base_ratio = 1.0 / max_hold_num
+        cap_ratio = self._to_float(setting.get("max_single_position_pct"), 100.0) / 100.0
+        cap_ratio = max(0.0, min(1.0, cap_ratio))
+        return min(base_ratio, cap_ratio if cap_ratio > 0 else base_ratio)
+
+    def _should_rebalance(
+        self,
+        *,
+        index: int,
+        trade_date: str,
+        last_rebalance_date: str | None,
+        last_rebalance_index: int,
+        setting: dict[str, Any],
+    ) -> bool:
+        if index == 0:
+            return True
+        freq_type = str(setting.get("rebalance_frequency_type", "trade_day") or "trade_day")
+        freq_value = max(1, int(round(self._to_float(setting.get("rebalance_frequency_value"), 1.0))))
+        if freq_type == "trade_day":
+            return (index - last_rebalance_index) >= freq_value
+
+        current_date = self._parse_iso_date(trade_date)
+        previous_date = self._parse_iso_date(last_rebalance_date)
+        if not current_date or not previous_date:
+            return True
+        if freq_type == "calendar_day":
+            return (current_date - previous_date).days >= freq_value
+        if freq_type == "week":
+            return (current_date - previous_date).days >= 7 * freq_value
+        if freq_type == "month":
+            month_delta = (current_date.year - previous_date.year) * 12 + (current_date.month - previous_date.month)
+            return month_delta >= freq_value
+        return (index - last_rebalance_index) >= freq_value
+
+    def _should_exit_by_price_limits(
+        self,
+        *,
+        setting: dict[str, Any],
+        item: dict[str, Any],
+        current_price: float,
+    ) -> bool:
+        buy_price = self._to_float(item.get("buy_price"), current_price)
+        if buy_price <= 0 or current_price <= 0:
+            return False
+        pnl_pct = (current_price - buy_price) / buy_price * 100.0
+        take_profit_pct = setting.get("take_profit_pct")
+        if take_profit_pct is not None and pnl_pct >= self._to_float(take_profit_pct, 0.0):
+            return True
+        stop_loss_pct = setting.get("stop_loss_pct")
+        if stop_loss_pct is not None and pnl_pct <= -self._to_float(stop_loss_pct, 0.0):
+            return True
+        return False
+
     def _resolve_setting_for_combo(self, *, combo_id: str, template_name: str) -> dict[str, Any]:
         template_id = ""
         candidate = self._find_candidate(combo_id, template_name=template_name if template_name else None)
@@ -2911,7 +3141,7 @@ class CbQuantService:
         cagr = (1 + total_return) ** (1 / years) - 1 if total_return > -0.999 else -0.999
         calmar = cagr / mdd if mdd > 0 else max(0.0, cagr)
         turnover = min(2.0, max(0.0, trade_count / rebalanced_days))
-        recent_1y = total_return if window_name == "1y" else cagr
+        recent_1y = total_return if window_name in {"1y", "1w"} else cagr
         robust_score = self._calculate_robust_score(
             cagr=cagr,
             mdd=mdd,
@@ -3380,6 +3610,8 @@ class CbQuantService:
             return "全周期"
         if window_name == "3y":
             return "近3年"
+        if window_name == "1w":
+            return "近1周"
         return "近1年"
 
     @staticmethod
@@ -3583,6 +3815,31 @@ class CbQuantService:
 
         for row, context in stale:
             self._store.upsert_job(row=row.model_dump(), context=context)
+
+    def _mark_unfinished_optimize_tasks_as_failed_after_restart(self) -> None:
+        stale: list[StrategyOptimizeTaskRow] = []
+        with self._lock:
+            updated_rows: list[StrategyOptimizeTaskRow] = []
+            for row in self._optimize_tasks:
+                if row.status not in {"queued", "running"}:
+                    updated_rows.append(row)
+                    continue
+                recovered = row.model_copy(
+                    update={
+                        "status": "failed",
+                        "progress": row.progress if row.progress > 0 else 1,
+                        "eta": "--",
+                        "finished_at": _now_readable(),
+                        "message": "interrupted-after-restart",
+                    }
+                )
+                updated_rows.append(recovered)
+                stale.append(recovered)
+            self._optimize_tasks = updated_rows
+
+        for row in stale:
+            self._store.upsert_optimize_task(row=row.model_dump())
+            self._sync_optimize_task_as_backtest_job(row)
 
     def _is_job_cancel_requested(self, job_id: str) -> bool:
         with self._lock:

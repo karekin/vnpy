@@ -189,7 +189,7 @@ const traderChecklist = [
 const tips = [
   { title: "Tip: prefix=True", text: "避免指数与个股同代码冲突，确保下游映射唯一。" },
   { title: "Tip: jsl 字段动态", text: "jsl.cb() 返回 row.cell 字典，字段可能调整，前端应容忍字段增减。" },
-  { title: "Tip: 正股PB口径差异", text: "当前正股PB来自东财接口，可能与集思录口径不同，使用时请以同源数据比较。"},
+  { title: "Tip: 正股PB口径差异", text: "当前正股PB来自 Tushare daily_basic，可能与集思录口径不同，使用时请以同源数据比较。"},
   { title: "Tip: 双低不是单因子", text: "双低值需配合流动性和评级，否则实盘可成交性差。" },
   { title: "Tip: 前端职责", text: "前端负责展示与追溯；数据清洗、回填、纠错由后端执行。" },
 ];
@@ -824,7 +824,7 @@ export default function CbQuantInfoMiningPage() {
           <div className="border-t border-gray-100 px-5 py-2 text-xs text-gray-500 dark:border-gray-800 dark:text-gray-400">
             转债主表数据源: {bondSourceLabel}{bondLoading ? "（刷新中）" : ""}
             {bondFallbackReason ? `；降级原因: ${bondFallbackReason}` : ""}
-            ；提示: 正股PB当前为东财口径，和集思录可能不一致。
+            ；提示: 正股PB当前为 Tushare daily_basic 口径，和集思录可能不一致。
           </div>
 
           {activeTab === "stock" && (

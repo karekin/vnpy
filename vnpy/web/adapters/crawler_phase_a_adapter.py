@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -173,6 +173,9 @@ class CrawlerPhaseABacktestAdapter:
             return [(ds, frame) for dt, ds, frame in normalized if dt >= begin]
         if window_name == "1y":
             begin = CrawlerPhaseABacktestAdapter._minus_years(end, years=1)
+            return [(ds, frame) for dt, ds, frame in normalized if dt >= begin]
+        if window_name == "1w":
+            begin = end - timedelta(days=7)
             return [(ds, frame) for dt, ds, frame in normalized if dt >= begin]
         return [(ds, frame) for _, ds, frame in normalized]
 

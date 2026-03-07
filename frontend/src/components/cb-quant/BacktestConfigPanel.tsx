@@ -3,7 +3,7 @@
 import type { CandidateRow } from "@/components/cb-quant/api";
 import React, { useEffect, useMemo, useState } from "react";
 
-export type EvalWindow = "full" | "3y" | "1y";
+export type EvalWindow = "full" | "3y" | "1y" | "1w";
 export type RuleSourceMode = "inherit" | "candidate" | "custom";
 
 export type BacktestQueuePayload = {
@@ -51,6 +51,7 @@ const windowLabels: Record<EvalWindow, string> = {
   full: "2018-2025",
   "3y": "近3年",
   "1y": "近1年",
+  "1w": "近1周",
 };
 
 const inputClassName =

@@ -304,6 +304,29 @@ Open CMD in that directory (hold Shift->click right mouse button->open command w
 
     python run.py
     
+## Running the frontend and backend
+
+To work with the web UI locally, keep the frontend and backend servers running in two separate terminals.
+
+**Backend (repo root)**
+
+```
+pip install -e ".[web]"
+python -m vnpy.web.app
+```
+
+The backend listens on `http://127.0.0.1:8000` and exposes OpenAPI documentation at `http://127.0.0.1:8000/docs`.
+
+**Frontend (frontend directory)**
+
+```
+cd frontend
+npm install
+npm run dev
+```
+
+The frontend dev server is available on `http://localhost:3000` and proxies API calls to the backend.
+
 ## Contributing code
 
 VeighNa uses Github to host its source code, if you wish to contribute code please use the PR (Pull Request) process of github:

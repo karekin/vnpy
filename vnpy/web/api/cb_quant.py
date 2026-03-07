@@ -218,12 +218,20 @@ def trigger_tushare_history_sync(
     request: TushareSyncRequest,
 ) -> TushareSyncResponse:
     try:
-        payload = cb_tushare_service.sync_range(
-            start_date=request.start_date,
-            end_date=request.end_date,
-            mode="manual",
-            max_trade_days=request.max_trade_days,
-        )
+        if request.incremental:
+            payload = cb_tushare_service.sync_incremental(
+                start_date=request.start_date,
+                end_date=request.end_date,
+                mode="manual",
+                max_trade_days=request.max_trade_days,
+            )
+        else:
+            payload = cb_tushare_service.sync_range(
+                start_date=request.start_date,
+                end_date=request.end_date,
+                mode="manual",
+                max_trade_days=request.max_trade_days,
+            )
         return TushareSyncResponse.model_validate(payload)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -306,7 +314,7 @@ def get_optimize_task_detail(task_id: str) -> StrategyOptimizeTaskDetailResponse
 def get_optimize_task_analysis(
     task_id: str,
     combo_id: str | None = Query(default=None),
-    initial_capital_wan: float = Query(default=100.0, gt=0),
+    initial_capital_wan: float | None = Query(default=None, gt=0),
 ) -> StrategyOptimizeTaskAnalysisResponse:
     detail = cb_quant_service.get_optimize_task_analysis(
         task_id=task_id,

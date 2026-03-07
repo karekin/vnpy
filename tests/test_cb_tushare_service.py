@@ -36,16 +36,30 @@ class _FakeTushareClientSuccess:
                     {
                         "ts_code": "110001.SH",
                         "bond_short_name": "CB-ONE",
-                        "stk_code": "600000",
+                        "stk_code": "600000.SH",
+                        "stk_short_name": "STK-ONE",
                         "maturity_date": "2028-12-31",
+                        "list_date": "20240101",
+                        "conv_start_date": "20240201",
+                        "value_date": "20240101",
+                        "conv_price": 10.0,
                         "issue_size": "12",
+                        "remain_size": "12",
+                        "rating": "AA+",
                     },
                     {
                         "ts_code": "110002.SH",
                         "bond_short_name": "CB-TWO",
-                        "stk_code": "000001",
+                        "stk_code": "000001.SZ",
+                        "stk_short_name": "STK-TWO",
                         "maturity_date": "2027-06-30",
+                        "list_date": "20240101",
+                        "conv_start_date": "20240201",
+                        "value_date": "20240101",
+                        "conv_price": 8.0,
                         "issue_size": "8",
+                        "remain_size": "8",
+                        "rating": "AA",
                     },
                 ]
             )
@@ -58,13 +72,21 @@ class _FakeTushareClientSuccess:
                 [
                     {
                         "ts_code": "110001.SH",
+                        "trade_date": trade_date,
+                        "pre_close": 100.0 if trade_date == "20240129" else 101.0,
                         "close": 101.0 if trade_date == "20240129" else 102.0,
+                        "pct_chg": 1.0 if trade_date == "20240129" else 0.99,
+                        "amount": 2345.6,
                         "bond_prem": 22.5,
                         "bond_value": 89.0,
                     },
                     {
                         "ts_code": "110002.SH",
+                        "trade_date": trade_date,
+                        "pre_close": 98.0 if trade_date == "20240129" else 97.5,
                         "close": 98.0 if trade_date == "20240129" else 97.5,
+                        "pct_chg": -0.51,
+                        "amount": 1234.5,
                         "bond_prem": 18.5,
                         "bond_value": 86.0,
                     },
@@ -80,6 +102,7 @@ class _FakeTushareClientSuccess:
                     {
                         "ts_code": code,
                         "trade_date": trade_date,
+                        "close": 101.0 + idx,
                         "pct_chg": 1.2 + idx,
                     }
                 )
@@ -100,7 +123,22 @@ class _FakeTushareClientSuccess:
                 )
             return pd.DataFrame(rows)
 
-        if api_name in {"cb_issue", "cb_call", "cb_price_chg", "cb_share", "cb_rate"}:
+        if api_name == "cb_call":
+            return pd.DataFrame(
+                [
+                    {
+                        "ts_code": "110001.SH",
+                        "ann_date": "20240129",
+                        "call_type": "强赎",
+                        "is_call": "公告提示强赎",
+                        "call_reg_date": "20240202",
+                        "call_date": "20240205",
+                        "payment_date": "20240206",
+                    }
+                ]
+            )
+
+        if api_name in {"cb_issue", "cb_price_chg", "cb_share", "cb_rate"}:
             return pd.DataFrame(
                 [
                     {
@@ -166,6 +204,13 @@ class TestCbTushareServiceSyncRangeSuccess:
         assert latest_log is not None
         assert latest_log.status == "ok"
         assert latest_log.trade_days == 2
+
+        dataset = isolated_service._history_store.load_market_dataset()
+        frames = {trade_date: frame for trade_date, frame in dataset}
+        first_day = frames["2024-01-29"]
+        assert int(first_day.loc["110001", "redeem_remain_days"]) == 4
+        assert first_day.loc["110001", "is_call"] == "公告提示强赎"
+        assert first_day.loc["110001", "is_ransom_flag"] == "False"
 
 
 class TestCbTushareServiceSyncRangeFailure:
@@ -283,6 +328,32 @@ class TestCbTusharePriceCleaning:
         assert factor_rows[0]["price"] == 88.8
         assert factor_rows[0]["price_fill_source"] == "prev_valid"
         assert cache["110001"] == 88.8
+
+
+class TestCbTushareMarketRows:
+    def test_load_latest_market_rows_should_use_latest_trade_day_and_convert_units(
+        self,
+        isolated_service: CbTushareService,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(cb_tushare_module, "_TushareClient", _FakeTushareClientSuccess)
+        monkeypatch.setattr(CbTushareService, "_load_token", staticmethod(lambda: "unit-token"))
+        monkeypatch.setattr(CbTushareService, "_load_http_url", staticmethod(lambda: "http://unit.test"))
+
+        rows, source = isolated_service.load_latest_market_rows(min_volume_wan=0)
+
+        assert source == "tushare.pro(2024-01-30)"
+        assert len(rows) == 2
+        assert rows[0].bond_id == "110001"
+        assert rows[0].bond_name == "CB-ONE"
+        assert rows[0].price == 102.0
+        assert rows[0].amount_wan == 2345.6
+        assert rows[0].stock_id == "sh600000"
+        assert rows[0].stock_name == "STK-ONE"
+        assert rows[0].convert_price == 10.0
+        assert rows[0].convert_value == 1010.0
+        assert rows[0].premium_rt == -89.9
+        assert rows[0].source == "tushare.pro"
 
 
 def _load_live_token_and_url() -> tuple[str | None, str]:
