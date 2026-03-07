@@ -208,8 +208,7 @@ class CbMarketService:
         """
         try:
             adapter = CrawlerPhaseABacktestAdapter()
-            module = adapter._load_module()
-            dataset = module.load_market_data(adapter.data_dir)
+            dataset = adapter.load_market_data()
             if not dataset:
                 return [], None
 

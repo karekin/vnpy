@@ -11,33 +11,17 @@ from vnpy.web.api.router import api_router
 from vnpy.web.services import cb_history_service
 from vnpy.web.ws.router import ws_router
 
-
-def _legacy_history_sync_enabled() -> bool:
-    value = os.getenv("CB_LEGACY_HISTORY_SYNC", "0").strip().lower()
-    return value in {"1", "true", "yes", "on"}
-
-
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
-    if not _legacy_history_sync_enabled():
-        # Default to tushare-only data pipeline to avoid mixed sources.
-        yield
-        return
-
-    def _bootstrap_and_sync() -> None:
-        try:
-            cb_history_service.bootstrap_from_crawler_snapshots()
-        except Exception:
-            # Bootstrap is best-effort; runtime sync still works.
-            pass
-
+    def _sync_on_startup() -> None:
         try:
             cb_history_service.sync_today_from_market(mode="startup")
         except Exception:
             # Network/source failures should not block API startup.
             pass
 
-    Thread(target=_bootstrap_and_sync, name="cb-history-bootstrap", daemon=True).start()
+    # 启动时只做一次当日行情快照同步，不再保留任何 legacy Excel bootstrap 逻辑。
+    Thread(target=_sync_on_startup, name="cb-history-startup-sync", daemon=True).start()
 
     cb_history_service.start_scheduler()
     try:

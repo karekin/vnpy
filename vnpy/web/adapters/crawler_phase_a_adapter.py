@@ -1,17 +1,23 @@
 from __future__ import annotations
 
-import importlib.util
-import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from types import ModuleType
 from typing import Any
 
 from vnpy.web.domain.cb_quant.history_store import CbHistoryStore
+from vnpy.web.domain.cb_quant import phase_a_core
 
 
 class CrawlerPhaseABacktestAdapter:
-    """Adapter to run real backtest logic from convertible-bond-crawler Phase A script."""
+    """Phase A 回测适配层。
+
+    历史上这里曾通过外部脚本动态加载 Phase A 能力；现在运行时核心已经迁入 `vnpy`，
+    这里保留适配层，
+    主要负责：
+    - 统一历史快照读取入口
+    - 提供窗口切片能力
+    - 让上层服务不必感知底层策略内核的位置变化
+    """
 
     _FALLBACK_SETTING: dict[str, Any] = {
         "price_bemchmark": 115.0,
@@ -28,9 +34,7 @@ class CrawlerPhaseABacktestAdapter:
 
     def __init__(self, data_dir: Path | None = None) -> None:
         project_root: Path = Path(__file__).resolve().parents[3]
-        self.script_path: Path = project_root / "convertible-bond-crawler" / "scripts" / "phase_a_optimize.py"
-        self.data_dir: Path = data_dir or (project_root / "convertible-bond-crawler" / "out")
-        self._module: ModuleType | None = None
+        self.data_dir: Path = data_dir or (project_root / "out" / "cb_quant")
         self._history_store: CbHistoryStore = CbHistoryStore(self.data_dir / "_cb_quant" / "cb_snapshots.db")
 
     def run_backtest(
@@ -92,6 +96,11 @@ class CrawlerPhaseABacktestAdapter:
         return stats
 
     def load_market_data(self) -> list[tuple[str, Any]]:
+        """优先从 cb_snapshots.db 加载历史快照。
+
+        这里不再把 crawler 目录里的 Excel 作为运行时主数据源；
+        如果快照库为空，就返回空数据集，由上层决定是否提示同步或做 bootstrap。
+        """
         dataset = self._history_store.load_market_dataset()
         if dataset:
             module = self._load_module()
@@ -103,8 +112,7 @@ class CrawlerPhaseABacktestAdapter:
                 else:
                     normalized.append((trade_date, frame))
             return normalized
-        module = self._load_module()
-        return module.load_market_data(self.data_dir)
+        return []
 
     def default_setting(self) -> dict[str, Any]:
         try:
@@ -125,22 +133,9 @@ class CrawlerPhaseABacktestAdapter:
         except Exception:
             return dict(self._FALLBACK_SETTING)
 
-    def _load_module(self) -> ModuleType:
-        if self._module:
-            return self._module
-
-        if not self.script_path.exists():
-            raise FileNotFoundError(f"crawler phase-a script not found: {self.script_path}")
-
-        spec = importlib.util.spec_from_file_location("cb_phase_a_optimize", str(self.script_path))
-        if spec is None or spec.loader is None:
-            raise RuntimeError(f"unable to load module spec from {self.script_path}")
-
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
-        self._module = module
-        return module
+    def _load_module(self):
+        """返回已融合进 `vnpy` 的 Phase A 核心模块。"""
+        return phase_a_core
 
     @staticmethod
     def _slice_dataset(

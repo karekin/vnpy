@@ -366,7 +366,7 @@ npm run dev
 生产建议使用“多源采集 + 统一落库”的方式，避免单源中断：
 
 * Eastmoney（当前已接入）：实时可转债主表、正股补充字段
-* `convertible-bond-crawler`：本地历史快照回填与兜底
+* `cb_snapshots.db` / `cb_tushare.db`：统一历史数据底座与回测快照来源
 * AKShare（可选补充源）：用于历史数据校验与字段补齐
 * efinance（可选补充源）：东财系接口的另一套封装，便于双通道容灾
 

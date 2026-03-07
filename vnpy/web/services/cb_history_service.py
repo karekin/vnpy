@@ -108,39 +108,24 @@ class CbHistoryService:
         return self._store.latest_sync_log()
 
     def bootstrap_from_crawler_snapshots(self) -> int:
-        """当数据库为空时，从本地 crawler 历史文件一次性导入。
+        """保留兼容方法名，但不再从 Excel 导入历史数据。
 
-        这个导入只在“冷启动/首次部署”时有价值，避免每次启动都重复扫本地文件。
+        历史数据主路径已经统一到 `cb_snapshots.db` / `CbTushareService`。
+        若数据库为空，这里不再尝试从旧的 Excel 快照补数。
         """
-        # One-time import from local crawler historical snapshots when DB is empty.
         summary = self._store.get_summary()
         if summary.snapshot_count > 0:
             return 0
 
-        module = self._adapter._load_module()
-        dataset = module.load_market_data(self._adapter.data_dir)
-        inserted_dates = 0
-        for trade_date, frame in sorted(dataset, key=lambda item: item[0]):
-            if frame.empty:
-                continue
-            rows = self._frame_to_rows(frame)
-            upserted = self._store.upsert_snapshot_rows(
-                trade_date=trade_date,
-                source="crawler.xlsx",
-                rows=rows,
-            )
-            if upserted > 0:
-                inserted_dates += 1
-
         self._store.append_sync_log(
             mode="bootstrap",
-            source="crawler.xlsx",
+            source="deprecated",
             trade_date=datetime.now().strftime("%Y-%m-%d"),
-            upserted=inserted_dates,
+            upserted=0,
             status="ok",
-            message=f"bootstrap imported {inserted_dates} trade dates from local crawler snapshots",
+            message="bootstrap from legacy excel snapshots has been removed; please sync via tushare or market services",
         )
-        return inserted_dates
+        return 0
 
     def sync_today_from_market(self, *, mode: str = "manual") -> int:
         """从实时行情服务抓取当日行情并写入回测快照库。"""

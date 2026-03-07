@@ -2250,157 +2250,18 @@ class CbQuantService:
     ) -> dict[str, Any]:
         """基于“已生成的候选池”执行轻量回测。
 
-        这是优化阶段使用的快路径：
-        - 输入是每天已经排好序的候选代码
-        - 输出只保留优化排序需要的关键指标
-        - 不生成净值曲线和轮动明细
+        这是优化阶段使用的快路径。
+
+        过去这里单独维护了一套轻量回测状态机，导致它和 `phase_a_core.run_backtest(...)`
+        长期存在“逻辑非常相似、但又不是同一份代码”的问题。现在优化链路也直接
+        委托给 `phase_a_core.run_backtest_from_candidates(...)`，把持仓轮动、调仓频率、
+        强赎、止盈止损、`until_win` 等规则统一到同一套核心实现上。
         """
-        holdings: list[dict[str, Any]] = []
-        max_hold_num = max(1, int(round(self._to_float(setting.get("max_hold_num"), 12.0))))
-        until_win = bool(setting.get("until_win", False))
-        per_position = self._position_ratio(setting=setting, max_hold_num=max_hold_num)
-        daily_returns: list[float] = []
-        sell_win = 0
-        sell_loss = 0
-        rebalanced_days = 0
-        last_rebalance_date: str | None = None
-        last_rebalance_index = 0
-
-        for index, (trade_date, frame) in enumerate(dataset):
-            ranked_codes = [code for code in candidate_code_map.get(trade_date, []) if code in frame.index]
-            ranked_set = set(ranked_codes)
-            rebalance_due = self._should_rebalance(
-                index=index,
-                trade_date=trade_date,
-                last_rebalance_date=last_rebalance_date,
-                last_rebalance_index=last_rebalance_index,
-                setting=setting,
-            )
-
-            if index == 0:
-                for code in ranked_codes:
-                    if len(holdings) >= max_hold_num:
-                        break
-                    row = frame.loc[code]
-                    price = self._to_float(row.get("price"), 0.0)
-                    if price <= 0:
-                        continue
-                    holdings.append(
-                        {
-                            "code": code,
-                            "buy_price": price,
-                            "last_price": price,
-                            "ratio": per_position,
-                        }
-                    )
-                last_rebalance_date = trade_date
-                continue
-
-            daily_ret = 0.0
-            for item in holdings:
-                code = str(item.get("code", ""))
-                if code not in frame.index:
-                    continue
-                row = frame.loc[code]
-                cur_price = self._to_float(row.get("price"), self._to_float(item.get("last_price"), 0.0))
-                last_price = self._to_float(item.get("last_price"), cur_price)
-                if last_price > 0:
-                    daily_ret += ((cur_price - last_price) / last_price) * self._to_float(item.get("ratio"), 0.0)
-                item["last_price"] = cur_price
-            daily_returns.append(round(daily_ret, 6))
-
-            # 先判定卖出/留仓，再在调仓日用候选池补买缺口。
-            keep_list: list[dict[str, Any]] = []
-            sell_list: list[dict[str, Any]] = []
-            for item in holdings:
-                code = str(item.get("code", ""))
-                if code not in frame.index:
-                    sell_list.append(item)
-                    continue
-                row = frame.loc[code]
-                cur_price = self._to_float(row.get("price"), self._to_float(item.get("last_price"), 0.0))
-                is_ransom = str(row.get("is_ransom_flag", "False")) == "True"
-
-                if is_ransom:
-                    sell_list.append(item)
-                    continue
-                if self._should_exit_by_price_limits(setting=setting, item=item, current_price=cur_price):
-                    sell_list.append(item)
-                    continue
-                if until_win and cur_price <= self._to_float(item.get("buy_price"), cur_price):
-                    keep_list.append(item)
-                    continue
-                if not rebalance_due:
-                    keep_list.append(item)
-                    continue
-                if code in ranked_set:
-                    keep_list.append(item)
-                else:
-                    sell_list.append(item)
-
-            for item in sell_list:
-                code = str(item.get("code", ""))
-                if code in frame.index:
-                    row = frame.loc[code]
-                    sell_price = self._to_float(row.get("price"), self._to_float(item.get("last_price"), 0.0))
-                else:
-                    sell_price = self._to_float(item.get("last_price"), 0.0)
-                buy_price = self._to_float(item.get("buy_price"), sell_price)
-                pnl_pct = (sell_price - buy_price) / buy_price * 100.0 if buy_price > 0 else 0.0
-                if pnl_pct > 0:
-                    sell_win += 1
-                else:
-                    sell_loss += 1
-
-            existing_codes = {str(item.get("code", "")) for item in keep_list}
-            if rebalance_due:
-                for code in ranked_codes:
-                    if len(keep_list) >= max_hold_num:
-                        break
-                    if code in existing_codes:
-                        continue
-                    row = frame.loc[code]
-                    price = self._to_float(row.get("price"), 0.0)
-                    if price <= 0:
-                        continue
-                    keep_list.append(
-                        {
-                            "code": code,
-                            "buy_price": price,
-                            "last_price": price,
-                            "ratio": per_position,
-                        }
-                    )
-                    existing_codes.add(code)
-
-            holdings = keep_list
-            if rebalance_due:
-                rebalanced_days += 1
-                last_rebalance_date = trade_date
-                last_rebalance_index = index
-
-        equity = 1.0
-        max_equity = 1.0
-        max_drawdown = 0.0
-        for daily_ret in daily_returns:
-            equity *= 1.0 + daily_ret
-            max_equity = max(max_equity, equity)
-            drawdown = equity / max_equity - 1.0
-            max_drawdown = min(max_drawdown, drawdown)
-
-        total_return_pct = (equity - 1.0) * 100.0
-        max_drawdown_pct = abs(max_drawdown) * 100.0
-        trade_count = sell_win + sell_loss
-        win_rate_pct = (sell_win / trade_count * 100.0) if trade_count > 0 else 0.0
-
-        return {
-            "total_return_pct": round(total_return_pct, 4),
-            "max_drawdown_pct": round(max_drawdown_pct, 4),
-            "trade_count": int(trade_count),
-            "win_rate_pct": round(win_rate_pct, 4),
-            "sample_days": len(dataset),
-            "rebalanced_days": rebalanced_days,
-        }
+        return self._adapter._load_module().run_backtest_from_candidates(
+            dataset=dataset,
+            candidate_code_map=candidate_code_map,
+            setting=setting,
+        )
 
     def _evaluate_combo(
         self,

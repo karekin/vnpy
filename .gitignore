@@ -52,3 +52,6 @@ _templates
 # Alpha
 lab/
 /.mypy_cache
+
+# CB Quant local databases
+out/cb_quant/_cb_quant/*.db
