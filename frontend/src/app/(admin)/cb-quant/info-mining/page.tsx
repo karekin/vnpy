@@ -520,7 +520,7 @@ export default function CbQuantInfoMiningPage() {
         row.low.toFixed(2),
         row.pe.toFixed(2),
         row.pb.toFixed(2),
-        `easyquotation.${row.source}.real()`,
+        `实时行情源(${row.source})`,
         row.updateTime,
       ]);
     } else if (activeTab === "bond") {
@@ -847,7 +847,7 @@ export default function CbQuantInfoMiningPage() {
                     <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{row.bid1.toFixed(2)} / {row.ask1.toFixed(2)}</TableCell>
                     <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{row.high.toFixed(2)} / {row.low.toFixed(2)}</TableCell>
                     <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">{row.pe.toFixed(2)} / {row.pb.toFixed(2)}</TableCell>
-                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">easyquotation.{row.source}.real()</TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap dark:text-gray-200">实时行情源({row.source})</TableCell>
                     <TableCell className="px-4 py-3 text-sm text-gray-500 whitespace-nowrap dark:text-gray-400">{row.updateTime}</TableCell>
                   </TableRow>
                 ))}
