@@ -674,20 +674,56 @@ class CbQuantService:
     ) -> StrategyOptimizeTaskCreateResponse | None:
         """创建参数优化任务并提交到线程池。
 
-        注意这里“创建成功”仅表示任务已入队，不代表优化已经开始执行或执行成功。
+        这个方法本身只负责“准备任务”，不负责真正执行优化计算。
+
+        它做的事情主要有四步：
+        1. 根据 template_id 找到模板和参数空间配置
+        2. 计算这次任务理论上需要评估多少个参数组合
+        3. 生成一条 queued 状态的任务记录并持久化
+        4. 把真正的执行入口 `_run_optimize_task(...)` 提交给线程池
+
+        真正的计算链路在这里：
+        - `create_optimize_task(...)`
+        - `_run_optimize_task(...)`
+        - `_iter_combo_results_parallel(...)`
+        - `_evaluate_combo(...)`
+        - `_run_backtest_from_candidate_map(...)`
+
+        这条链路里几个最容易问到的问题是：
+        - 历史数据在哪查：
+          `_run_optimize_task` 里通过 `self._adapter.load_market_data()` 读取，
+          adapter 优先从 `CbHistoryStore.load_market_dataset()` 的本地快照库读取，
+          读不到时才回退到 crawler 脚本的 `load_market_data(...)`
+        - 配置在哪读：
+          这里的 `config = self._template_configs.get(template.id)` 读取模板配置，
+          里面包含 factor_keys 和 parameter_space，决定参数组合总数；
+          任务级临时配置来自 `request.task_config`
+        - 历史数据在哪加工成结果：
+          `_prepare_window_dataset_map(...)` 先按窗口切历史切片，
+          `_evaluate_combo(...)` 对单个组合构造候选池并按窗口回测，
+          `_run_backtest_from_candidate_map(...)` 把日级快照回放成收益、回撤、胜率等结果
+
+        所以“创建成功”只表示任务已入队，不代表优化已经开始执行或执行成功。
         """
         template = self._find_template(request.template_id)
         if not template:
             return None
 
+        # 模板配置来自内存态/持久化恢复的 `_template_configs`。
+        # 这里决定了这次优化能枚举出哪些参数组合，是“参数空间”的源头。
         config = self._template_configs.get(template.id) or self._default_config(
             template_id=template.id,
             updated_at=template.updated_at,
         )
+
+        # windows 只是回测窗口定义，不在这里切数据；真正切片在 `_run_optimize_task`
+        # -> `_prepare_window_dataset_map` -> `adapter._slice_dataset(...)`。
         windows = self._normalize_windows(request.windows)
         if not windows:
             windows = ["full", "3y", "1y"]
 
+        # 根据模板里的 factor_keys / parameter_space 计算组合总数。
+        # 这一步还没有真正跑回测，只是在估算参数空间大小，用来创建任务和控制上限。
         combo_size = max(
             1,
             self._calculate_combo_size(
@@ -696,10 +732,15 @@ class CbQuantService:
             ),
         )
         capped_total = combo_size if request.max_combinations is None else min(combo_size, request.max_combinations)
+
+        # task_config 是“本次任务附加到策略 setting 上的运行时配置”，
+        # 比如仓位、调仓、止盈止损之类；真正生效在 `_evaluate_combo` 里通过
+        # `_apply_task_config_to_setting(...)` 写回 setting。
         task_config = self._normalize_task_config(request.task_config)
 
         with self._lock:
             # 先持久化一份 queued 状态，确保进程中途退出后仍能恢复任务记录。
+            # 到这里仍然没有开始计算，只是把“待执行任务”注册到内存和 SQLite。
             self._opt_task_seq += 1
             task_id = f"OPT-{_now_yyyymmdd()}-{self._opt_task_seq:04d}"
             task = StrategyOptimizeTaskRow(
@@ -726,6 +767,13 @@ class CbQuantService:
 
         submit_error: str | None = None
         try:
+            # 真正的优化计算从这里开始异步提交。
+            # 当前请求返回后，后台线程才会进入 `_run_optimize_task(...)`：
+            # 1. `self._adapter.load_market_data()` 读取历史快照
+            # 2. `_prepare_window_dataset_map(...)` 按 full/3y/1y/1w 等窗口切片
+            # 3. `_iter_combo_results_parallel(...)` 并行遍历参数组合
+            # 4. `_evaluate_combo(...)` 评估单个组合
+            # 5. `_run_backtest_from_candidate_map(...)` 产出收益/回撤/胜率等指标
             self._executor.submit(
                 self._run_optimize_task,
                 task_id,
@@ -737,6 +785,8 @@ class CbQuantService:
             )
         except Exception as exc:
             submit_error = str(exc)[:120]
+            # 只有线程池提交失败，才会在这里直接把任务标成 failed。
+            # 如果是后续执行时失败，会在 `_run_optimize_task` 里更新状态。
             self._update_optimize_task(
                 task_id,
                 status="failed",
