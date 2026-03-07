@@ -1,3 +1,14 @@
+"""CB Quant 的 Tushare 同步与市场拼装服务。
+
+本模块承担两类工作：
+
+1. 把 Tushare 的原始表同步到本地 ODS/因子表/快照表
+2. 把多张 Tushare 表临时拼成前端可直接消费的市场列表
+
+难点不在“请求接口”，而在于把 Tushare 字段整形成项目历史上一直使用的
+crawler 兼容格式，保证老回测逻辑无需大改也能继续工作。
+"""
+
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
@@ -15,6 +26,7 @@ from vnpy.web.schemas import BondMarketRow
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
+    """把外部字段尽量稳妥转成 float。"""
     try:
         if value is None:
             return default
@@ -24,6 +36,7 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 
 
 def _to_ymd(value: str | date | None) -> str:
+    """把各种日期输入统一成 YYYY-MM-DD。"""
     if value is None:
         return date.today().isoformat()
     if isinstance(value, date):
@@ -37,6 +50,7 @@ def _to_ymd(value: str | date | None) -> str:
 
 
 def _ts_code_to_code6(ts_code: str) -> str:
+    """从 Tushare ts_code 提取 6 位证券代码。"""
     text = str(ts_code or "").strip()
     if not text:
         return ""
@@ -46,6 +60,7 @@ def _ts_code_to_code6(ts_code: str) -> str:
 
 
 def _to_stock_ts_code(stk_code: str, *, bond_ts_code: str) -> str:
+    """把正股代码补成标准 ts_code。"""
     raw = str(stk_code or "").strip()
     if not raw:
         return ""
@@ -59,6 +74,7 @@ def _to_stock_ts_code(stk_code: str, *, bond_ts_code: str) -> str:
 
 
 def _pick(row: dict[str, Any], *keys: str, default: Any = None) -> Any:
+    """按候选字段顺序取第一个非空值。"""
     for key in keys:
         if key in row and row[key] is not None:
             return row[key]
@@ -66,12 +82,20 @@ def _pick(row: dict[str, Any], *keys: str, default: Any = None) -> Any:
 
 
 class _TushareClient:
+    """对 tushare pro 做一层轻量包装。
+
+    目标有两个：
+    1. 首次使用时延迟初始化
+    2. 对常见临时错误做有限次重试
+    """
+
     def __init__(self, token: str, *, http_url: str) -> None:
         self._token = token
         self._http_url = http_url
         self._pro: Any = None
 
     def _ensure(self) -> Any:
+        """按需初始化 tushare `pro_api` 客户端。"""
         if self._pro is not None:
             return self._pro
         try:
@@ -87,6 +111,7 @@ class _TushareClient:
         return self._pro
 
     def query(self, api_name: str, **params: Any) -> pd.DataFrame:
+        """统一执行 Tushare 查询，并在可重试错误上做退避重试。"""
         pro = self._ensure()
         last_exc: Exception | None = None
         for attempt in range(4):
@@ -111,6 +136,7 @@ class _TushareClient:
 
     @staticmethod
     def _retryable_message(message: str) -> bool:
+        """判断错误是否值得重试。"""
         text = str(message or "").lower()
         patterns = (
             "服务器内部错误",
@@ -127,9 +153,15 @@ class _TushareClient:
 
 
 class CbTushareService:
-    """Sync tushare pro data and shape to crawler-compatible backtest snapshots."""
+    """Tushare 同步服务。
+
+    这层是项目里“新数据管线”的核心：
+    - `sync_range/sync_incremental` 负责落 ODS 与快照
+    - `load_latest_market_rows` 负责从 Tushare 或本地缓存拼出当前市场截面
+    """
 
     def __init__(self) -> None:
+        """初始化 Tushare 库和回测快照库。"""
         adapter = CrawlerPhaseABacktestAdapter()
         storage_dir: Path = adapter.data_dir / "_cb_quant"
         self._store = CbTushareStore(storage_dir / "cb_tushare.db")
@@ -137,12 +169,15 @@ class CbTushareService:
 
     @property
     def store(self) -> CbTushareStore:
+        """暴露底层 store，供外部少量只读场景复用。"""
         return self._store
 
     def get_summary(self) -> TushareStoreSummary:
+        """返回 Tushare 本地库的数据覆盖范围。"""
         return self._store.get_summary()
 
     def latest_sync_log(self) -> TushareSyncLog | None:
+        """返回最近一次同步日志。"""
         return self._store.latest_sync_log()
 
     def load_latest_market_rows(
@@ -151,6 +186,11 @@ class CbTushareService:
         min_volume_wan: float = 0.0,
         as_of: date | None = None,
     ) -> tuple[list[BondMarketRow], str]:
+        """获取最新市场截面。
+
+        优先实时查询 Tushare；若失败则回退本地已同步数据。这样市场页在弱网或
+        token/接口波动时仍有机会展示最近一次可用数据。
+        """
         target_day = as_of or date.today()
         token = self._load_token()
         resolved_http_url = str(self._load_http_url()).strip()
@@ -189,6 +229,15 @@ class CbTushareService:
         http_url: str | None = None,
         sync_events: bool = True,
     ) -> dict[str, Any]:
+        """按日期区间执行一次全量同步。
+
+        同步顺序大致是：
+        1. 交易日历
+        2. 转债基础表
+        3. 可选事件表（强赎、转股价调整等）
+        4. 每个交易日的转债日线、正股日线/估值
+        5. 生成因子表与 crawler 兼容快照表
+        """
         token = self._load_token()
         resolved_http_url = str(http_url or self._load_http_url()).strip()
         client = _TushareClient(token, http_url=resolved_http_url)
@@ -243,6 +292,7 @@ class CbTushareService:
                 trade_day_count += 1
                 td_8 = trade_day.replace("-", "")
                 try:
+                    # 先拿转债日线，再根据转债基础表反查正股代码，最后拼装快照。
                     cb_daily_df = client.query("cb_daily", trade_date=td_8)
                     cb_daily_rows = self._rows(cb_daily_df)
                     if not cb_daily_rows:
@@ -349,6 +399,11 @@ class CbTushareService:
         mode: str = "manual",
         max_trade_days: int = 90,
     ) -> dict[str, Any]:
+        """按“最近未同步区间”做增量同步。
+
+        这个入口适合日常刷新：会自动从快照库最后一天往后补，不要求调用方
+        自己维护起止日期。
+        """
         today = date.today()
         resolved_end = end_date or today
         resolved_start = start_date
@@ -474,6 +529,10 @@ class CbTushareService:
         start: date,
         end: date,
     ) -> int:
+        """同步事件类 ODS 表。
+
+        这些事件会在后续因子拼装时参与强赎风险、剩余赎回天数等字段计算。
+        """
         total = 0
         start_8 = start.strftime("%Y%m%d")
         end_8 = end.strftime("%Y%m%d")
@@ -498,6 +557,7 @@ class CbTushareService:
         trade_date: str,
         stock_ts_codes: list[str],
     ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+        """批量加载正股日线与估值，并转成 map 便于后续拼装。"""
         if not stock_ts_codes:
             return {}, {}
         td_8 = trade_date.replace("-", "")
@@ -524,6 +584,7 @@ class CbTushareService:
         as_of: date,
         min_volume_wan: float,
     ) -> tuple[list[BondMarketRow], str]:
+        """直接从 Tushare 在线查询最近可用交易日市场数据。"""
         cal_df = client.query(
             "trade_cal",
             exchange="SSE",
@@ -569,6 +630,7 @@ class CbTushareService:
         *,
         min_volume_wan: float,
     ) -> tuple[list[BondMarketRow], str | None]:
+        """从本地缓存的 ODS 表恢复最新市场截面。"""
         summary = self._store.get_summary()
         trade_date = summary.cb_date_end
         if not trade_date:
@@ -601,6 +663,11 @@ class CbTushareService:
         stock_basic_map: dict[str, dict[str, Any]],
         min_volume_wan: float,
     ) -> list[BondMarketRow]:
+        """把转债/正股/基础信息三类表拼成前端市场列表。
+
+        这是“市场页”使用的模型，不要求完全等同于回测快照字段；
+        但核心价格、溢价率、规模、正股信息必须保持一致口径。
+        """
         rows: list[BondMarketRow] = []
         trade_dt = datetime.strptime(trade_date, "%Y-%m-%d").date()
         for cb_row in cb_daily_rows:
@@ -702,12 +769,14 @@ class CbTushareService:
 
     @staticmethod
     def _normalize_bond_price(value: float) -> float:
+        """债价归一化入口，当前仅做非正值拦截。"""
         if value <= 0:
             return 0.0
         return value
 
     @staticmethod
     def _to_stock_display_id(stock_ts_code: str) -> str:
+        """把 Tushare ts_code 转成前端习惯展示的 `sh600000` 风格。"""
         text = str(stock_ts_code or "").strip()
         if not text:
             return ""
@@ -723,6 +792,7 @@ class CbTushareService:
         trade_date: str,
         ts_codes: list[str],
     ) -> dict[str, dict[str, Any]]:
+        """加载强赎事件，并按债券 ts_code 建立索引。"""
         rows = self._store.load_cb_event_rows(
             event_type="cb_call",
             ts_codes=ts_codes,
@@ -742,6 +812,12 @@ class CbTushareService:
         trade_date: str,
         row: dict[str, Any],
     ) -> dict[str, Any]:
+        """把 Tushare 的强赎事件文本解析成回测可用标记。
+
+        输出里最关键的是：
+        - `is_ransom_flag`: 是否视为高风险强赎
+        - `redeem_remain_days`: 若能算出，距离赎回还有多少天
+        """
         trade_dt = datetime.strptime(trade_date, "%Y-%m-%d").date()
         call_type = str(_pick(row, "call_type", default="")).strip()
         is_call = str(_pick(row, "is_call", default="")).strip()
@@ -779,6 +855,7 @@ class CbTushareService:
 
     @staticmethod
     def _is_listed_on_trade_date(*, basic: dict[str, Any], trade_date: date) -> bool:
+        """判断该债在指定交易日是否处于有效上市状态。"""
         list_date = str(_pick(basic, "list_date", default="")).strip()
         delist_date = str(_pick(basic, "delist_date", default="")).strip()
         remain_size = _safe_float(_pick(basic, "remain_size"), 0.0)
@@ -808,6 +885,11 @@ class CbTushareService:
         stock_basic_map: dict[str, dict[str, Any]],
         last_valid_price_map: dict[str, float] | None = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """把 Tushare 原始数据转换成：
+
+        1. 因子表行：供后续研究和扩展
+        2. 回测快照行：保持 crawler 兼容，供 phase_a / cb_quant 直接回放
+        """
         factor_rows: list[dict[str, Any]] = []
         snapshot_rows: list[dict[str, Any]] = []
         trade_dt = datetime.strptime(trade_date, "%Y-%m-%d").date()
@@ -834,6 +916,7 @@ class CbTushareService:
             if close_price <= 0 and pre_close_price <= 0:
                 missing_prev_codes.append(code6)
         if missing_prev_codes:
+            # 当日 close/pre_close 都缺失时，尝试回填最近有效价格，避免快照断裂。
             previous = self._store.load_latest_valid_prices(
                 before_trade_date=trade_date,
                 bond_ids=missing_prev_codes,
@@ -924,6 +1007,7 @@ class CbTushareService:
         pre_close_price: float,
         previous_valid_price: float | None,
     ) -> tuple[float, str]:
+        """确定用于快照/回测的最终价格及其来源。"""
         if close_price > 0:
             return close_price, "close"
         if pre_close_price > 0:
@@ -934,6 +1018,7 @@ class CbTushareService:
 
     @staticmethod
     def _derive_maturity_fields(*, trade_dt: date, maturity_text: str) -> tuple[float | None, str, str]:
+        """根据到期日生成剩余年限、到期距离文本和回售距离文本。"""
         if not maturity_text:
             return None, "0天", "未到"
         try:
@@ -953,6 +1038,7 @@ class CbTushareService:
         cb_daily_rows: list[dict[str, Any]],
         cb_basic_map: dict[str, dict[str, Any]],
     ) -> list[str]:
+        """从转债日线和基础表中收集关联正股 ts_code。"""
         results: list[str] = []
         seen: set[str] = set()
         for row in cb_daily_rows:
@@ -969,6 +1055,7 @@ class CbTushareService:
 
     @staticmethod
     def _rows(frame: pd.DataFrame) -> list[dict[str, Any]]:
+        """把 DataFrame 转成去掉 NaN 的 dict 列表。"""
         if frame is None or frame.empty:
             return []
         clean = frame.where(pd.notnull(frame), None)
@@ -981,6 +1068,7 @@ class CbTushareService:
         api_name: str,
         **params: Any,
     ) -> list[dict[str, Any]]:
+        """查询非关键表；失败时直接返回空，避免整次同步被非核心接口拖死。"""
         try:
             return CbTushareService._rows(client.query(api_name, **params))
         except Exception:
@@ -988,12 +1076,14 @@ class CbTushareService:
 
     @staticmethod
     def _chunk(values: list[str], size: int) -> list[list[str]]:
+        """按固定批次切分列表，避免单次请求过大。"""
         if size <= 0:
             return [values]
         return [values[idx : idx + size] for idx in range(0, len(values), size)]
 
     @staticmethod
     def _fallback_trade_days(start: date, end: date) -> list[str]:
+        """当交易日历接口不可用时，用工作日近似代替。"""
         days: list[str] = []
         cursor = start
         while cursor <= end:
@@ -1004,6 +1094,7 @@ class CbTushareService:
 
     @staticmethod
     def _load_token() -> str:
+        """按环境变量和本地配置文件顺序读取 Tushare token。"""
         from os import getenv
 
         local = CbTushareService._load_local_env_map()
@@ -1024,6 +1115,7 @@ class CbTushareService:
 
     @staticmethod
     def _load_http_url() -> str:
+        """读取 Tushare HTTP URL；本地配置优先于内置默认值。"""
         from os import getenv
 
         local = CbTushareService._load_local_env_map()
@@ -1037,6 +1129,7 @@ class CbTushareService:
 
     @staticmethod
     def _candidate_http_urls() -> list[str]:
+        """构造可轮询的 Tushare 端点列表，供增量同步失败切换。"""
         preferred = CbTushareService._load_http_url()
         candidates = [
             preferred,
@@ -1057,6 +1150,11 @@ class CbTushareService:
 
     @staticmethod
     def _load_local_env_map() -> dict[str, str]:
+        """读取项目根目录的 `.env.tushare.local`。
+
+        这里只做极简解析，不依赖 python-dotenv，目的是让服务端在部署和本地
+        调试时都能以尽量少的依赖读取敏感配置。
+        """
         # Optional local env file: project root /.env.tushare.local
         project_root = Path(__file__).resolve().parents[3]
         env_file = project_root / ".env.tushare.local"
@@ -1080,6 +1178,7 @@ class CbTushareService:
 
     @staticmethod
     def _auth_error_message(message: str) -> bool:
+        """判断异常是否属于 token/鉴权问题。"""
         text = str(message or "")
         if "无效的 token" in text:
             return True

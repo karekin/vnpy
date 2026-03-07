@@ -1,3 +1,15 @@
+"""CB Quant 实时行情服务。
+
+优先级设计如下：
+
+1. 先走 Tushare 最新市场数据
+2. Tushare 异常时，回退到本地最新快照
+3. 若显式允许，再回退到 mock 数据
+
+这样做的目的不是“行情一定实时”，而是尽可能保证页面和回测入口总能有一份
+可用的市场截面数据。
+"""
+
 from __future__ import annotations
 
 import os
@@ -19,6 +31,7 @@ EM_STOCK_BATCH_SIZE = 120
 
 
 def _to_float(value: object) -> float | None:
+    """把 Eastmoney/Tushare 混杂字段尽量转成 float。"""
     if value in (None, "-", ""):
         return None
     try:
@@ -28,6 +41,7 @@ def _to_float(value: object) -> float | None:
 
 
 def _safe_text(value: object) -> str | None:
+    """把空值、'-'、nan 等无效文本清洗掉。"""
     if value in (None, "", "-"):
         return None
     text = str(value).strip()
@@ -37,6 +51,7 @@ def _safe_text(value: object) -> str | None:
 
 
 def _to_code6(value: object) -> str:
+    """提取并补齐成 6 位证券代码。"""
     text = _safe_text(value) or ""
     if not text:
         return ""
@@ -47,6 +62,7 @@ def _to_code6(value: object) -> str:
 
 
 def _parse_year_text(value: object) -> float | None:
+    """解析诸如“2.35年”这类文本字段。"""
     text = _safe_text(value)
     if not text:
         return None
@@ -55,10 +71,12 @@ def _parse_year_text(value: object) -> float | None:
 
 
 def _now_time() -> str:
+    """统一生成页面展示用的 HH:MM:SS 时间戳。"""
     return datetime.now().strftime("%H:%M:%S")
 
 
 def _to_date8(value: object) -> str | None:
+    """把 YYYYMMDD 转成 YYYY-MM-DD。"""
     if value in (None, "-", ""):
         return None
     raw = str(value)
@@ -68,6 +86,7 @@ def _to_date8(value: object) -> str | None:
 
 
 def _to_date_str(value: object) -> str | None:
+    """截取任意日期文本前 10 位，统一成日期字符串。"""
     if value in (None, "-", ""):
         return None
     raw = str(value)
@@ -77,6 +96,7 @@ def _to_date_str(value: object) -> str | None:
 
 
 def _calc_remain_years(maturity_date: str | None) -> float | None:
+    """根据到期日估算剩余年限。"""
     if not maturity_date:
         return None
     try:
@@ -93,6 +113,7 @@ def _estimate_expiry_ytm(
     maturity_redeem_price: float | None,
     remain_years: float | None,
 ) -> float | None:
+    """按简化公式估算到期收益率。"""
     if not maturity_redeem_price or not remain_years:
         return None
     if price <= 0 or remain_years <= 0:
@@ -104,13 +125,19 @@ def _estimate_expiry_ytm(
 
 
 def _chunks(values: list[str], size: int) -> list[list[str]]:
+    """按固定大小分块，便于分批请求外部接口。"""
     return [values[idx : idx + size] for idx in range(0, len(values), size)]
 
 
 class CbMarketService:
-    """Convertible-bond market data service with Tushare primary source."""
+    """可转债市场截面服务。
+
+    对外统一返回 `BondMarketRow` 列表；内部可根据数据源状况自动降级。
+    回测详情页、市场榜单和历史同步入口都依赖这个服务拿到“当前市场全貌”。
+    """
 
     def __init__(self) -> None:
+        """初始化 HTTP session 和 Tushare 服务。"""
         self._session = requests.Session()
         # In many desktop/dev environments HTTP(S)_PROXY points to an unavailable local proxy.
         # Disable implicit proxy usage by default; can be re-enabled via env when needed.
@@ -118,9 +145,15 @@ class CbMarketService:
         self._tushare_service = CbTushareService()
 
     def _http_get(self, url: str, *, params: dict[str, str]) -> requests.Response:
+        """统一封装 GET 请求，便于后续做超时和代理策略控制。"""
         return self._session.get(url, params=params, timeout=EM_TIMEOUT)
 
     def list_bonds(self, min_volume_wan: float = 0.0) -> BondMarketResponse:
+        """返回当前市场可转债列表。
+
+        主路径走 Tushare；失败后优先回退本地快照，这样即使外部接口不稳定，
+        前端仍可展示最近一次可用的市场结果。
+        """
         snapshot_time = _now_time()
         allow_fallback = os.getenv("VNPY_CB_ALLOW_FALLBACK_MOCK", "0") == "1"
 
@@ -168,6 +201,11 @@ class CbMarketService:
         snapshot_time: str,
         min_volume_wan: float,
     ) -> tuple[list[BondMarketRow], str | None]:
+        """从本地最近一日快照恢复市场列表。
+
+        这是 Tushare 不可用时的第一层降级路径，字段来源不完全实时，但格式和
+        回测兼容，适合兜底展示与验证。
+        """
         try:
             adapter = CrawlerPhaseABacktestAdapter()
             module = adapter._load_module()
@@ -241,6 +279,7 @@ class CbMarketService:
             return [], None
 
     def _fetch_realtime_rows(self) -> list[dict]:
+        """从 Eastmoney 拉取可转债主表原始行，并自动翻页拿全量。"""
         params = {
             "pn": "1",
             "pz": str(EM_PAGE_SIZE),
@@ -279,6 +318,7 @@ class CbMarketService:
         return rows
 
     def _fetch_rating_map(self) -> dict[str, dict]:
+        """拉取评级、发行规模、上市日期等补充元数据。"""
         params = {
             "reportName": "RPT_BOND_CB_LIST",
             "columns": "SECURITY_CODE,RATING,ACTUAL_ISSUE_SCALE,EXPIRE_DATE,LISTING_DATE,TRANSFER_START_DATE,PUBLIC_START_DATE",
@@ -310,6 +350,7 @@ class CbMarketService:
         }
 
     def _fetch_stock_metrics_map(self, raw_rows: list[dict]) -> dict[str, dict]:
+        """批量拉取正股行情与估值数据。"""
         secids: list[str] = []
         for row in raw_rows:
             market = row.get("f233")
@@ -348,6 +389,7 @@ class CbMarketService:
         snapshot_time: str,
         min_volume_wan: float,
     ) -> list[BondMarketRow]:
+        """把 Eastmoney 原始字段整理成统一的 `BondMarketRow`。"""
         items: list[BondMarketRow] = []
         for row in raw_rows:
             price = _to_float(row.get("f2"))
@@ -431,6 +473,7 @@ class CbMarketService:
 
     @staticmethod
     def _fallback_rows(snapshot_time: str) -> list[BondMarketRow]:
+        """在显式允许 mock 回退时，构造最小可用样例数据。"""
         return [
             BondMarketRow(
                 bond_id="113063",

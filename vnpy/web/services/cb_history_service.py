@@ -1,3 +1,12 @@
+"""CB Quant 历史快照服务。
+
+这个模块的职责是维护“可用于回测的日级快照库”：
+
+1. 第一次启动时，可从 crawler 产出的本地历史快照导入
+2. 运行过程中，可从实时行情服务拉取当日行情并落库
+3. 提供摘要、日志和调度能力，供 API 与回测服务复用
+"""
+
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -13,6 +22,7 @@ from vnpy.web.domain.cb_quant.history_store import CbHistoryStore, HistoryStoreS
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
+    """把各种外部来源字段稳妥地转成 float。"""
     try:
         if value is None:
             return default
@@ -22,6 +32,7 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 
 
 def _to_code6(value: Any) -> str:
+    """把债券/股票代码统一归一成 6 位数字字符串。"""
     text = str(value or "").strip()
     digits = "".join(ch for ch in text if ch.isdigit())
     if not digits:
@@ -30,6 +41,7 @@ def _to_code6(value: Any) -> str:
 
 
 def _normalize_yn(value: Any, default: str = "N") -> str:
+    """把 Y/N 风格字段标准化，兼容 bool 和多种文本写法。"""
     if value is None:
         return default
     if isinstance(value, bool):
@@ -45,6 +57,7 @@ def _normalize_yn(value: Any, default: str = "N") -> str:
 
 
 def _normalize_tf(value: Any, default: str = "False") -> str:
+    """把 True/False 风格字段标准化，兼容 bool 和多种文本写法。"""
     if value is None:
         return default
     if isinstance(value, bool):
@@ -61,9 +74,14 @@ def _normalize_tf(value: Any, default: str = "False") -> str:
 
 
 class CbHistoryService:
-    """Persisted daily snapshot service for backtest history."""
+    """回测历史快照服务。
+
+    `CbQuantService` 本身不直接关心快照落库细节，而是通过本服务拿到
+    crawler 兼容格式的数据集。这样能把“数据同步”和“回测分析”分层。
+    """
 
     def __init__(self) -> None:
+        """初始化本地快照库、适配器和定时同步线程状态。"""
         adapter = CrawlerPhaseABacktestAdapter()
         storage_dir: Path = adapter.data_dir / "_cb_quant"
         self._store = CbHistoryStore(storage_dir / "cb_snapshots.db")
@@ -78,15 +96,22 @@ class CbHistoryService:
         return self._store
 
     def load_market_dataset(self) -> list[tuple[str, pd.DataFrame]]:
+        """返回按交易日组织的历史快照数据集。"""
         return self._store.load_market_dataset()
 
     def get_summary(self) -> HistoryStoreSummary:
+        """返回快照库摘要信息，供前端展示数据覆盖范围。"""
         return self._store.get_summary()
 
     def latest_sync_log(self) -> HistorySyncLog | None:
+        """返回最近一次同步日志。"""
         return self._store.latest_sync_log()
 
     def bootstrap_from_crawler_snapshots(self) -> int:
+        """当数据库为空时，从本地 crawler 历史文件一次性导入。
+
+        这个导入只在“冷启动/首次部署”时有价值，避免每次启动都重复扫本地文件。
+        """
         # One-time import from local crawler historical snapshots when DB is empty.
         summary = self._store.get_summary()
         if summary.snapshot_count > 0:
@@ -118,6 +143,7 @@ class CbHistoryService:
         return inserted_dates
 
     def sync_today_from_market(self, *, mode: str = "manual") -> int:
+        """从实时行情服务抓取当日行情并写入回测快照库。"""
         # Import is local to avoid cross-service circular imports.
         from vnpy.web.services.cb_market_service import CbMarketService
 
@@ -141,6 +167,7 @@ class CbHistoryService:
         return upserted
 
     def start_scheduler(self) -> None:
+        """启动后台定时同步线程；重复调用是幂等的。"""
         with self._start_lock:
             if self._sync_thread and self._sync_thread.is_alive():
                 return
@@ -153,12 +180,17 @@ class CbHistoryService:
             self._sync_thread.start()
 
     def stop_scheduler(self) -> None:
+        """停止后台同步线程。"""
         self._stop_event.set()
         thread = self._sync_thread
         if thread and thread.is_alive():
             thread.join(timeout=2)
 
     def _sync_loop(self) -> None:
+        """定时轮询任务主体。
+
+        同步失败不抛到线程外层，而是写入同步日志，避免把守护线程打死。
+        """
         while not self._stop_event.wait(timeout=self._poll_seconds):
             try:
                 self.sync_today_from_market(mode="scheduled")
@@ -174,6 +206,7 @@ class CbHistoryService:
 
     @staticmethod
     def _frame_to_rows(frame: pd.DataFrame) -> list[dict[str, Any]]:
+        """把 crawler/xlsx DataFrame 转成快照表可落库的行结构。"""
         rows: list[dict[str, Any]] = []
         for _, item in frame.iterrows():
             payload = item.to_dict()
@@ -190,6 +223,11 @@ class CbHistoryService:
 
     @staticmethod
     def _market_row_to_backtest_row(item: dict[str, Any], trade_date: str) -> dict[str, Any]:
+        """把实时行情 schema 映射成 crawler 兼容 schema。
+
+        phase_a 回测和老的过滤脚本都依赖一套历史字段命名，因此这里要把
+        实时行情模型转换成旧逻辑能直接消费的字段。
+        """
         # Map realtime quote schema to crawler-style row fields used by filter/backtest.
         price = _safe_float(item.get("price"))
         pure_bond_value = _safe_float(item.get("pure_bond_value"), 0.0)
@@ -265,6 +303,7 @@ class CbHistoryService:
 
     @staticmethod
     def _env_int(name: str, default: int) -> int:
+        """读取 int 环境变量，失败时回退默认值。"""
         text = os.getenv(name)
         if text is None:
             return default

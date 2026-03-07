@@ -1,3 +1,17 @@
+"""CB Quant 核心业务服务。
+
+这个模块是整个可转债量化 Web 端的“编排层”：
+
+1. 管理策略模板与参数空间
+2. 生成候选组合
+3. 创建/执行参数优化任务
+4. 创建/执行单次回测作业
+5. 汇总排行榜、对比面板和分析详情
+
+大部分复杂度都不在某个单一算法，而在于“状态如何流转”：
+模板 -> 候选 -> 优化任务/回测任务 -> 排行 -> 分析详情。
+"""
+
 from __future__ import annotations
 
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -60,6 +74,7 @@ T = TypeVar("T")
 
 
 def _paginate(items: list[T], page: int, page_size: int) -> list[T]:
+    """通用分页切片。"""
     safe_page = max(1, page)
     safe_size = max(1, page_size)
     start = (safe_page - 1) * safe_size
@@ -67,25 +82,36 @@ def _paginate(items: list[T], page: int, page_size: int) -> list[T]:
 
 
 def _now_hms() -> str:
+    """返回 HH:MM:SS，主要给任务运行态展示。"""
     return datetime.now().strftime("%H:%M:%S")
 
 
 def _now_yyyymmdd() -> str:
+    """返回 YYYYMMDD，主要用于生成任务编号。"""
     return datetime.now().strftime("%Y%m%d")
 
 
 def _now_readable() -> str:
+    """返回前端直接展示的时间文本。"""
     return datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
 def _now_compact() -> str:
+    """返回紧凑时间戳，用于 run_id 等非展示字段。"""
     return datetime.now().strftime("%Y%m%d%H%M")
 
 
 class CbQuantService:
-    """CB Quant service with SQLite-backed templates and backtest tasks."""
+    """CB Quant 主服务。
+
+    可以把它理解成一个“内存态 + SQLite 持久化”的任务编排器：
+    - 内存里维护当前模板、候选、任务、排行榜
+    - SQLite 负责在重启后恢复状态
+    - 线程池负责执行回测和参数优化
+    """
 
     def __init__(self) -> None:
+        """初始化全部运行态缓存，并从本地存储恢复历史状态。"""
         self._lock: Lock = Lock()
         self._executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="cbq-bt")
         self._adapter: CrawlerPhaseABacktestAdapter = CrawlerPhaseABacktestAdapter()
@@ -619,6 +645,7 @@ class CbQuantService:
 
     # ---------- optimize tasks ----------
     def get_history_data_summary(self) -> HistoryDataSummaryResponse:
+        """读取回测快照库摘要，供前端判断是否具备回测条件。"""
         try:
             dataset = self._adapter.load_market_data()
         except Exception:
@@ -645,6 +672,10 @@ class CbQuantService:
         self,
         request: StrategyOptimizeTaskCreateRequest,
     ) -> StrategyOptimizeTaskCreateResponse | None:
+        """创建参数优化任务并提交到线程池。
+
+        注意这里“创建成功”仅表示任务已入队，不代表优化已经开始执行或执行成功。
+        """
         template = self._find_template(request.template_id)
         if not template:
             return None
@@ -668,6 +699,7 @@ class CbQuantService:
         task_config = self._normalize_task_config(request.task_config)
 
         with self._lock:
+            # 先持久化一份 queued 状态，确保进程中途退出后仍能恢复任务记录。
             self._opt_task_seq += 1
             task_id = f"OPT-{_now_yyyymmdd()}-{self._opt_task_seq:04d}"
             task = StrategyOptimizeTaskRow(
@@ -772,6 +804,11 @@ class CbQuantService:
         combo_id: str | None = None,
         initial_capital_wan: float | None = None,
     ) -> StrategyOptimizeTaskAnalysisResponse | None:
+        """返回单个优化任务下某个组合的详细分析结果。
+
+        这条链路不会直接复用“优化阶段的粗粒度指标”，而是重新做一次详细模拟，
+        以产出净值曲线、轮动记录、年度/月度/周度收益分布等可视化数据。
+        """
         task = self._get_optimize_task(task_id)
         if not task:
             return None
@@ -782,6 +819,8 @@ class CbQuantService:
         if task_config.benchmark_name and task_config.benchmark_name != "转债等权":
             benchmark_name = f"{task_config.benchmark_name}（暂按转债等权测算）"
 
+        # 这里故意要求“任务必须 finished”才返回正式分析，
+        # 避免前端把中间结果误当成最终结论。
         # Keep analysis semantics strict: only finished task has official analysis output.
         if task.status != "finished":
             return StrategyOptimizeTaskAnalysisResponse(
@@ -1054,6 +1093,13 @@ class CbQuantService:
         end_date: date | None,
         task_config: BacktestTaskConfig,
     ) -> None:
+        """优化任务工作线程入口。
+
+        核心思路：
+        - 参数空间较大时，先做 stage1 粗筛，再做 stage2 精筛
+        - 参数空间较小时，直接全量遍历
+        - 全程不断刷新任务进度与阶段性结果，供前端轮询展示
+        """
         task = self._get_optimize_task(task_id)
         if not task:
             return
@@ -1106,6 +1152,7 @@ class CbQuantService:
         start_at = datetime.now()
 
         try:
+            # Stage1 的目标不是得到最终答案，而是用较短窗口快速淘汰大部分差组合。
             screening_enabled = self._should_enable_stage1_screening(total=total, windows=task.windows)
             stage1_window = self._pick_stage1_window(task.windows)
             stage1_windows: list[WindowName] = [stage1_window]
@@ -1124,6 +1171,8 @@ class CbQuantService:
                     sample_limit=stage1_sample_limit,
                 )
                 stage1_map = {stage1_window: window_dataset_map.get(stage1_window, [])}
+                # 阶段1只在一个较短窗口上跑抽样组合，目标是尽快得到“值得复评”的 shortlist。
+                # 这里保留 stage2_shortlist_limit 条最佳结果，避免把明显较差的组合带入完整回测。
                 for row in self._iter_combo_results_parallel(
                     module=module,
                     task_id=task_id,
@@ -1173,6 +1222,8 @@ class CbQuantService:
                         ),
                     )
 
+                # 阶段2对 shortlist 做全窗口复评。
+                # 到这一步才会使用用户真正选择的 window 集合，因此这里的结果才接近最终排行榜。
                 shortlist = sorted(
                     stage1_best_rows,
                     key=lambda item: (item.robust_score, item.cagr, -item.mdd),
@@ -1233,6 +1284,7 @@ class CbQuantService:
                             message=f"阶段2复评 {evaluated_secondary}/{stage2_total}",
                         )
             else:
+                # 参数空间不大时直接全量遍历，避免两阶段策略带来的额外复杂度和重复计算。
                 combo_iter = self._iter_template_settings(
                     template_id=task.template_id,
                     limit=task.total_combinations,
@@ -1447,6 +1499,11 @@ class CbQuantService:
         )
 
     def create_jobs(self, request: BacktestCreateJobsRequest) -> BacktestCreateJobsResponse:
+        """创建单次回测作业。
+
+        与优化任务不同，这里是“给定组合 + 给定窗口”的直接回测，
+        更适合验证某个候选组合或做规则包的单独回放。
+        """
         windows = self._normalize_windows(request.windows)
         if not windows:
             windows = ["full", "3y", "1y"]
@@ -1466,6 +1523,7 @@ class CbQuantService:
         rule_pack_id = request.rule_pack_id or self._build_rule_pack_id(request)
 
         with self._lock:
+            # 先把回测作业和上下文一并落库，保证后续线程真正执行前状态已可恢复。
             created: list[BacktestJobRow] = []
             setting = self._resolve_setting_for_combo(
                 combo_id=request.combo_id,
@@ -1552,6 +1610,7 @@ class CbQuantService:
         return cancelled_job
 
     def _run_job(self, job_id: str) -> None:
+        """单个回测作业的工作线程入口。"""
         context = self._job_context.get(job_id) or self._store.get_job_context(job_id)
         if not context:
             self._update_job(job_id, status="failed", eta="missing context")
@@ -1970,6 +2029,10 @@ class CbQuantService:
         cfg: dict[str, Any],
         head_count: int,
     ) -> dict[str, list[str]]:
+        """预先为每个交易日构建候选代码列表。
+
+        这样后续在多窗口评估时，不必重复执行同一轮候选筛选逻辑。
+        """
         candidate_code_map: dict[str, list[str]] = {}
         for trade_date, frame in dataset:
             try:
@@ -1994,6 +2057,13 @@ class CbQuantService:
         candidate_code_map: dict[str, list[str]],
         setting: dict[str, Any],
     ) -> dict[str, Any]:
+        """基于“已生成的候选池”执行轻量回测。
+
+        这是优化阶段使用的快路径：
+        - 输入是每天已经排好序的候选代码
+        - 输出只保留优化排序需要的关键指标
+        - 不生成净值曲线和轮动明细
+        """
         holdings: list[dict[str, Any]] = []
         max_hold_num = max(1, int(round(self._to_float(setting.get("max_hold_num"), 12.0))))
         until_win = bool(setting.get("until_win", False))
@@ -2048,6 +2118,7 @@ class CbQuantService:
                 item["last_price"] = cur_price
             daily_returns.append(round(daily_ret, 6))
 
+            # 先判定卖出/留仓，再在调仓日用候选池补买缺口。
             keep_list: list[dict[str, Any]] = []
             sell_list: list[dict[str, Any]] = []
             for item in holdings:
@@ -2156,6 +2227,7 @@ class CbQuantService:
         window_dataset_map: dict[WindowName, list[tuple[str, Any]]] | None = None,
         task_config: BacktestTaskConfig,
     ) -> StrategyOptimizeResultRow:
+        """评估单个参数组合在多个窗口下的综合表现。"""
         setting = self._apply_task_config_to_setting(setting, task_config)
         head_count = max(1, int(round(self._to_float(setting.get("head_count"), 10.0))))
         max_hold_num = max(1, int(round(self._to_float(setting.get("max_hold_num"), 12.0))))
@@ -2169,6 +2241,7 @@ class CbQuantService:
                     base_dataset = candidate_dataset
         if not base_dataset:
             base_dataset = dataset
+        # 候选池基于“可用范围最大的一份数据集”预计算一次，避免多窗口重复生成。
         candidate_code_map = self._build_candidate_code_map(
             module=module,
             dataset=base_dataset,
@@ -2416,6 +2489,14 @@ class CbQuantService:
         setting: dict[str, Any],
         initial_capital_wan: float,
     ) -> dict[str, Any]:
+        """执行带明细输出的详细策略回放。
+
+        相比 `_run_backtest_from_candidate_map`，这里会额外保留：
+        - 每日净值
+        - 每日回撤
+        - 每日换手
+        - 每次轮动后的持仓快照
+        """
         cfg = module.build_strategy_config(setting)
         head_count = max(1, int(round(self._to_float(setting.get("head_count"), 10.0))))
         max_hold_num = max(1, int(round(self._to_float(setting.get("max_hold_num"), 12.0))))
@@ -2460,6 +2541,8 @@ class CbQuantService:
             )
 
             if index == 0:
+                # 首个交易日不计算收益，只负责用当日候选池初始化持仓。
+                # 这样从第二个交易日起，收益率才有明确的“昨收 -> 今收”基准。
                 if candidate is not None and not candidate.empty:
                     for _, row in candidate.head(max_hold_num).iterrows():
                         price = self._to_float(row.get("price"), 0.0)
@@ -2497,6 +2580,8 @@ class CbQuantService:
                 continue
 
             day_return = 0.0
+            # 先按昨持仓计算当日收益，再决定是否卖出/补仓。
+            # 这样调仓发生在收盘后视角，避免把“当天新买入仓位”提前计入当天收益。
             for item in holdings:
                 code = str(item.get("code", ""))
                 if code not in df_all.index:
@@ -2516,9 +2601,15 @@ class CbQuantService:
             drawdown_sum += drawdown
             drawdown_count += 1
 
+            # 详细模拟里保留了每次调仓的变化，用于分析页展示轮动记录。
             keep_list: list[dict[str, Any]] = []
             sell_list: list[dict[str, Any]] = []
 
+            # 先做卖出/留仓判断：
+            # - 不在快照中的券直接卖出
+            # - 强赎、止盈止损命中则卖出
+            # - until_win 打开时，亏损仓位可延迟退出
+            # - 到调仓日后，再根据 candidate_codes 判定是否继续持有
             for item in holdings:
                 code = str(item.get("code", ""))
                 if code not in df_all.index:
@@ -2558,6 +2649,8 @@ class CbQuantService:
 
             existing_codes = {str(item.get("code", "")) for item in keep_list}
             if rebalance_due:
+                # 只有调仓日才会从候选池补买，且补到 max_hold_num 为止。
+                # 非调仓日即使有更高分标的出现，也不会主动替换现有持仓。
                 for _, row in candidate.iterrows():
                     if len(keep_list) >= max_hold_num:
                         break
@@ -2577,6 +2670,7 @@ class CbQuantService:
                     )
                     existing_codes.add(code)
 
+            # 换手率按“前后持仓代码集合差异”估算，主要用于分析页展示，不参与交易决策。
             current_codes = {str(item.get("code", "")) for item in keep_list}
             if prev_codes:
                 changed_count = len(prev_codes - current_codes) + len(current_codes - prev_codes)
@@ -2600,6 +2694,7 @@ class CbQuantService:
             avg_drawdown_pct.append(drawdown_sum / max(1, drawdown_count))
             turnover_pct.append(day_turnover)
 
+            # 只在发生持仓变化或到达最后一天时记录一条轮动快照，避免分析页出现大量重复记录。
             if changed_count > 0 or index == len(dataset) - 1:
                 rotations.append(
                     StrategyBacktestRotationRow(
@@ -2634,6 +2729,7 @@ class CbQuantService:
         dataset: list[tuple[str, Any]],
         initial_capital_wan: float,
     ) -> dict[str, Any]:
+        """构造一个简单的转债等权基准，用于分析页做对照。"""
         dates: list[str] = []
         daily_returns: list[float] = []
         nav_series: list[float] = []
@@ -2685,6 +2781,7 @@ class CbQuantService:
         turnover_pct: list[float] | None = None,
         trade_pnls_pct: list[float] | None = None,
     ) -> dict[str, float | None]:
+        """把净值序列、收益序列和交易结果汇总成分析指标。"""
         if not nav_series:
             nav_series = [1.0]
         eval_returns = daily_returns[1:] if len(daily_returns) > 1 else list(daily_returns)
@@ -2905,6 +3002,14 @@ class CbQuantService:
 
     @staticmethod
     def _normalize_task_config(task_config: BacktestTaskConfig | dict[str, Any] | None) -> BacktestTaskConfig:
+        """把外部传入的任务参数做一次统一归一化。
+
+        目的不是校验 schema；schema 在 API 层已经做过。
+        这里主要处理运行态兜底，例如：
+        - 最少持仓不能大于最多持仓
+        - 百分比不能越界
+        - 可空止盈/止损参数要转成明确值
+        """
         if isinstance(task_config, BacktestTaskConfig):
             config = task_config
         else:
@@ -2946,6 +3051,7 @@ class CbQuantService:
         setting: dict[str, Any],
         task_config: BacktestTaskConfig | dict[str, Any] | None,
     ) -> dict[str, Any]:
+        """把任务级参数覆盖到策略参数上，形成最终回测 setting。"""
         config = self._normalize_task_config(task_config)
         merged = dict(setting)
         merged["initial_capital_wan"] = config.initial_capital_wan
@@ -2971,6 +3077,7 @@ class CbQuantService:
         return merged
 
     def _position_ratio(self, *, setting: dict[str, Any], max_hold_num: int) -> float:
+        """根据持仓数和单标的上限，计算单个仓位的目标权重。"""
         if max_hold_num <= 0:
             return 0.0
         base_ratio = 1.0 / max_hold_num
@@ -2987,6 +3094,7 @@ class CbQuantService:
         last_rebalance_index: int,
         setting: dict[str, Any],
     ) -> bool:
+        """根据任务配置判断今天是否到达调仓日。"""
         if index == 0:
             return True
         freq_type = str(setting.get("rebalance_frequency_type", "trade_day") or "trade_day")
@@ -3014,6 +3122,7 @@ class CbQuantService:
         item: dict[str, Any],
         current_price: float,
     ) -> bool:
+        """根据止盈/止损阈值判断是否应当强制卖出。"""
         buy_price = self._to_float(item.get("buy_price"), current_price)
         if buy_price <= 0 or current_price <= 0:
             return False
@@ -3128,6 +3237,7 @@ class CbQuantService:
             return default
 
     def _derive_leaderboard_metrics(self, *, stats: dict[str, Any], window_name: WindowName) -> dict[str, float]:
+        """把原始回测统计值映射成排行榜使用的指标。"""
         total_return_pct = self._to_float(stats.get("total_return_pct"), 0.0)
         max_drawdown_pct = self._to_float(stats.get("max_drawdown_pct"), 0.0)
         win_rate_pct = self._to_float(stats.get("win_rate_pct"), 0.0)
@@ -3170,6 +3280,11 @@ class CbQuantService:
         turnover: float,
         window_name: WindowName,
     ) -> float:
+        """计算组合稳健分。
+
+        这是项目内部定义的综合评分，不是标准金融指标；
+        主要用于在多个回测指标之间给出一个可排序的“综合质量分”。
+        """
         # Strongly penalize zero/negative return strategies to avoid ranking no-trade combos at top.
         if cagr <= 0.0001:
             base = 10.0

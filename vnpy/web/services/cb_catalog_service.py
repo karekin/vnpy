@@ -1,3 +1,13 @@
+"""CB Quant 因子/函数目录服务。
+
+这个模块不做任何回测或行情计算，只负责把注册表里的元数据整理成
+前端可直接消费的 catalog 响应，方便页面做：
+
+1. 因子选择器
+2. 表达式编辑器提示
+3. 函数说明面板
+"""
+
 from __future__ import annotations
 
 from vnpy.web.domain.cb_quant.enums import FactorCategory, FunctionCategory
@@ -31,7 +41,11 @@ FUNCTION_CATEGORY_LABELS: dict[FunctionCategory, str] = {
 
 
 class CbCatalogService:
-    """CB Quant factor/function catalog service."""
+    """CB Quant 目录查询服务。
+
+    设计目标很简单：把 domain 层定义好的静态注册表转换成 API schema。
+    这里不依赖数据库，也不做缓存状态管理，因此适合作为“纯只读”服务。
+    """
 
     def list_factors(
         self,
@@ -40,6 +54,12 @@ class CbCatalogService:
         keyword: str = "",
         enabled_only: bool = False,
     ) -> FactorCatalogResponse:
+        """按分类和关键字返回因子目录。
+
+        - `category="all"` 时遍历全部因子分类
+        - `enabled_only=True` 时只返回前端允许启用的因子
+        - `keyword` 同时匹配名称、key、表达式文本
+        """
         needle = keyword.strip().lower()
         category_enum = self._parse_factor_category(category)
         categories = [category_enum] if category_enum else list(FactorCategory)
@@ -96,6 +116,7 @@ class CbCatalogService:
         category: str = "all",
         keyword: str = "",
     ) -> FunctionCatalogResponse:
+        """按分类和关键字返回函数目录。"""
         needle = keyword.strip().lower()
         category_enum = self._parse_function_category(category)
         categories = [category_enum] if category_enum else list(FunctionCategory)
@@ -146,6 +167,7 @@ class CbCatalogService:
 
     @staticmethod
     def _parse_factor_category(category: str) -> FactorCategory | None:
+        """把 URL 查询参数解析成枚举；非法值按 all 处理。"""
         if category == "all":
             return None
         try:
@@ -155,6 +177,7 @@ class CbCatalogService:
 
     @staticmethod
     def _parse_function_category(category: str) -> FunctionCategory | None:
+        """把函数分类字符串解析成枚举；非法值按 all 处理。"""
         if category == "all":
             return None
         try:
