@@ -83,6 +83,9 @@ from vnpy.web.contracts.cb_quant import (
 
 
 T = TypeVar("T")
+_SETTING_SERIALIZE_SKIP = object()
+_OPTIMIZE_ANALYSIS_SNAPSHOT_VERSION = 2
+_OPTIMIZE_ANALYSIS_CACHE_VERSION = 2
 
 
 def _paginate(items: list[T], page: int, page_size: int) -> list[T]:
@@ -1023,11 +1026,12 @@ class CbQuantService:
                 self._cache_optimize_analysis_response(cache_key=cache_key, response=response)
                 return response
 
-        if selected_row is not None:
-            setting = dict(selected_row.params)
-        else:
-            setting = self._resolve_setting_for_combo(combo_id=selected_combo_id, template_name=task.template_name)
-        setting = self._apply_task_config_to_setting(setting, task_config)
+        setting = self._resolve_optimize_analysis_setting(
+            task=task,
+            combo_id=selected_combo_id,
+            task_config=task_config,
+            fallback_row=selected_row,
+        )
 
         start_date = self._parse_iso_date(task.start_date)
         end_date = self._parse_iso_date(task.end_date)
@@ -1378,7 +1382,8 @@ class CbQuantService:
         initial_capital_wan: float,
         state_marker: str,
     ) -> tuple[str, str, float, str]:
-        return (task_id, combo_id, round(float(initial_capital_wan), 4), state_marker)
+        versioned_state = f"v{_OPTIMIZE_ANALYSIS_CACHE_VERSION}:{state_marker}"
+        return (task_id, combo_id, round(float(initial_capital_wan), 4), versioned_state)
 
     def _cache_optimize_analysis_response(
         self,
@@ -1398,6 +1403,10 @@ class CbQuantService:
         combo_id: str,
         initial_capital_wan: float,
     ) -> bool:
+        summary = snapshot.get("summary") or {}
+        snapshot_version = int(summary.get("snapshot_version") or 0)
+        if snapshot_version < _OPTIMIZE_ANALYSIS_SNAPSHOT_VERSION:
+            return False
         snapshot_combo_id = str(snapshot.get("combo_id") or "")
         if snapshot_combo_id != combo_id:
             return False
@@ -1436,6 +1445,7 @@ class CbQuantService:
         used_range_start = response.curve[0].date if response.curve else None
         used_range_end = response.curve[-1].date if response.curve else None
         summary = {
+            "snapshot_version": _OPTIMIZE_ANALYSIS_SNAPSHOT_VERSION,
             "metric_rows": [row.model_dump() for row in response.metric_rows],
             "message": response.message,
         }
@@ -1594,7 +1604,12 @@ class CbQuantService:
         window = self._analysis_window_for_task(task)
         start_date = self._parse_iso_date(task.start_date)
         end_date = self._parse_iso_date(task.end_date)
-        setting = self._apply_task_config_to_setting(dict(best_row.params), task_config)
+        setting = self._resolve_optimize_analysis_setting(
+            task=task,
+            combo_id=best_row.combo_id,
+            task_config=task_config,
+            fallback_row=best_row,
+        )
         sliced, message_parts = self._slice_analysis_dataset(
             dataset=dataset,
             window_name=window,
@@ -3373,9 +3388,50 @@ class CbQuantService:
     def _serialize_setting(setting: dict[str, Any]) -> dict[str, Any]:
         payload: dict[str, Any] = {}
         for key, value in setting.items():
-            if isinstance(value, (int, float, str, bool)) or value is None:
-                payload[key] = value
+            normalized = CbQuantService._serialize_setting_value(value)
+            if normalized is not _SETTING_SERIALIZE_SKIP:
+                payload[key] = normalized
         return payload
+
+    @staticmethod
+    def _serialize_setting_value(value: Any) -> Any:
+        if isinstance(value, (int, float, str, bool)) or value is None:
+            return value
+        if isinstance(value, dict):
+            payload: dict[str, Any] = {}
+            for key, item in value.items():
+                normalized = CbQuantService._serialize_setting_value(item)
+                if normalized is _SETTING_SERIALIZE_SKIP:
+                    continue
+                payload[str(key)] = normalized
+            return payload
+        if isinstance(value, (list, tuple)):
+            payload_list: list[Any] = []
+            for item in value:
+                normalized = CbQuantService._serialize_setting_value(item)
+                if normalized is _SETTING_SERIALIZE_SKIP:
+                    continue
+                payload_list.append(normalized)
+            return payload_list
+        return _SETTING_SERIALIZE_SKIP
+
+    def _resolve_optimize_analysis_setting(
+        self,
+        *,
+        task: StrategyOptimizeTaskRow,
+        combo_id: str,
+        task_config: BacktestTaskConfig,
+        fallback_row: StrategyOptimizeResultRow | None,
+    ) -> dict[str, Any]:
+        """分析页根据 combo_id 还原真实组合参数，避免依赖榜单里的裁剪版 params。"""
+        try:
+            base_setting = self._build_candidate_setting(template_id=task.template_id, combo_id=combo_id)
+        except Exception:
+            if fallback_row is not None and fallback_row.params:
+                base_setting = dict(fallback_row.params)
+            else:
+                base_setting = self._resolve_setting_for_combo(combo_id=combo_id, template_name=task.template_name)
+        return self._apply_task_config_to_setting(base_setting, task_config)
 
     def _simulate_detailed_strategy(
         self,
@@ -3648,10 +3704,10 @@ class CbQuantService:
             daily_ret = 0.0
             try:
                 common_idx = prev_frame.index.intersection(frame.index)
-                if len(common_idx) > 0 and "price" in prev_frame.columns and "price" in frame.columns:
-                    prev_prices = prev_frame.loc[common_idx, "price"].astype(float)
-                    cur_prices = frame.loc[common_idx, "price"].astype(float)
-                    valid = prev_prices > 0
+                if len(common_idx) > 0 and "close_price" in prev_frame.columns and "close_price" in frame.columns:
+                    prev_prices = prev_frame.loc[common_idx, "close_price"].astype(float)
+                    cur_prices = frame.loc[common_idx, "close_price"].astype(float)
+                    valid = (prev_prices > 0) & (cur_prices > 0)
                     if bool(valid.any()):
                         returns = (cur_prices[valid] - prev_prices[valid]) / prev_prices[valid]
                         daily_ret = float(returns.mean())

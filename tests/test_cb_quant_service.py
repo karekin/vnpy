@@ -4,6 +4,7 @@ from datetime import date
 from threading import Lock
 from typing import Any
 
+import pandas as pd
 import pytest
 
 from vnpy.web.services.cb_backtest_service import CbBacktestService
@@ -14,6 +15,7 @@ from vnpy.web.contracts.cb_quant import (
     JobStatus,
     StrategyParamSpaceRow,
     StrategyOptimizeResultRow,
+    StrategyOptimizeTaskAnalysisResponse,
     StrategyOptimizeTaskCreateRequest,
     StrategyTemplateConfigRequest,
     StrategyTemplateConfigResponse,
@@ -381,6 +383,163 @@ class TestOptimizeSamplingHelpers:
         assert "已跳过 378 个已存在的因子对" in second.message
 
 
+class TestOptimizeAnalysisDataIntegrity:
+    def test_serialize_setting_should_preserve_dynamic_factor_payloads(self) -> None:
+        payload = CbQuantService._serialize_setting(
+            {
+                "price_benchmark": 115.0,
+                "selected_factor_keys": ["dblow", "limit"],
+                "factor_values": {"dblow": 105.0, "limit": 1.0},
+                "non_serializable": object(),
+            }
+        )
+
+        assert payload == {
+            "price_benchmark": 115.0,
+            "selected_factor_keys": ["dblow", "limit"],
+            "factor_values": {"dblow": 105.0, "limit": 1.0},
+        }
+
+    def test_get_optimize_task_analysis_should_rebuild_combo_setting_when_old_snapshot_and_trimmed_params_exist(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        service = _build_service()
+        service._template_configs["TPL-001"] = StrategyTemplateConfigResponse(
+            template_id="TPL-001",
+            factor_keys=["dblow", "limit"],
+            expression_draft="",
+            parameter_space=[
+                StrategyParamSpaceRow(
+                    factor_key="dblow",
+                    value_type="number",
+                    enabled=True,
+                    min_value=100.0,
+                    max_value=105.0,
+                    step=5.0,
+                    enum_values=[],
+                ),
+                StrategyParamSpaceRow(
+                    factor_key="limit",
+                    value_type="number",
+                    enabled=True,
+                    min_value=-1.0,
+                    max_value=1.0,
+                    step=2.0,
+                    enum_values=[],
+                ),
+            ],
+            combo_size=4,
+            updated_at="2026-03-09 10:00",
+        )
+        task = StrategyOptimizeTaskRow(
+            task_id="OPT-20260308-0025",
+            template_id="TPL-001",
+            template_name="实盘模板",
+            status="finished",
+            progress=100,
+            total_combinations=4,
+            evaluated_combinations=4,
+            windows=["1y"],
+            start_date=None,
+            end_date=None,
+            eta="done",
+            message="优化完成",
+            created_at="2026-03-09 10:00",
+            started_at="2026-03-09 10:01",
+            finished_at="2026-03-09 10:02",
+        )
+        service._optimize_tasks = [task]
+        service._optimize_results = {
+            task.task_id: [
+                StrategyOptimizeResultRow(
+                    rank=1,
+                    task_id=task.task_id,
+                    template_id=task.template_id,
+                    template_name=task.template_name,
+                    combo_id="CMB-000004",
+                    robust_score=100.0,
+                    cagr=0.33,
+                    mdd=0.05,
+                    calmar=6.6,
+                    win_rate=60.0,
+                    turnover=1.2,
+                    recent_1y=0.33,
+                    total_return_pct=33.67,
+                    params={"price_benchmark": 115.0},
+                )
+            ]
+        }
+        service._store.optimize_task_analysis_snapshot = {
+            "task_id": task.task_id,
+            "combo_id": "CMB-000004",
+            "template_id": task.template_id,
+            "template_name": task.template_name,
+            "window_name": "1y",
+            "benchmark_name": "转债等权",
+            "initial_capital_wan": 100.0,
+            "summary": {
+                "metric_rows": [{"strategy_combo": "当前策略", "total_return_pct": 31.4619}],
+                "message": "old snapshot",
+            },
+            "detail": {"curve": [], "yearly_distribution": [], "monthly_distribution": [], "weekly_distribution": [], "rotations": []},
+        }
+
+        monkeypatch.setattr(service._backtest_service, "load_market_data", lambda: [("2026-03-09", object())])
+        monkeypatch.setattr(service, "_slice_analysis_dataset", lambda **_kwargs: ([("2026-03-09", object())], []))
+        captured: dict[str, Any] = {}
+
+        def _build_response(**kwargs: Any) -> StrategyOptimizeTaskAnalysisResponse:
+            captured["setting"] = dict(kwargs["setting"])
+            return StrategyOptimizeTaskAnalysisResponse(
+                task_id=task.task_id,
+                template_id=task.template_id,
+                template_name=task.template_name,
+                combo_id=kwargs["combo_id"],
+                benchmark_name="转债等权",
+                window="1y",
+                metric_rows=[],
+                curve=[],
+                yearly_distribution=[],
+                monthly_distribution=[],
+                weekly_distribution=[],
+                rotations=[],
+                message="recomputed",
+            )
+
+        monkeypatch.setattr(service, "_build_optimize_task_analysis_response", _build_response)
+
+        response = service.get_optimize_task_analysis(task_id=task.task_id)
+
+        assert response is not None
+        assert response.message == "recomputed"
+        assert captured["setting"]["selected_factor_keys"] == ["dblow", "limit"]
+        assert captured["setting"]["factor_values"] == {"dblow": 105.0, "limit": 1.0}
+
+    def test_simulate_equal_weight_benchmark_should_use_close_price_column(self) -> None:
+        service = _build_service()
+        dataset = [
+            (
+                "2026-03-05",
+                pd.DataFrame(
+                    [{"bond_code": "110001", "close_price": 100.0}, {"bond_code": "110002", "close_price": 200.0}]
+                ).set_index("bond_code", drop=False),
+            ),
+            (
+                "2026-03-06",
+                pd.DataFrame(
+                    [{"bond_code": "110001", "close_price": 110.0}, {"bond_code": "110002", "close_price": 220.0}]
+                ).set_index("bond_code", drop=False),
+            ),
+        ]
+
+        result = service._simulate_equal_weight_benchmark(dataset=dataset, initial_capital_wan=100.0)
+
+        assert result["daily_returns"] == [0.0, 0.1]
+        assert result["cum_return_pct"] == pytest.approx([0.0, 10.0])
+        assert result["final_asset_wan"] == 110.0
+
+
 class TestWindowHelpers:
     def test_slice_dataset_should_support_one_week_window(self) -> None:
         dataset = [
@@ -532,6 +691,7 @@ class TestOptimizeTaskAnalysisSnapshot:
             "used_range_start": "2025-01-01",
             "used_range_end": "2025-12-31",
             "summary": {
+                "snapshot_version": 2,
                 "metric_rows": [
                     {
                         "strategy_combo": "当前策略",
