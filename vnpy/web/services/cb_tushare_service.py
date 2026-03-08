@@ -273,7 +273,7 @@ class CbTushareService:
             self._store.upsert_trade_calendar(cal_rows)
             trade_days = self._store.list_open_trade_dates(start_date=start_text, end_date=end_text)
             if not trade_days:
-                trade_days = self._fallback_trade_days(start, end)
+                raise RuntimeError(f"trade calendar returned no open days: {start_text}~{end_text}")
             if max_trade_days > 0 and len(trade_days) > max_trade_days:
                 trade_days = trade_days[-max_trade_days:]
 
@@ -595,7 +595,9 @@ class CbTushareService:
         cal_rows = self._rows(cal_df)
         trade_days = sorted({_to_ymd(row.get("cal_date")) for row in cal_rows if row.get("cal_date")})
         if not trade_days:
-            trade_days = self._fallback_trade_days(as_of - timedelta(days=14), as_of)
+            raise RuntimeError(
+                f"trade calendar returned no recent open days: {(as_of - timedelta(days=14)).isoformat()}~{as_of.isoformat()}"
+            )
 
         cb_basic_rows = self._rows(client.query("cb_basic"))
         self._store.upsert_cb_basic(cb_basic_rows)
@@ -1104,17 +1106,6 @@ class CbTushareService:
         if size <= 0:
             return [values]
         return [values[idx : idx + size] for idx in range(0, len(values), size)]
-
-    @staticmethod
-    def _fallback_trade_days(start: date, end: date) -> list[str]:
-        """当交易日历接口不可用时，用工作日近似代替。"""
-        days: list[str] = []
-        cursor = start
-        while cursor <= end:
-            if cursor.weekday() < 5:
-                days.append(cursor.isoformat())
-            cursor += timedelta(days=1)
-        return days
 
     @staticmethod
     def _load_token() -> str:

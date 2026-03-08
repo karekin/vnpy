@@ -193,12 +193,14 @@ class CbQuantService:
         if not template:
             return None
 
-        config = self._template_configs.get(template_id)
-        if not config:
-            config = self._default_config(template_id=template_id, updated_at=template.updated_at)
-            self._template_configs[template_id] = config
-
+        config = self._require_template_config(template_id)
         return StrategyTemplateDetailResponse(template=template, config=config)
+
+    def _require_template_config(self, template_id: str) -> StrategyTemplateConfigResponse:
+        config = self._template_configs.get(template_id)
+        if config is None:
+            raise RuntimeError(f"missing template config: {template_id}")
+        return config
 
     def create_template(self, request: StrategyTemplateCreateRequest) -> StrategyTemplateRow:
         with self._lock:
@@ -334,10 +336,7 @@ class CbQuantService:
         if not template:
             return None
 
-        config = self._template_configs.get(template_id) or self._default_config(
-            template_id=template_id,
-            updated_at=template.updated_at,
-        )
+        config = self._require_template_config(template_id)
         factor_keys = [
             key for key in dict.fromkeys(config.factor_keys)
             if is_template_selectable_factor(key)
@@ -614,10 +613,7 @@ class CbQuantService:
         if not template:
             return None
 
-        config = self._template_configs.get(template_id) or self._default_config(
-            template_id=template_id,
-            updated_at=template.updated_at,
-        )
+        config = self._require_template_config(template_id)
         combo_size = max(
             1,
             self._calculate_combo_size(
@@ -639,7 +635,7 @@ class CbQuantService:
             )
         )
         if not preview_settings:
-            preview_settings = [(f"CMB-{100000 + idx}", self._backtest_service.default_setting()) for idx in range(request.rows_per_window)]
+            raise RuntimeError(f"no candidate settings generated for template: {template_id}")
 
         rows: list[CandidateRow] = []
         for window_name in windows:
@@ -820,10 +816,7 @@ class CbQuantService:
 
         # 模板配置来自内存态/持久化恢复的 `_template_configs`。
         # 这里决定了这次优化能枚举出哪些参数组合，是“参数空间”的源头。
-        config = self._template_configs.get(template.id) or self._default_config(
-            template_id=template.id,
-            updated_at=template.updated_at,
-        )
+        config = self._require_template_config(template.id)
 
         # windows 只是回测窗口定义，不在这里切数据；真正切片在 `_run_optimize_task`
         # -> `_prepare_window_dataset_map` -> `CbBacktestService.slice_dataset(...)`。
@@ -2445,7 +2438,10 @@ class CbQuantService:
         end_raw = context.get("end_date")
         start_date = self._parse_iso_date(start_raw) if isinstance(start_raw, str) else start_raw
         end_date = self._parse_iso_date(end_raw) if isinstance(end_raw, str) else end_raw
-        setting = dict(context.get("setting", self._backtest_service.default_setting()))
+        raw_setting = context.get("setting")
+        if not isinstance(raw_setting, dict):
+            raise RuntimeError(f"missing backtest setting in job context: {job_id}")
+        setting = dict(raw_setting)
 
         ticker_stop = Event()
         ticker = Thread(
@@ -2500,10 +2496,7 @@ class CbQuantService:
                 window=window_name,
             )
             self._upsert_leaderboard_row(row, business_date=job.business_date)
-            done_eta = "done"
-            if bool(stats.get("fallback_used")):
-                done_eta = "done (auto-range)"
-            self._update_job(job_id, status="finished", progress=100, eta=done_eta)
+            self._update_job(job_id, status="finished", progress=100, eta="done")
             self._refresh_candidate_status(job.combo_id)
             self._refresh_compare_rows()
         except Exception as exc:
@@ -2543,7 +2536,7 @@ class CbQuantService:
                 self._jobs[index] = merged
                 context = self._job_context.get(job_id) or self._store.get_job_context(job_id) or {
                     "window_name": "full",
-                    "setting": self._backtest_service.default_setting(),
+                    "setting": {},
                     "start_date": None,
                     "end_date": None,
                     "cancel_requested": False,
@@ -2587,7 +2580,7 @@ class CbQuantService:
     def _sync_optimize_task_as_backtest_job(self, task: StrategyOptimizeTaskRow) -> None:
         best_row = (self._optimize_results.get(task.task_id) or [None])[0]
         combo_id = best_row.combo_id if best_row is not None else "--"
-        setting = dict(best_row.params) if best_row is not None else self._backtest_service.default_setting()
+        setting = dict(best_row.params) if best_row is not None else {}
         setting = self._apply_task_config_to_setting(setting, task.task_config)
         status = task.status if task.status in {"queued", "running", "finished", "failed"} else "failed"
         business_date = (task.created_at or "")[:10] or date.today().isoformat()
@@ -2889,23 +2882,18 @@ class CbQuantService:
         """
         candidate_code_map: dict[str, list[str]] = {}
         for trade_date, frame in dataset:
-            try:
-                candidate = cb_backtest.build_candidates(
-                    frame,
-                    trade_date,
-                    strategy_parameters,
-                    candidate_count,
-                )
-            except Exception:
-                candidate = None
+            candidate = cb_backtest.build_candidates(
+                frame,
+                trade_date,
+                strategy_parameters,
+                candidate_count,
+            )
             if candidate is None or getattr(candidate, "empty", True):
                 candidate_code_map[trade_date] = []
                 continue
-            try:
-                codes = candidate["bond_code"].astype(str).tolist()
-            except Exception:
-                candidate_code_map[trade_date] = []
-                continue
+            if "bond_code" not in candidate.columns:
+                raise RuntimeError(f"candidate result missing bond_code column: trade_date={trade_date}")
+            codes = candidate["bond_code"].astype(str).tolist()
             candidate_code_map[trade_date] = codes[: max(1, candidate_count)]
         return candidate_code_map
 
@@ -3009,8 +2997,7 @@ class CbQuantService:
                     end_date=end_date,
                 )
             if not sliced:
-                # 当前窗口没有可用样本时，不直接报错，先跳过，
-                # 后面还有一轮“兜底重切”的 fallback。
+                # 当前窗口没有可用样本时，直接跳过该窗口；不会再静默改用其他区间。
                 continue
 
             # 轻量回测会基于 candidate_code_map 逐日回放，产出收益、回撤、胜率、换手等统计。
@@ -3027,34 +3014,7 @@ class CbQuantService:
             all_returns.append(self._to_float(stats.get("total_return_pct"), 0.0))
 
         if not all_metrics:
-            # 如果按用户指定的日期范围/窗口切片后一个结果都没拿到，
-            # 再退回到“忽略 start/end 限制，只按窗口默认范围切片”重试一次。
-            # 这样可以兼容用户选了过窄日期，或者历史库覆盖范围不足的情况。
-            for window_name in windows:
-                sliced = None
-                if window_dataset_map is not None:
-                    sliced = window_dataset_map.get(window_name)
-                if sliced is None or not sliced:
-                    sliced = self._backtest_service.slice_dataset(
-                        dataset=dataset,
-                        window_name=window_name,
-                        start_date=None,
-                        end_date=None,
-                    )
-                if not sliced:
-                    continue
-                stats = self._run_backtest_from_candidate_map(
-                    dataset=sliced,
-                    candidate_code_map=candidate_code_map,
-                    setting=setting,
-                )
-                stats["sample_days"] = len(sliced)
-                metrics = self._derive_leaderboard_metrics(stats=stats, window_name=window_name)
-                all_metrics.append(metrics)
-                all_returns.append(self._to_float(stats.get("total_return_pct"), 0.0))
-
-        if not all_metrics:
-            # 连 fallback 之后都没有数据，说明该组合在当前任务窗口下完全无法评估。
+            # 用户指定的窗口/日期范围没有可用样本时，直接失败，不再自动改用其他范围。
             raise RuntimeError("No market snapshots available for selected window")
 
         # 下面开始把多个窗口结果聚合成一条总结果：
@@ -3091,16 +3051,16 @@ class CbQuantService:
         )
 
     def _iter_template_settings(self, *, template_id: str, limit: int) -> Iterable[tuple[str, dict[str, Any]]]:
-        cfg = self._template_configs.get(template_id)
-        if not cfg:
-            return
+        cfg = self._require_template_config(template_id)
 
         enabled_rows = [row for row in cfg.parameter_space if row.enabled and row.factor_key in cfg.factor_keys]
         if not enabled_rows:
-            return [(f"CMB-{idx:06d}", self._backtest_service.default_setting()) for idx in range(1, limit + 1)]
+            raise RuntimeError(f"template parameter space is empty: {template_id}")
 
         factor_keys = [row.factor_key for row in enabled_rows]
         all_choices = [self._choices_for_param_row(row) for row in enabled_rows]
+        if any(not choices for choices in all_choices):
+            raise RuntimeError(f"template parameter choices are invalid: {template_id}")
 
         yielded = 0
         for combo_values in islice(product(*all_choices), limit):
@@ -3190,8 +3150,6 @@ class CbQuantService:
 
     def _score_current_market(self, setting: dict[str, Any], limit: int = 20) -> tuple[list[StrategyTopBondRow], str]:
         market = self._market_service.list_bonds(min_volume_wan=0)
-        if market.source.startswith("fallback.mock"):
-            raise RuntimeError(f"realtime market source unavailable: {market.source}")
         rows = []
         price_b = max(1.0, self._to_float(setting.get("price_benchmark"), 115.0))
         premium_b = max(1.0, self._to_float(setting.get("premium_benchmark"), 25.0))
@@ -3785,7 +3743,7 @@ class CbQuantService:
         """把外部传入的任务参数做一次统一归一化。
 
         目的不是校验 schema；schema 在 API 层已经做过。
-        这里主要处理运行态兜底，例如：
+        这里主要处理运行态边界收敛，例如：
         - 最少持仓不能大于最多持仓
         - 百分比不能越界
         - 可空止盈/止损参数要转成明确值
@@ -3793,10 +3751,7 @@ class CbQuantService:
         if isinstance(task_config, BacktestTaskConfig):
             config = task_config
         else:
-            try:
-                config = BacktestTaskConfig.model_validate(task_config or {})
-            except Exception:
-                config = BacktestTaskConfig()
+            config = BacktestTaskConfig.model_validate(task_config or {})
         max_hold = max(1, int(config.max_hold_count))
         freq_value = max(1, int(config.rebalance_interval_value))
         initial_capital_wan = max(0.0001, float(config.initial_capital_wan))
@@ -3924,33 +3879,25 @@ class CbQuantService:
         return resolved
 
     def _build_candidate_setting(self, *, template_id: str, combo_id: str) -> dict[str, Any]:
-        cfg = self._template_configs.get(template_id) or self._default_config(
-            template_id=template_id,
-            updated_at=_now_readable(),
-        )
+        cfg = self._require_template_config(template_id)
         combo_seq = self._parse_combo_sequence(combo_id)
         enabled_rows = [row for row in cfg.parameter_space if row.enabled and row.factor_key in cfg.factor_keys]
         if not enabled_rows:
-            return self._backtest_service.default_setting()
+            raise RuntimeError(f"template parameter space is empty: {template_id}")
         if combo_seq is None or combo_seq <= 0:
-            # Backward compatibility fallback for legacy/custom combo ids.
-            row_map: dict[str, StrategyParamSpaceRow] = {row.factor_key: row for row in enabled_rows}
-            values: dict[str, Any] = {}
-            for factor_key, row in row_map.items():
-                values[factor_key] = self._pick_param_value(combo_id=combo_id, row=row)
-            return self._build_setting_from_factor_values(values)
+            raise ValueError(f"invalid combo id: {combo_id}")
 
         factor_keys = [row.factor_key for row in enabled_rows]
         all_choices = [self._choices_for_param_row(row) for row in enabled_rows]
         for choices in all_choices:
             if not choices:
-                return self._backtest_service.default_setting()
+                raise RuntimeError(f"template parameter choices are invalid: {template_id}")
 
         total_combos = 1
         for choices in all_choices:
             total_combos *= len(choices)
         if combo_seq > total_combos:
-            return {}
+            raise ValueError(f"combo id out of range: {combo_id}")
 
         idx0 = combo_seq - 1
         picked: list[Any] = [None for _ in all_choices]
@@ -3975,26 +3922,6 @@ class CbQuantService:
         except Exception:
             return None
         return value if value > 0 else None
-
-    def _pick_param_value(self, *, combo_id: str, row: StrategyParamSpaceRow) -> Any:
-        seed = self._hash(f"{combo_id}|{row.factor_key}")
-        if row.value_type == "enum":
-            values = [value for value in row.enum_values if value.strip()]
-            if not values:
-                return "default"
-            return values[seed % len(values)]
-
-        if row.min_value is None or row.max_value is None or row.step is None or row.step <= 0:
-            return row.min_value if row.min_value is not None else 0.0
-
-        count = self._count_choices(row)
-        idx = seed % count
-        raw = row.min_value + row.step * idx
-        precision = 0
-        text = f"{row.step}"
-        if "." in text:
-            precision = len(text.split(".", 1)[1].rstrip("0"))
-        return round(raw, min(6, max(0, precision)))
 
     @staticmethod
     def _to_float(value: Any, default: float = 0.0) -> float:
@@ -4237,8 +4164,7 @@ class CbQuantService:
                         template_id = row.id
                         break
             if not template_id:
-                settings[candidate.combo_id] = self._backtest_service.default_setting()
-                continue
+                raise RuntimeError(f"missing template for candidate: combo_id={candidate.combo_id}, template={candidate.template}")
             settings[candidate.combo_id] = self._build_candidate_setting(
                 template_id=template_id,
                 combo_id=candidate.combo_id,
@@ -4360,16 +4286,15 @@ class CbQuantService:
         normalized: list[StrategyParamSpaceRow] = []
 
         for factor_key in normalized_factor_keys:
-            row = keyed.get(factor_key) or self._default_param_space_row(factor_key)
+            row = keyed.get(factor_key)
+            if row is None:
+                raise RuntimeError(f"missing parameter space row: {factor_key}")
             if row.value_type == "number":
                 min_value = row.min_value
                 max_value = row.max_value
                 step = row.step
                 if min_value is None or max_value is None or step is None or step <= 0 or max_value < min_value:
-                    fallback = self._default_param_space_row(factor_key)
-                    min_value = fallback.min_value
-                    max_value = fallback.max_value
-                    step = fallback.step
+                    raise RuntimeError(f"invalid number parameter space: {factor_key}")
                 normalized.append(
                     StrategyParamSpaceRow(
                         factor_key=factor_key,
@@ -4384,8 +4309,7 @@ class CbQuantService:
             else:
                 values = [value.strip() for value in row.enum_values if value.strip()]
                 if not values:
-                    fallback = self._default_param_space_row(factor_key)
-                    values = fallback.enum_values or ["default"]
+                    raise RuntimeError(f"empty enum parameter space: {factor_key}")
                 normalized.append(
                     StrategyParamSpaceRow(
                         factor_key=factor_key,
@@ -4472,7 +4396,9 @@ class CbQuantService:
         row_map: dict[str, StrategyParamSpaceRow] = {row.factor_key: row for row in parameter_space}
         combo_size = 1
         for factor_key in factor_keys:
-            row = row_map.get(factor_key) or self._default_param_space_row(factor_key)
+            row = row_map.get(factor_key)
+            if row is None:
+                raise RuntimeError(f"missing parameter space row: {factor_key}")
             if not row.enabled:
                 continue
             combo_size *= self._count_choices(row)
@@ -4526,24 +4452,6 @@ class CbQuantService:
             return "近1周"
         return "近1年"
 
-    @staticmethod
-    def _hash(value: str) -> int:
-        state = 0
-        for char in value:
-            state = (state * 131 + ord(char)) & 0xFFFFFFFF
-        return state
-
-    @staticmethod
-    def _make_random(seed: int):
-        state = seed & 0xFFFFFFFF
-
-        def _next() -> float:
-            nonlocal state
-            state = (1664525 * state + 1013904223) & 0xFFFFFFFF
-            return state / 0x100000000
-
-        return _next
-
     def _load_templates_and_configs(
         self,
     ) -> tuple[list[StrategyTemplateRow], dict[str, StrategyTemplateConfigResponse]]:
@@ -4575,31 +4483,10 @@ class CbQuantService:
                         configs={key: value.model_dump() for key, value in configs.items()},
                     )
                     return templates, configs
-            except Exception:
-                pass
+            except Exception as exc:
+                raise RuntimeError(f"failed to load legacy templates: {exc}") from exc
 
-        now = _now_readable()
-        template = StrategyTemplateRow(
-            id="TPL-001",
-            name="双低稳健A",
-            version="v1.0.0",
-            status="active",
-            factor_count=5,
-            rebalance="weekly",
-            risk_preset="balanced",
-            combo_size=0,
-            owner="system",
-            updated_at=now,
-        )
-        config = self._default_config(template_id=template.id, updated_at=now)
-        template = template.model_copy(
-            update={"factor_count": len(config.factor_keys), "combo_size": config.combo_size}
-        )
-        self._store.replace_templates_and_configs(
-            templates=[template.model_dump()],
-            configs={template.id: config.model_dump()},
-        )
-        return [template], {template.id: config}
+        return [], {}
 
     def _save_templates_and_configs(self) -> None:
         self._store.replace_templates_and_configs(
@@ -4677,7 +4564,7 @@ class CbQuantService:
                 "window_name": item.get("window_name") or "full",
                 "start_date": self._parse_iso_date(item.get("start_date")),
                 "end_date": self._parse_iso_date(item.get("end_date")),
-                "setting": dict(item.get("setting") or self._backtest_service.default_setting()),
+                "setting": dict(item.get("setting") or {}),
                 "cancel_requested": bool(item.get("cancel_requested")),
                 "business_date": row.business_date or date.today().isoformat(),
                 "created_at": row.created_at or _now_readable(),

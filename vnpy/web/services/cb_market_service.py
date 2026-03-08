@@ -1,14 +1,4 @@
-"""CB Quant 实时行情服务。
-
-优先级设计如下：
-
-1. 先走 Tushare 最新市场数据
-2. Tushare 异常时，回退到本地最新快照
-3. 若显式允许，再回退到 mock 数据
-
-这样做的目的不是“行情一定实时”，而是尽可能保证页面和回测入口总能有一份
-可用的市场截面数据。
-"""
+"""CB Quant 实时行情服务。"""
 
 from __future__ import annotations
 
@@ -18,7 +8,6 @@ from math import ceil
 
 import requests
 
-from vnpy.web.services.cb_backtest_service import CbBacktestService
 from vnpy.web.services.cb_tushare_service import CbTushareService
 from vnpy.web.contracts.cb_quant import BondMarketResponse, BondMarketRow
 
@@ -132,8 +121,8 @@ def _chunks(values: list[str], size: int) -> list[list[str]]:
 class CbMarketService:
     """可转债市场截面服务。
 
-    对外统一返回 `BondMarketRow` 列表；内部可根据数据源状况自动降级。
-    回测详情页、市场榜单和历史同步入口都依赖这个服务拿到“当前市场全貌”。
+    对外统一返回 `BondMarketRow` 列表。
+    行情数据只接受实时主数据源结果，失败时直接报错。
     """
 
     def __init__(self) -> None:
@@ -149,133 +138,18 @@ class CbMarketService:
         return self._session.get(url, params=params, timeout=EM_TIMEOUT)
 
     def list_bonds(self, min_volume_wan: float = 0.0) -> BondMarketResponse:
-        """返回当前市场可转债列表。
-
-        主路径走 Tushare；失败后优先回退本地快照，这样即使外部接口不稳定，
-        前端仍可展示最近一次可用的市场结果。
-        """
+        """返回当前市场可转债列表；实时加载失败时直接报错。"""
         snapshot_time = _now_time()
-        allow_fallback = os.getenv("VNPY_CB_ALLOW_FALLBACK_MOCK", "0") == "1"
-
-        try:
-            rows, source = self._tushare_service.load_latest_market_rows(min_volume_wan=min_volume_wan)
-            if rows:
-                return BondMarketResponse(
-                    items=rows,
-                    total=len(rows),
-                    source=source,
-                    snapshot_time=snapshot_time,
-                    fallback_used=False,
-                )
-            raise RuntimeError("no bond rows returned from tushare")
-        except Exception as exc:  # noqa: BLE001
-            snapshot_rows, snapshot_date = self._load_rows_from_local_snapshot(
-                snapshot_time=snapshot_time,
-                min_volume_wan=min_volume_wan,
-            )
-            if snapshot_rows:
-                return BondMarketResponse(
-                    items=snapshot_rows,
-                    total=len(snapshot_rows),
-                    source=f"snapshot.local({snapshot_date})" if snapshot_date else "snapshot.local",
-                    snapshot_time=snapshot_time,
-                    fallback_used=True,
-                    fallback_reason=f"tushare unavailable: {str(exc)[:160]}",
-                )
-
-            if not allow_fallback:
-                raise RuntimeError(f"failed to load realtime bonds: {exc}") from exc
-            fallback_rows = self._fallback_rows(snapshot_time)
+        rows, source = self._tushare_service.load_latest_market_rows(min_volume_wan=min_volume_wan)
+        if rows:
             return BondMarketResponse(
-                items=fallback_rows,
-                total=len(fallback_rows),
-                source="fallback.mock",
+                items=rows,
+                total=len(rows),
+                source=source,
                 snapshot_time=snapshot_time,
-                fallback_used=True,
-                fallback_reason=str(exc),
+                fallback_used=False,
             )
-
-    def _load_rows_from_local_snapshot(
-        self,
-        *,
-        snapshot_time: str,
-        min_volume_wan: float,
-    ) -> tuple[list[BondMarketRow], str | None]:
-        """从本地最近一日快照恢复市场列表。
-
-        这是 Tushare 不可用时的第一层降级路径，字段来源不完全实时，但格式和
-        回测兼容，适合兜底展示与验证。
-        """
-        try:
-            backtest_service = CbBacktestService()
-            dataset = backtest_service.load_market_data()
-            if not dataset:
-                return [], None
-
-            latest_date, frame = sorted(dataset, key=lambda item: item[0])[-1]
-            rows: list[BondMarketRow] = []
-
-            for _, row in frame.iterrows():
-                price = _to_float(row.get("close_price"))
-                if price is None or price <= 0:
-                    continue
-
-                amount_wan = _to_float(row.get("turnover_amount_wan"))
-                if amount_wan is not None and amount_wan < min_volume_wan:
-                    continue
-
-                premium = _to_float(row.get("conversion_premium_pct")) or 0.0
-                convert_value = price / (1 + premium / 100) if premium > -99 else None
-                remain_years = (_to_float(row.get("days_to_maturity")) or 0.0) / 365.0
-                remain_scale_yi = _to_float(row.get("outstanding_amount_yi"))
-                expiry_ytm_pre_tax = _to_float(row.get("ytm_to_maturity_after_tax_pct")) or _to_float(row.get("ytm_to_maturity_pct"))
-                put_ytm = _to_float(row.get("ytm_to_put_pct"))
-                stock_market = (_safe_text(row.get("market")) or "").lower()
-
-                rows.append(
-                    BondMarketRow(
-                        bond_id=_to_code6(row.get("bond_code")),
-                        bond_name=_safe_text(row.get("bond_name")) or "",
-                        price=round(price, 3),
-                        increase_rt=round(_to_float(row.get("bond_pct_change")) or 0.0, 2),
-                        stock_id=f"{stock_market}{_to_code6(row.get('underlying_stock_code'))}" if stock_market else _to_code6(row.get("underlying_stock_code")),
-                        stock_name=_safe_text(row.get("underlying_stock_name")) or "",
-                        stock_price=_to_float(row.get("underlying_close_price")),
-                        stock_increase_rt=_to_float(row.get("underlying_pct_change")),
-                        stock_pb=_to_float(row.get("underlying_pb")),
-                        convert_price=_to_float(row.get("conversion_price")),
-                        pure_bond_value=_to_float(row.get("pure_bond_value")),
-                        premium_rt=round(premium, 2),
-                        convert_value=round(convert_value, 3) if convert_value is not None else 0.0,
-                        dblow=round(price + premium, 3),
-                        option_value=_to_float(row.get("option_value")),
-                        stock_volatility=_to_float(row.get("underlying_volatility")),
-                        put_trigger_price=None,
-                        redeem_trigger_price=None,
-                        float_mv_ratio=_to_float(row.get("outstanding_to_market_cap_ratio")),
-                        fund_holding_ratio=None,
-                        maturity_date=None,
-                        remain_years=remain_years,
-                        remain_scale_yi=remain_scale_yi,
-                        amount_wan=round(amount_wan, 1) if amount_wan is not None else None,
-                        turnover_rt=None,
-                        expiry_ytm_pre_tax=expiry_ytm_pre_tax,
-                        put_ytm=put_ytm,
-                        volume_wan=round(amount_wan, 1) if amount_wan is not None else 0.0,
-                        issue_scale_yi=remain_scale_yi,
-                        rating=_safe_text(row.get("rating")),
-                        listed_date=_to_date_str(row.get("listing_date")),
-                        convert_start_date=None,
-                        subscribe_date=None,
-                        source="snapshot.local",
-                        update_time=snapshot_time,
-                    )
-                )
-
-            rows.sort(key=lambda item: item.amount_wan or 0.0, reverse=True)
-            return rows, latest_date
-        except Exception:  # noqa: BLE001
-            return [], None
+        raise RuntimeError("tushare market load failed: no rows returned")
 
     def _fetch_realtime_rows(self) -> list[dict]:
         """从 Eastmoney 拉取可转债主表原始行，并自动翻页拿全量。"""
@@ -469,83 +343,3 @@ class CbMarketService:
 
         items.sort(key=lambda x: x.amount_wan or 0.0, reverse=True)
         return items
-
-    @staticmethod
-    def _fallback_rows(snapshot_time: str) -> list[BondMarketRow]:
-        """在显式允许 mock 回退时，构造最小可用样例数据。"""
-        return [
-            BondMarketRow(
-                bond_id="113063",
-                bond_name="赛轮转债",
-                price=128.45,
-                increase_rt=0.82,
-                stock_id="601058",
-                stock_name="赛轮轮胎",
-                stock_price=11.68,
-                stock_increase_rt=0.46,
-                stock_pb=1.78,
-                convert_price=10.40,
-                pure_bond_value=98.81,
-                premium_rt=14.32,
-                convert_value=112.36,
-                dblow=142.77,
-                option_value=13.55,
-                stock_volatility=None,
-                put_trigger_price=8.26,
-                redeem_trigger_price=15.34,
-                float_mv_ratio=None,
-                fund_holding_ratio=None,
-                maturity_date="2028-11-01",
-                remain_years=2.69,
-                remain_scale_yi=19.86,
-                amount_wan=32688.2,
-                turnover_rt=12.7,
-                expiry_ytm_pre_tax=5.9,
-                put_ytm=None,
-                volume_wan=32688.2,
-                issue_scale_yi=19.86,
-                rating="AA",
-                listed_date="2022-11-24",
-                convert_start_date="2023-05-08",
-                subscribe_date="2022-11-02",
-                source="fallback.mock",
-                update_time=snapshot_time,
-            ),
-            BondMarketRow(
-                bond_id="123107",
-                bond_name="温氏转债",
-                price=121.12,
-                increase_rt=-0.15,
-                stock_id="300498",
-                stock_name="温氏股份",
-                stock_price=17.82,
-                stock_increase_rt=0.57,
-                stock_pb=3.12,
-                convert_price=34.60,
-                pure_bond_value=104.31,
-                premium_rt=11.48,
-                convert_value=108.65,
-                dblow=132.60,
-                option_value=17.91,
-                stock_volatility=None,
-                put_trigger_price=24.13,
-                redeem_trigger_price=42.88,
-                float_mv_ratio=None,
-                fund_holding_ratio=None,
-                maturity_date="2028-10-08",
-                remain_years=2.62,
-                remain_scale_yi=81.62,
-                amount_wan=15891.6,
-                turnover_rt=5.1,
-                expiry_ytm_pre_tax=4.7,
-                put_ytm=None,
-                volume_wan=15891.6,
-                issue_scale_yi=81.62,
-                rating="AAA",
-                listed_date="2021-11-01",
-                convert_start_date="2022-04-08",
-                subscribe_date="2021-10-08",
-                source="fallback.mock",
-                update_time=snapshot_time,
-            ),
-        ]
