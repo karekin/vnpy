@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from vnpy.web.domain.cb_quant.history_store import CbHistoryStore
-from vnpy.web.domain.cb_quant import phase_a_core
+from vnpy.web.domain.cb_quant import cb_strategy_core
 
 
 class CrawlerPhaseABacktestAdapter:
@@ -135,7 +135,7 @@ class CrawlerPhaseABacktestAdapter:
 
     def _load_module(self):
         """返回已融合进 `vnpy` 的 Phase A 核心模块。"""
-        return phase_a_core
+        return cb_strategy_core
 
     @staticmethod
     def _slice_dataset(

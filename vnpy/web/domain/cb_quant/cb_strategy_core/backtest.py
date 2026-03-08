@@ -19,8 +19,8 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from vnpy.web.domain.cb_quant.phase_a_core.candidates import build_candidates
-from vnpy.web.domain.cb_quant.phase_a_core.normalizer import _safe_float
+from vnpy.web.domain.cb_quant.cb_strategy_core.candidates import build_candidates
+from vnpy.web.domain.cb_quant.cb_strategy_core.normalizer import _safe_float
 
 
 @dataclass

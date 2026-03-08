@@ -136,7 +136,7 @@
 建议在 `vnpy/web/domain/cb_quant/` 下引入一个新的策略核心包，例如：
 
 ```text
-vnpy/web/domain/cb_quant/phase_a_core/
+vnpy/web/domain/cb_quant/cb_strategy_core/
   __init__.py
   normalizer.py
   scoring.py
@@ -172,10 +172,10 @@ vnpy/web/domain/cb_quant/phase_a_core/
 ### 7.1 建议保留并迁移
 
 - 历史来源：`convertible-bond-crawler/filter.py`
-  -> `vnpy/web/domain/cb_quant/phase_a_core/scoring.py`
+  -> `vnpy/web/domain/cb_quant/cb_strategy_core/scoring.py`
 
 - 历史来源：`convertible-bond-crawler/config.py`
-  -> `vnpy/web/domain/cb_quant/phase_a_core/settings.py`
+  -> `vnpy/web/domain/cb_quant/cb_strategy_core/settings.py`
 
 - 历史来源：`convertible-bond-crawler/scripts/phase_a_optimize.py`
   -> 拆分为：
@@ -191,7 +191,7 @@ vnpy/web/domain/cb_quant/phase_a_core/
 短期保留，长期目标是：
 
 - 不再动态加载 `phase_a_optimize.py`
-- 改成直接 import 新的 `phase_a_core` 模块
+- 改成直接 import 新的 `cb_strategy_core` 模块
 
 ### 7.3 建议废弃为主路径
 
@@ -209,7 +209,7 @@ vnpy/web/domain/cb_quant/phase_a_core/
 
 目标：
 
-- 在 `vnpy` 内建立 `phase_a_core` 目录
+- 在 `vnpy` 内建立 `cb_strategy_core` 目录
 - 先不改业务调用路径，只把策略核心复制并整理进去
 
 动作：
@@ -235,7 +235,7 @@ vnpy/web/domain/cb_quant/phase_a_core/
 动作：
 
 1. 保留 `CrawlerPhaseABacktestAdapter` 这个抽象层
-2. 把内部 `_load_module()` 改成直接 import `phase_a_core`
+2. 把内部 `_load_module()` 改成直接 import `cb_strategy_core`
 3. 让 adapter 调用：
    - `normalize_market_frame`
    - `build_strategy_config`
@@ -273,7 +273,7 @@ vnpy/web/domain/cb_quant/phase_a_core/
 
 动作：
 
-1. 评估 `_run_backtest_from_candidate_map(...)` 和 `phase_a_core.backtest.run_backtest(...)` 的差异
+1. 评估 `_run_backtest_from_candidate_map(...)` 和 `cb_strategy_core.backtest.run_backtest(...)` 的差异
 2. 提取共享的持仓轮动核心逻辑
 3. 让优化、回测、分析页尽量复用同一套基础状态机
 
@@ -302,10 +302,10 @@ vnpy/web/domain/cb_quant/phase_a_core/
 
 截至 2026-03-08，上述方案已经完成到“彻底移除旧子项目运行角色”的状态：
 
-- Phase A 运行时核心已迁入 [phase_a_core](/Users/karekin/Downloads/coding/project/vnpy/vnpy/web/domain/cb_quant/phase_a_core/__init__.py)
+- Phase A 运行时核心已迁入 [cb_strategy_core](/Users/karekin/Downloads/coding/project/vnpy/vnpy/web/domain/cb_quant/cb_strategy_core/__init__.py)
 - `CrawlerPhaseABacktestAdapter` 已改为直接引用新 core，不再动态加载旧脚本
 - `CbHistoryService` 不再支持从旧 Excel 快照做运行时 bootstrap
-- `cb_quant_service` 优化链路已复用 `phase_a_core` 的共享轻量回测核心
+- `cb_quant_service` 优化链路已复用 `cb_strategy_core` 的共享轻量回测核心
 - 应用启动流程已移除 legacy bootstrap，仅保留当日行情快照同步
 - 父仓库中的 `convertible-bond-crawler` gitlink 已移除
 - 旧子项目目录已删除，相关资料转存到 `docs/`

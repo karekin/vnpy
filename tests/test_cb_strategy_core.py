@@ -7,22 +7,22 @@ import pandas as pd
 
 from vnpy.web import app as web_app
 from vnpy.web.adapters.crawler_phase_a_adapter import CrawlerPhaseABacktestAdapter
-from vnpy.web.domain.cb_quant import phase_a_core
-from vnpy.web.domain.cb_quant.phase_a_core import cli as phase_a_cli
-from vnpy.web.domain.cb_quant.phase_a_core import backtest as phase_a_backtest
+from vnpy.web.domain.cb_quant import cb_strategy_core
+from vnpy.web.domain.cb_quant.cb_strategy_core import cli as phase_a_cli
+from vnpy.web.domain.cb_quant.cb_strategy_core import backtest as phase_a_backtest
 from vnpy.web.services.cb_history_service import CbHistoryService
 
 
-def test_adapter_should_load_integrated_phase_a_core() -> None:
+def test_adapter_should_load_integrated_cb_strategy_core() -> None:
     adapter = CrawlerPhaseABacktestAdapter()
     module = adapter._load_module()
 
-    assert module is phase_a_core
+    assert module is cb_strategy_core
     assert hasattr(module, "build_candidates")
     assert hasattr(module, "run_backtest")
 
 
-def test_phase_a_core_cli_should_load_snapshots_from_db(tmp_path: Path) -> None:
+def test_cb_strategy_core_cli_should_load_snapshots_from_db(tmp_path: Path) -> None:
     data_root = tmp_path / "cb_quant"
     store_dir = data_root / "_cb_quant"
     store_dir.mkdir(parents=True, exist_ok=True)
@@ -53,7 +53,7 @@ def test_phase_a_core_cli_should_load_snapshots_from_db(tmp_path: Path) -> None:
     assert dataset[0][0] == "2024-02-01"
 
 
-def test_phase_a_core_should_share_same_backtest_core_for_candidates(monkeypatch) -> None:
+def test_cb_strategy_core_should_share_same_backtest_core_for_candidates(monkeypatch) -> None:
     dataset = [
         (
             "2024-02-01",
@@ -105,7 +105,7 @@ def test_phase_a_core_should_share_same_backtest_core_for_candidates(monkeypatch
     assert optimize_stats["win_rate_pct"] == cli_stats["win_rate_pct"]
 
 
-def test_history_bootstrap_should_use_phase_a_core_loader(monkeypatch, tmp_path: Path) -> None:
+def test_history_bootstrap_should_use_cb_strategy_core_loader(monkeypatch, tmp_path: Path) -> None:
     service = object.__new__(CbHistoryService)
     adapter = CrawlerPhaseABacktestAdapter(data_dir=tmp_path)
     service._adapter = adapter

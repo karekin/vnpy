@@ -108,9 +108,9 @@
 
 这些策略思想并没有被丢弃，而是已经被吸收到当前的 Phase A 核心中：
 
-- 默认参数：[settings.py](/Users/karekin/Downloads/coding/project/vnpy/vnpy/web/domain/cb_quant/phase_a_core/settings.py)
-- 多因子打分：[scoring.py](/Users/karekin/Downloads/coding/project/vnpy/vnpy/web/domain/cb_quant/phase_a_core/scoring.py)
-- 候选池生成：[candidates.py](/Users/karekin/Downloads/coding/project/vnpy/vnpy/web/domain/cb_quant/phase_a_core/candidates.py)
-- 轻量回测：[backtest.py](/Users/karekin/Downloads/coding/project/vnpy/vnpy/web/domain/cb_quant/phase_a_core/backtest.py)
+- 默认参数：[settings.py](/Users/karekin/Downloads/coding/project/vnpy/vnpy/web/domain/cb_quant/cb_strategy_core/settings.py)
+- 多因子打分：[scoring.py](/Users/karekin/Downloads/coding/project/vnpy/vnpy/web/domain/cb_quant/cb_strategy_core/scoring.py)
+- 候选池生成：[candidates.py](/Users/karekin/Downloads/coding/project/vnpy/vnpy/web/domain/cb_quant/cb_strategy_core/candidates.py)
+- 轻量回测：[backtest.py](/Users/karekin/Downloads/coding/project/vnpy/vnpy/web/domain/cb_quant/cb_strategy_core/backtest.py)
 
 因此，这份文档今天的意义更偏“策略思想档案”，而不是运行文档。

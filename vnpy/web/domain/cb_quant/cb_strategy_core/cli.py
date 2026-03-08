@@ -11,9 +11,9 @@ from pathlib import Path
 from typing import Any
 
 from vnpy.web.domain.cb_quant.history_store import CbHistoryStore
-from vnpy.web.domain.cb_quant.phase_a_core.backtest import run_backtest
-from vnpy.web.domain.cb_quant.phase_a_core.candidates import build_strategy_config
-from vnpy.web.domain.cb_quant.phase_a_core.normalizer import _safe_float
+from vnpy.web.domain.cb_quant.cb_strategy_core.backtest import run_backtest
+from vnpy.web.domain.cb_quant.cb_strategy_core.candidates import build_strategy_config
+from vnpy.web.domain.cb_quant.cb_strategy_core.normalizer import _safe_float
 
 PROJECT_ROOT = Path(__file__).resolve().parents[5]
 DATA_ROOT = PROJECT_ROOT / "out" / "cb_quant"

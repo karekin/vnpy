@@ -6,9 +6,9 @@ from typing import Any
 
 import pandas as pd
 
-from vnpy.web.domain.cb_quant.phase_a_core.normalizer import _safe_float
-from vnpy.web.domain.cb_quant.phase_a_core.scoring import filter_multiple_factors
-from vnpy.web.domain.cb_quant.phase_a_core.settings import multiple_factors_config
+from vnpy.web.domain.cb_quant.cb_strategy_core.normalizer import _safe_float
+from vnpy.web.domain.cb_quant.cb_strategy_core.scoring import filter_multiple_factors
+from vnpy.web.domain.cb_quant.cb_strategy_core.settings import multiple_factors_config
 
 
 def build_strategy_config(setting: dict[str, Any]) -> dict[str, Any]:

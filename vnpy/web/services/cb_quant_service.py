@@ -25,7 +25,7 @@ from threading import Event, Lock, Thread, current_thread
 from typing import Any, Iterable, TypeVar
 
 from vnpy.web.adapters import CrawlerPhaseABacktestAdapter
-from vnpy.web.domain.cb_quant import phase_a_core
+from vnpy.web.domain.cb_quant import cb_strategy_core
 from vnpy.web.domain.cb_quant.quant_store import CbQuantStore
 from vnpy.web.services.cb_market_service import CbMarketService
 from vnpy.web.schemas import (
@@ -1214,7 +1214,7 @@ class CbQuantService:
             )
             return
 
-        # 到这里说明：phase_a_core 已直接引用、历史快照已读取、窗口切片已准备完毕。
+        # 到这里说明：cb_strategy_core 已直接引用、历史快照已读取、窗口切片已准备完毕。
         self._update_optimize_task(
             task_id,
             status="running",
@@ -2216,7 +2216,7 @@ class CbQuantService:
         candidate_code_map: dict[str, list[str]] = {}
         for trade_date, frame in dataset:
             try:
-                candidate = phase_a_core.build_candidates(frame, trade_date, cfg, head_count)
+                candidate = cb_strategy_core.build_candidates(frame, trade_date, cfg, head_count)
             except Exception:
                 candidate = None
             if candidate is None or getattr(candidate, "empty", True):
@@ -2241,12 +2241,12 @@ class CbQuantService:
 
         这是优化阶段使用的快路径。
 
-        过去这里单独维护了一套轻量回测状态机，导致它和 `phase_a_core.run_backtest(...)`
+        过去这里单独维护了一套轻量回测状态机，导致它和 `cb_strategy_core.run_backtest(...)`
         长期存在“逻辑非常相似、但又不是同一份代码”的问题。现在优化链路也直接
-        委托给 `phase_a_core.run_backtest_from_candidates(...)`，把持仓轮动、调仓频率、
+        委托给 `cb_strategy_core.run_backtest_from_candidates(...)`，把持仓轮动、调仓频率、
         强赎、止盈止损、`until_win` 等规则统一到同一套核心实现上。
         """
-        return phase_a_core.run_backtest_from_candidates(
+        return cb_strategy_core.run_backtest_from_candidates(
             dataset=dataset,
             candidate_code_map=candidate_code_map,
             setting=setting,
@@ -2290,9 +2290,9 @@ class CbQuantService:
         max_hold_num = max(1, int(round(self._to_float(setting.get("max_hold_num"), 12.0))))
         until_win = bool(setting.get("until_win", False))
 
-        # 把通用 setting 转成 phase_a_core 真正用于筛债的 cfg。
+        # 把通用 setting 转成 cb_strategy_core 真正用于筛债的 cfg。
         # 后面 `build_candidates(...)` 会直接使用这个 cfg。
-        cfg = phase_a_core.build_strategy_config(setting)
+        cfg = cb_strategy_core.build_strategy_config(setting)
         base_dataset: list[tuple[str, Any]] = []
         if window_dataset_map is not None:
             # 当调用方已经提前准备好多个窗口切片时，这里优先挑“长度最大”的一份数据集，
@@ -2580,7 +2580,7 @@ class CbQuantService:
         - 每日换手
         - 每次轮动后的持仓快照
         """
-        cfg = phase_a_core.build_strategy_config(setting)
+        cfg = cb_strategy_core.build_strategy_config(setting)
         head_count = max(1, int(round(self._to_float(setting.get("head_count"), 10.0))))
         max_hold_num = max(1, int(round(self._to_float(setting.get("max_hold_num"), 12.0))))
         until_win = bool(setting.get("until_win", False))
@@ -2608,7 +2608,7 @@ class CbQuantService:
         last_rebalance_index = 0
 
         for index, (trade_date, df_all) in enumerate(dataset):
-            candidate = phase_a_core.build_candidates(df_all, trade_date, cfg, head_count)
+            candidate = cb_strategy_core.build_candidates(df_all, trade_date, cfg, head_count)
             if candidate is None:
                 candidate = df_all.iloc[0:0]
             if candidate is None or candidate.empty:

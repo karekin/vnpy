@@ -51,10 +51,10 @@
 
 这些维度后来已经迁入 `vnpy` 的 Phase A 核心中，当前实现位于：
 
-- [settings.py](/Users/karekin/Downloads/coding/project/vnpy/vnpy/web/domain/cb_quant/phase_a_core/settings.py)
-- [scoring.py](/Users/karekin/Downloads/coding/project/vnpy/vnpy/web/domain/cb_quant/phase_a_core/scoring.py)
-- [candidates.py](/Users/karekin/Downloads/coding/project/vnpy/vnpy/web/domain/cb_quant/phase_a_core/candidates.py)
-- [backtest.py](/Users/karekin/Downloads/coding/project/vnpy/vnpy/web/domain/cb_quant/phase_a_core/backtest.py)
+- [settings.py](/Users/karekin/Downloads/coding/project/vnpy/vnpy/web/domain/cb_quant/cb_strategy_core/settings.py)
+- [scoring.py](/Users/karekin/Downloads/coding/project/vnpy/vnpy/web/domain/cb_quant/cb_strategy_core/scoring.py)
+- [candidates.py](/Users/karekin/Downloads/coding/project/vnpy/vnpy/web/domain/cb_quant/cb_strategy_core/candidates.py)
+- [backtest.py](/Users/karekin/Downloads/coding/project/vnpy/vnpy/web/domain/cb_quant/cb_strategy_core/backtest.py)
 
 ## 原数据流与当前状态
 
@@ -84,6 +84,6 @@
 
 如果后续继续维护 `cb-quant`，应直接阅读和修改 `vnpy` 内部的 Phase A 核心实现，而不是再恢复旧项目结构：
 
-- [phase_a_core/__init__.py](/Users/karekin/Downloads/coding/project/vnpy/vnpy/web/domain/cb_quant/phase_a_core/__init__.py)
+- [cb_strategy_core/__init__.py](/Users/karekin/Downloads/coding/project/vnpy/vnpy/web/domain/cb_quant/cb_strategy_core/__init__.py)
 
 原 `convertible-bond-crawler` 目录已经退出运行时角色，保留下来的价值主要是策略思想和历史资料，而不是执行路径。
