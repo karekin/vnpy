@@ -103,6 +103,10 @@ def _now_compact() -> str:
 
 
 class CbQuantService:
+    _LEGACY_FACTOR_KEY_ALIASES: dict[str, str] = {
+        "stock_stdevry_bemchmark": "volatility_benchmark",
+    }
+
     """CB Quant 主服务。
 
     可以把它理解成一个“内存态 + SQLite 持久化”的任务编排器：
@@ -3662,10 +3666,14 @@ class CbQuantService:
         factor_keys: list[str],
         parameter_space: list[StrategyParamSpaceRow],
     ) -> list[StrategyParamSpaceRow]:
-        keyed: dict[str, StrategyParamSpaceRow] = {row.factor_key: row for row in parameter_space}
+        normalized_factor_keys = [self._normalize_factor_key_name(key) for key in factor_keys]
+        keyed: dict[str, StrategyParamSpaceRow] = {}
+        for row in parameter_space:
+            normalized_key = self._normalize_factor_key_name(row.factor_key)
+            keyed[normalized_key] = row.model_copy(update={"factor_key": normalized_key})
         normalized: list[StrategyParamSpaceRow] = []
 
-        for factor_key in factor_keys:
+        for factor_key in normalized_factor_keys:
             row = keyed.get(factor_key) or self._default_param_space_row(factor_key)
             if row.value_type == "number":
                 min_value = row.min_value
@@ -3834,7 +3842,9 @@ class CbQuantService:
         if stored_templates:
             templates = [StrategyTemplateRow.model_validate(item) for item in stored_templates]
             configs = {
-                template_id: StrategyTemplateConfigResponse.model_validate(config)
+                template_id: self._normalize_template_config(
+                    StrategyTemplateConfigResponse.model_validate(config)
+                )
                 for template_id, config in stored_configs.items()
             }
             return templates, configs
@@ -3844,7 +3854,9 @@ class CbQuantService:
                 payload = json.loads(self._templates_file.read_text(encoding="utf-8"))
                 templates = [StrategyTemplateRow.model_validate(item) for item in payload.get("templates", [])]
                 configs = {
-                    template_id: StrategyTemplateConfigResponse.model_validate(config)
+                    template_id: self._normalize_template_config(
+                        StrategyTemplateConfigResponse.model_validate(config)
+                    )
                     for template_id, config in (payload.get("configs", {}) or {}).items()
                 }
                 if templates:
@@ -3883,6 +3895,48 @@ class CbQuantService:
         self._store.replace_templates_and_configs(
             templates=[row.model_dump() for row in self._templates],
             configs={key: value.model_dump() for key, value in self._template_configs.items()},
+        )
+
+    @classmethod
+    def _normalize_factor_key_name(cls, factor_key: str) -> str:
+        return cls._LEGACY_FACTOR_KEY_ALIASES.get(str(factor_key), str(factor_key))
+
+    def _normalize_template_config(
+        self,
+        config: StrategyTemplateConfigResponse,
+    ) -> StrategyTemplateConfigResponse:
+        factor_keys: list[str] = []
+        seen_keys: set[str] = set()
+        for factor_key in config.factor_keys:
+            normalized_key = self._normalize_factor_key_name(factor_key)
+            if normalized_key in seen_keys:
+                continue
+            seen_keys.add(normalized_key)
+            factor_keys.append(normalized_key)
+
+        normalized_rows: list[StrategyParamSpaceRow] = []
+        seen_rows: set[str] = set()
+        for row in config.parameter_space:
+            normalized_key = self._normalize_factor_key_name(row.factor_key)
+            if normalized_key in seen_rows:
+                continue
+            seen_rows.add(normalized_key)
+            normalized_rows.append(row.model_copy(update={"factor_key": normalized_key}))
+
+        normalized_rows = self._normalize_parameter_space(
+            factor_keys=factor_keys,
+            parameter_space=normalized_rows,
+        )
+        combo_size = self._calculate_combo_size(
+            factor_keys=factor_keys,
+            parameter_space=normalized_rows,
+        )
+        return config.model_copy(
+            update={
+                "factor_keys": factor_keys,
+                "parameter_space": normalized_rows,
+                "combo_size": combo_size,
+            }
         )
 
     @staticmethod
