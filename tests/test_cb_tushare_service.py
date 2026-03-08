@@ -345,6 +345,62 @@ class TestCbTushareMarketRows:
             trade_date=date(2026, 3, 6),
         ) is False
 
+    def test_build_market_rows_should_skip_zero_turnover_bonds(
+        self,
+        isolated_service: CbTushareService,
+    ) -> None:
+        rows = isolated_service._build_market_rows(
+            trade_date="2026-03-06",
+            cb_daily_rows=[
+                {
+                    "ts_code": "127033.SZ",
+                    "close": 89.726,
+                    "pre_close": 89.726,
+                    "pct_chg": 0.0,
+                    "amount": 0.0,
+                },
+                {
+                    "ts_code": "110001.SH",
+                    "close": 102.0,
+                    "pre_close": 101.0,
+                    "pct_chg": 0.99,
+                    "amount": 2345.6,
+                },
+            ],
+            cb_basic_map={
+                "127033.SZ": {
+                    "bond_short_name": "中装转2",
+                    "stk_code": "002822.SZ",
+                    "stk_short_name": "ST中装",
+                    "maturity_date": "2027-04-16",
+                    "list_date": "20210524",
+                    "conv_price": 3.79,
+                    "remain_size": "9180800",
+                    "issue_size": "1160000000",
+                },
+                "110001.SH": {
+                    "bond_short_name": "CB-ONE",
+                    "stk_code": "600000.SH",
+                    "stk_short_name": "STK-ONE",
+                    "maturity_date": "2028-12-31",
+                    "list_date": "20240101",
+                    "conv_price": 10.0,
+                    "remain_size": "1200000000",
+                    "issue_size": "1200000000",
+                },
+            },
+            stock_daily_map={
+                "002822.SZ": {"close": 3.39, "pct_chg": 0.3},
+                "600000.SH": {"close": 101.0, "pct_chg": 1.2},
+            },
+            stock_basic_map={
+                "600000.SH": {"pb": 1.4, "circ_mv": 600000},
+            },
+            min_volume_wan=0,
+        )
+
+        assert [row.bond_id for row in rows] == ["110001"]
+
     def test_load_latest_market_rows_should_use_latest_trade_day_and_convert_units(
         self,
         isolated_service: CbTushareService,

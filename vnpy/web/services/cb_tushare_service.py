@@ -694,6 +694,10 @@ class CbTushareService:
 
             amount_raw = _safe_float(_pick(cb_row, "amount"), 0.0)
             amount_wan = round(max(0.0, amount_raw), 1) if amount_raw > 0 else 0.0
+            # 当前市场列表只保留实际发生交易的债券。
+            # 对于已经停止交易但 ODS 仍保留占位日线的债，这里用 0 成交额直接剔除。
+            if amount_wan <= 0:
+                continue
             if amount_wan < min_volume_wan:
                 continue
 
