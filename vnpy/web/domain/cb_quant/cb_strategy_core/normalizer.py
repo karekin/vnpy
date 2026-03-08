@@ -1,10 +1,12 @@
-"""Phase A 市场快照归一化逻辑。"""
+"""可转债市场快照归一化逻辑。"""
 
 from __future__ import annotations
 
 from typing import Any
 
 import pandas as pd
+
+from vnpy.web.domain.cb_quant.snapshot_schema import SNAPSHOT_FIELD_DEFAULTS
 
 _TRUE_LIKE = {"1", "true", "t", "yes", "y"}
 _FALSE_LIKE = {"0", "false", "f", "no", "n", ""}
@@ -23,7 +25,7 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 
 
 def _normalize_yn_flag(value: Any, *, default: str = "N") -> str:
-    """把各种真假值统一成 crawler 习惯的 `Y/N` 标志。"""
+    """把各种真假值统一成历史兼容字段使用的 `Y/N` 标志。"""
     if value is None:
         return default
     if isinstance(value, bool):
@@ -70,7 +72,13 @@ def _ensure_float_column(frame: pd.DataFrame, column: str, default: float) -> No
 
 
 def normalize_market_frame(frame: pd.DataFrame) -> pd.DataFrame:
-    """把 crawler / Web 快照统一归一化成 Phase A 兼容格式。"""
+    """把快照库中的行数据统一归一化成策略核心可直接消费的格式。
+
+    目标不是恢复历史文件格式，而是保证：
+    - 字段名与当前筛债/回测逻辑对齐
+    - 缺失字段能被补默认值
+    - 字段类型足够稳定，避免在评分或回测中反复兜底
+    """
     if frame.empty:
         return frame
 
@@ -82,34 +90,43 @@ def normalize_market_frame(frame: pd.DataFrame) -> pd.DataFrame:
     if df.index.name != "cb_code":
         df = df.set_index("cb_code", drop=False)
 
-    for key, default in {
-        "cb_name": "",
-        "is_unlist": "N",
-        "last_is_unlist": "N",
-        "is_ransom_flag": "False",
-        "date_return_distance": "未到",
-        "date_remain_distance": "0天",
-        "issue_date": "2022-01-01",
-    }.items():
+    for key, default in SNAPSHOT_FIELD_DEFAULTS.items():
         if key not in df.columns:
             df[key] = default
 
-    df["cb_name"] = df["cb_name"].fillna("").astype(str)
+    df["cb_name"] = df["cb_name"].fillna(SNAPSHOT_FIELD_DEFAULTS["cb_name"]).astype(str)
     df["is_unlist"] = df["is_unlist"].apply(_normalize_yn_flag)
     df["last_is_unlist"] = df["last_is_unlist"].apply(_normalize_yn_flag)
     df["is_ransom_flag"] = df["is_ransom_flag"].apply(_normalize_tf_flag)
-    df["date_return_distance"] = df["date_return_distance"].fillna("未到").astype(str)
-    df["date_remain_distance"] = df["date_remain_distance"].fillna("0天").astype(str)
-    df["issue_date"] = df["issue_date"].fillna("2022-01-01").astype(str).str.slice(0, 10)
+    df["date_return_distance"] = df["date_return_distance"].fillna(SNAPSHOT_FIELD_DEFAULTS["date_return_distance"]).astype(str)
+    df["date_remain_distance"] = df["date_remain_distance"].fillna(SNAPSHOT_FIELD_DEFAULTS["date_remain_distance"]).astype(str)
+    df["date_convert_distance"] = df["date_convert_distance"].fillna(SNAPSHOT_FIELD_DEFAULTS["date_convert_distance"]).astype(str)
+    df["issue_date"] = df["issue_date"].fillna(SNAPSHOT_FIELD_DEFAULTS["issue_date"]).astype(str).str.slice(0, 10)
+    df["is_call"] = df["is_call"].fillna("").astype(str)
+    df["market"] = df["market"].fillna("").astype(str)
+    df["rating"] = df["rating"].fillna("").astype(str)
+    df["market_source"] = df["market_source"].fillna("").astype(str)
+    if "redeem_remain_days" in df.columns:
+        df["redeem_remain_days"] = pd.to_numeric(df["redeem_remain_days"], errors="coerce")
 
     for key, default in {
-        "price": 0.0,
-        "premium_rate": 0.0,
-        "pb": 1.5,
-        "stock_stdevry": 30.0,
-        "remain_amount": 10.0,
-        "market_cap": 100.0,
-        "new_style": 0.0,
+        "price": SNAPSHOT_FIELD_DEFAULTS["price"],
+        "cb_percent": SNAPSHOT_FIELD_DEFAULTS["cb_percent"],
+        "premium_rate": SNAPSHOT_FIELD_DEFAULTS["premium_rate"],
+        "convert_stock_price": SNAPSHOT_FIELD_DEFAULTS["convert_stock_price"],
+        "old_style": SNAPSHOT_FIELD_DEFAULTS["old_style"],
+        "pb": SNAPSHOT_FIELD_DEFAULTS["pb"],
+        "stock_stdevry": SNAPSHOT_FIELD_DEFAULTS["stock_stdevry"],
+        "stock_price": SNAPSHOT_FIELD_DEFAULTS["stock_price"],
+        "stock_percent": SNAPSHOT_FIELD_DEFAULTS["stock_percent"],
+        "remain_amount": SNAPSHOT_FIELD_DEFAULTS["remain_amount"],
+        "remain_to_cap": SNAPSHOT_FIELD_DEFAULTS["remain_to_cap"],
+        "market_cap": SNAPSHOT_FIELD_DEFAULTS["market_cap"],
+        "new_style": SNAPSHOT_FIELD_DEFAULTS["new_style"],
+        "rate_expire": SNAPSHOT_FIELD_DEFAULTS["rate_expire"],
+        "rate_expire_aftertax": SNAPSHOT_FIELD_DEFAULTS["rate_expire_aftertax"],
+        "rate_return": SNAPSHOT_FIELD_DEFAULTS["rate_return"],
+        "volume": SNAPSHOT_FIELD_DEFAULTS["volume"],
     }.items():
         _ensure_float_column(df, key, default)
 

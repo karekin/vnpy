@@ -888,7 +888,10 @@ class CbTushareService:
         """把 Tushare 原始数据转换成：
 
         1. 因子表行：供后续研究和扩展
-        2. 回测快照行：保持 crawler 兼容，供 phase_a / cb_quant 直接回放
+        2. 回测快照行：供 `cb_strategy_core / cb_quant` 直接回放
+
+        注意：快照行在真正写库前还会经过标准 schema 收口，
+        因此这里可以保留少量中间字段，但最终落库字段以快照 schema 为准。
         """
         factor_rows: list[dict[str, Any]] = []
         snapshot_rows: list[dict[str, Any]] = []

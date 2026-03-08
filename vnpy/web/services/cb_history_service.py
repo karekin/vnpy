@@ -191,7 +191,11 @@ class CbHistoryService:
 
     @staticmethod
     def _frame_to_rows(frame: pd.DataFrame) -> list[dict[str, Any]]:
-        """把 crawler/xlsx DataFrame 转成快照表可落库的行结构。"""
+        """把任意 DataFrame 行转成快照表可落库的行结构。
+
+        最终字段收口由 `CbHistoryStore.upsert_snapshot_rows(...)` 完成，
+        这里主要负责把 DataFrame 行提取成 dict，并补最基本的兼容值。
+        """
         rows: list[dict[str, Any]] = []
         for _, item in frame.iterrows():
             payload = item.to_dict()
@@ -208,12 +212,11 @@ class CbHistoryService:
 
     @staticmethod
     def _market_row_to_backtest_row(item: dict[str, Any], trade_date: str) -> dict[str, Any]:
-        """把实时行情 schema 映射成 crawler 兼容 schema。
+        """把实时行情 schema 映射成标准回测快照行。
 
-        phase_a 回测和老的过滤脚本都依赖一套历史字段命名，因此这里要把
-        实时行情模型转换成旧逻辑能直接消费的字段。
+        这里返回的是“标准快照字段”的一个上游版本；
+        真正写入 `cb_daily_snapshot.payload_json` 前还会再经过统一 schema 收口。
         """
-        # Map realtime quote schema to crawler-style row fields used by filter/backtest.
         price = _safe_float(item.get("price"))
         pure_bond_value = _safe_float(item.get("pure_bond_value"), 0.0)
         stock_price = _safe_float(item.get("stock_price"), 0.0)

@@ -10,6 +10,7 @@ from typing import Any
 
 import pandas as pd
 
+from vnpy.web.domain.cb_quant.snapshot_schema import normalize_snapshot_row
 
 @dataclass
 class HistoryStoreSummary:
@@ -58,10 +59,11 @@ class CbHistoryStore:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         values: list[tuple[str, str, str, str, str]] = []
         for row in rows:
-            bond_id = str(row.get("cb_code") or "").strip()
+            normalized_row = normalize_snapshot_row(dict(row))
+            bond_id = str(normalized_row.get("cb_code") or "").strip()
             if not bond_id:
                 continue
-            payload = json.dumps(row, ensure_ascii=False, separators=(",", ":"))
+            payload = json.dumps(normalized_row, ensure_ascii=False, separators=(",", ":"))
             values.append((trade_date, bond_id, source, payload, now))
 
         if not values:

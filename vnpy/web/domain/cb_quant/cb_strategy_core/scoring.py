@@ -1,4 +1,4 @@
-"""Phase A 多因子过滤与打分逻辑。"""
+"""可转债多因子过滤与打分逻辑。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import pandas as pd
 
 
 def filter_multiple_factors(df: pd.DataFrame, *, date: str, multiple_factors_config: dict[str, object]) -> pd.DataFrame:
-    """按 crawler 既有口径执行多因子筛债。"""
+    """按当前策略核心约定的口径执行多因子筛债。"""
     bond_ratio = float(multiple_factors_config.get("bond_ratio", 0.7))
     stock_ratio = float(multiple_factors_config.get("stock_ratio", 0.3))
     price_bemchmark = float(multiple_factors_config.get("price_bemchmark", 115))

@@ -44,6 +44,7 @@ def test_cb_strategy_core_cli_should_load_snapshots_from_db(tmp_path: Path) -> N
                 "date_return_distance": "未到",
                 "date_remain_distance": "200天",
                 "issue_date": "2024-01-01",
+                "legacy_only_field": "should-be-dropped",
             }
         ],
     )
@@ -51,6 +52,9 @@ def test_cb_strategy_core_cli_should_load_snapshots_from_db(tmp_path: Path) -> N
     dataset = phase_a_cli.load_market_data(data_root)
     assert len(dataset) == 1
     assert dataset[0][0] == "2024-02-01"
+    frame = dataset[0][1]
+    assert "market_source" in frame.columns
+    assert "legacy_only_field" not in frame.columns
 
 
 def test_cb_strategy_core_should_share_same_backtest_core_for_candidates(monkeypatch) -> None:

@@ -211,6 +211,9 @@ class TestCbTushareServiceSyncRangeSuccess:
         assert int(first_day.loc["110001", "redeem_remain_days"]) == 4
         assert first_day.loc["110001", "is_call"] == "公告提示强赎"
         assert first_day.loc["110001", "is_ransom_flag"] == "False"
+        assert "price_fill_source" not in first_day.columns
+        assert "stock_ts_code" not in first_day.columns
+        assert "market_source" in first_day.columns
 
 
 class TestCbTushareServiceSyncRangeFailure:

@@ -1,4 +1,8 @@
-"""Phase A CLI 兼容入口。"""
+"""策略核心的 CLI 兼容入口。
+
+这个模块只保留研究/离线运行需要的命令行外壳。
+当前主运行路径已经是 `vnpy cb-quant` 服务，不再依赖历史脚本工程。
+"""
 
 from __future__ import annotations
 
@@ -21,8 +25,8 @@ GLOBAL_TARGET = "return_drawdown_ratio"
 
 
 def parse_args() -> argparse.Namespace:
-    """解析 Phase A CLI 参数。"""
-    parser = argparse.ArgumentParser(description="Run Phase A parameter optimization for convertible bonds.")
+    """解析策略优化 CLI 参数。"""
+    parser = argparse.ArgumentParser(description="Run CB strategy parameter optimization for convertible bonds.")
     parser.add_argument("--data-dir", default=str(DATA_ROOT))
     parser.add_argument("--output-dir", default=str(DATA_ROOT / "phase_a"))
     parser.add_argument("--top-n", type=int, default=50)
@@ -161,9 +165,9 @@ def save_results(output_dir: Path, top_results: list[dict[str, Any]], all_count:
             writer.writeheader()
             writer.writerows(top_results)
 
-    print(f"[Phase A] saved json: {json_path}")
+    print(f"[CB Strategy] saved json: {json_path}")
     if top_results:
-        print(f"[Phase A] saved csv : {output_dir / f'phase_a_top_{timestamp}.csv'}")
+        print(f"[CB Strategy] saved csv : {output_dir / f'phase_a_top_{timestamp}.csv'}")
 
 
 def main() -> None:
@@ -183,7 +187,7 @@ def main() -> None:
         raise RuntimeError("invalid optimization setting")
 
     settings_count = len(optimization_setting.generate_settings())
-    print(f"[Phase A] target={args.target}, settings={settings_count}, workers={args.max_workers}")
+    print(f"[CB Strategy] target={args.target}, settings={settings_count}, workers={args.max_workers}")
 
     results = run_bf_optimization(
         evaluate_func=evaluate_setting,
@@ -196,7 +200,7 @@ def main() -> None:
     output_dir = Path(args.output_dir).resolve()
     save_results(output_dir, top_results, settings_count, args)
 
-    print("[Phase A] top strategies preview:")
+    print("[CB Strategy] top strategies preview:")
     for idx, item in enumerate(top_results[: min(10, len(top_results))], start=1):
         print(
             f"{idx:02d}. score={item.get(args.target)} "

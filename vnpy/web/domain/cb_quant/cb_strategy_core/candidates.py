@@ -1,4 +1,4 @@
-"""Phase A 候选池生成逻辑。"""
+"""可转债策略候选池生成逻辑。"""
 
 from __future__ import annotations
 
@@ -12,7 +12,14 @@ from vnpy.web.domain.cb_quant.cb_strategy_core.settings import multiple_factors_
 
 
 def build_strategy_config(setting: dict[str, Any]) -> dict[str, Any]:
-    """把外部参数组合转成多因子配置。"""
+    """把外部参数组合整理成筛债逻辑使用的多因子配置。
+
+    这一步的职责是：
+    - 以默认配置为基线补齐缺省字段
+    - 把外部参数组合里真正参与筛债的字段投影到 cfg
+    - 派生 `bond_ratio = 1 - stock_ratio`
+    - 对少数分母型阈值做最小值保护，避免评分公式失真
+    """
     cfg = dict(multiple_factors_config)
     stock_ratio = _safe_float(setting["stock_ratio"], cfg["stock_ratio"])
     bond_ratio = round(1 - stock_ratio, 2)
