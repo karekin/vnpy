@@ -17,9 +17,9 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from vnpy.web.core.cb_backtest.candidates import build_candidates
+from vnpy.web.core.cb_backtest.candidate_selection import filter_multiple_factors
 from vnpy.web.core.cb_backtest.normalizer import _safe_float
-from vnpy.web.core.cb_backtest.settings import BacktestRuntimeConfig, StrategyParameters
+from vnpy.web.core.cb_backtest.strategy_config import BacktestRuntimeConfig, StrategyParameters
 
 
 @dataclass
@@ -146,14 +146,39 @@ def compute_daily_return(holdings: list[Holding], df_all: pd.DataFrame) -> float
         # 读取当日收盘价；若缺失则继续沿用上一次价格，避免收益序列断裂。
         cur_price = _safe_float(row.get("close_price"), item.last_price)
         # 只有上一日价格有效时，才能计算今日相对昨日收益。
-        # 含义是：先算这只债今天相对昨天涨了多少：(今天价 - 昨天价) / 昨天价，
-        # 再乘以它在组合里的仓位占比 item.ratio，最后把所有持仓加总，得到组合今天的收益率。
         if item.last_price > 0:
             daily_ret += ((cur_price - item.last_price) / item.last_price) * item.ratio
         # 不论是否调仓，都把最新价格写回持仓，作为下一日收益计算基准。
         item.last_price = cur_price
     # 回测指标输出保留到 6 位小数，足够表达日收益率精度。
     return round(daily_ret, 6)
+
+
+def build_candidates(
+    df_all: pd.DataFrame,
+    trade_date: str,
+    strategy_parameters: StrategyParameters,
+    candidate_count: int,
+) -> pd.DataFrame:
+    """给定单日全市场快照，生成按得分排序的候选债列表。
+
+    这里把“单日筛债”作为回测模块的直接组成部分保留在本文件内：
+    - `scoring.py` 专注单日过滤与打分公式；
+    - `backtest.py` 负责把单日候选进一步接入多日持仓轮动。
+    """
+    try:
+        df_candidate = filter_multiple_factors(
+            df_all.copy(),
+            trade_date=trade_date,
+            strategy_parameters=strategy_parameters,
+        )
+    except KeyError:
+        # 关键字段缺失时返回空结果，保持回测流程可继续向下执行。
+        return pd.DataFrame(columns=df_all.columns)
+
+    if candidate_count > 0:
+        df_candidate = df_candidate.head(candidate_count)
+    return df_candidate
 
 
 def _run_backtest_core(

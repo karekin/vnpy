@@ -13,7 +13,7 @@ from typing import Any
 
 import pandas as pd
 
-from vnpy.web.core.cb_backtest.settings import StrategyParameters
+from vnpy.web.core.cb_backtest.strategy_config import StrategyParameters
 from vnpy.web.domain.cb_quant.strategy_factor_registry import (
     StrategyScoreMode,
     get_strategy_factor_definition,
