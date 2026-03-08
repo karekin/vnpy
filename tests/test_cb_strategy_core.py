@@ -33,17 +33,17 @@ def test_cb_strategy_core_cli_should_load_snapshots_from_db(tmp_path: Path) -> N
         source="unit-test",
         rows=[
             {
-                "cb_code": "110001",
-                "cb_name": "CB-ONE",
-                "price": 101.0,
-                "premium_rate": 12.5,
-                "cb_to_pb": 1.2,
-                "is_unlist": "N",
-                "last_is_unlist": "N",
-                "is_ransom_flag": "False",
-                "date_return_distance": "未到",
-                "date_remain_distance": "200天",
-                "issue_date": "2024-01-01",
+                "bond_code": "110001",
+                "bond_name": "CB-ONE",
+                "close_price": 101.0,
+                "conversion_premium_pct": 12.5,
+                "bond_pure_value_ratio": 1.2,
+                "is_listed": True,
+                "was_listed_prev_day": True,
+                "is_redeem_triggered": False,
+                "put_status": "not_reached",
+                "days_to_maturity": 200,
+                "listing_date": "2024-01-01",
                 "legacy_only_field": "should-be-dropped",
             }
         ],
@@ -53,7 +53,7 @@ def test_cb_strategy_core_cli_should_load_snapshots_from_db(tmp_path: Path) -> N
     assert len(dataset) == 1
     assert dataset[0][0] == "2024-02-01"
     frame = dataset[0][1]
-    assert "market_source" in frame.columns
+    assert "data_source" in frame.columns
     assert "legacy_only_field" not in frame.columns
 
 
@@ -63,24 +63,24 @@ def test_cb_strategy_core_should_share_same_backtest_core_for_candidates(monkeyp
             "2024-02-01",
             pd.DataFrame(
                 [
-                    {"cb_code": "110001", "price": 100.0, "is_ransom_flag": "False"},
-                    {"cb_code": "110002", "price": 102.0, "is_ransom_flag": "False"},
+                    {"bond_code": "110001", "close_price": 100.0, "is_redeem_triggered": False},
+                    {"bond_code": "110002", "close_price": 102.0, "is_redeem_triggered": False},
                 ]
-            ).set_index("cb_code", drop=False),
+            ).set_index("bond_code", drop=False),
         ),
         (
             "2024-02-02",
             pd.DataFrame(
                 [
-                    {"cb_code": "110001", "price": 101.0, "is_ransom_flag": "False"},
-                    {"cb_code": "110002", "price": 103.0, "is_ransom_flag": "False"},
+                    {"bond_code": "110001", "close_price": 101.0, "is_redeem_triggered": False},
+                    {"bond_code": "110002", "close_price": 103.0, "is_redeem_triggered": False},
                 ]
-            ).set_index("cb_code", drop=False),
+            ).set_index("bond_code", drop=False),
         ),
     ]
 
-    def fake_build_candidates(df_all, _trade_date, _cfg, _head_count):
-        return df_all.reset_index(drop=True)[["cb_code", "price"]]
+    def fake_build_candidates(df_all, _trade_date, _strategy_parameters, _candidate_count):
+        return df_all.reset_index(drop=True)[["bond_code", "close_price"]]
 
     monkeypatch.setattr(phase_a_backtest, "build_candidates", fake_build_candidates)
 
@@ -88,19 +88,17 @@ def test_cb_strategy_core_should_share_same_backtest_core_for_candidates(monkeyp
         "2024-02-01": ["110001", "110002"],
         "2024-02-02": ["110001", "110002"],
     }
-    setting = {"max_hold_num": 2, "rebalance_frequency_type": "trade_day", "rebalance_frequency_value": 1}
+    setting = {"max_hold_count": 2, "rebalance_interval_type": "trade_day", "rebalance_interval_value": 1}
 
     cli_stats = phase_a_backtest.run_backtest(
         dataset=dataset,
-        cfg={},
-        head_count=2,
-        max_hold_num=2,
-        until_win=False,
+        strategy_parameters=cb_strategy_core.build_strategy_parameters({}),
+        runtime_config=cb_strategy_core.build_runtime_config({"candidate_count": 2, "max_hold_count": 2}),
     )
     optimize_stats = phase_a_backtest.run_backtest_from_candidates(
         dataset=dataset,
         candidate_code_map=candidate_map,
-        setting=setting,
+        runtime_config=cb_strategy_core.build_runtime_config(setting),
     )
 
     assert optimize_stats["total_return_pct"] == cli_stats["total_return_pct"]

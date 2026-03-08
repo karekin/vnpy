@@ -9,9 +9,9 @@ from vnpy.web.domain.cb_quant import cb_strategy_core
 
 
 class CrawlerPhaseABacktestAdapter:
-    """Phase A 回测适配层。
+    """可转债策略回测适配层。
 
-    历史上这里曾通过外部脚本动态加载 Phase A 能力；现在运行时核心已经迁入 `vnpy`，
+    历史上这里曾通过外部脚本动态加载策略核心；现在运行时核心已经迁入 `vnpy`，
     这里保留适配层，
     主要负责：
     - 统一历史快照读取入口
@@ -20,16 +20,16 @@ class CrawlerPhaseABacktestAdapter:
     """
 
     _FALLBACK_SETTING: dict[str, Any] = {
-        "price_bemchmark": 115.0,
-        "premium_bemchmark": 25.0,
-        "stock_ratio": 0.3,
-        "premium_ratio": 0.3,
-        "stock_stdevry_bemchmark": 30.0,
-        "max_price": 130.0,
-        "head_count": 10,
-        "remain_ratio": 0.1,
-        "max_hold_num": 12,
-        "until_win": False,
+        "price_benchmark": 115.0,
+        "premium_benchmark": 25.0,
+        "stock_weight": 0.3,
+        "premium_weight": 0.3,
+        "volatility_benchmark": 30.0,
+        "max_candidate_price": 130.0,
+        "candidate_count": 12,
+        "outstanding_amount_weight": 0.1,
+        "max_hold_count": 12,
+        "hold_until_profit": False,
     }
 
     def __init__(self, data_dir: Path | None = None) -> None:
@@ -73,19 +73,13 @@ class CrawlerPhaseABacktestAdapter:
         if not sliced:
             raise RuntimeError("No market snapshots available for selected backtest window")
 
-        cfg = module.build_strategy_config(setting)
-        head_count = int(round(float(setting.get("head_count", 10))))
-        head_count = max(head_count, 1)
-        max_hold_num = int(round(float(setting.get("max_hold_num", 12))))
-        max_hold_num = max(max_hold_num, 1)
-        until_win = bool(setting.get("until_win", False))
+        strategy_parameters = module.build_strategy_parameters(setting)
+        runtime_config = module.build_runtime_config(setting)
 
         stats = module.run_backtest(
             dataset=sliced,
-            cfg=cfg,
-            head_count=head_count,
-            max_hold_num=max_hold_num,
-            until_win=until_win,
+            strategy_parameters=strategy_parameters,
+            runtime_config=runtime_config,
         )
         stats["sample_days"] = len(sliced)
         stats["window_name"] = window_name
@@ -119,22 +113,22 @@ class CrawlerPhaseABacktestAdapter:
             module = self._load_module()
             base_cfg = dict(module.multiple_factors_config)
             return {
-                "price_bemchmark": float(base_cfg.get("price_bemchmark", 115)),
-                "premium_bemchmark": float(base_cfg.get("premium_bemchmark", 25)),
-                "stock_ratio": float(base_cfg.get("stock_ratio", 0.3)),
-                "premium_ratio": float(base_cfg.get("premium_ratio", 0.3)),
-                "stock_stdevry_bemchmark": float(base_cfg.get("stock_stdevry_bemchmark", 30)),
-                "max_price": float(base_cfg.get("max_price", 130)),
-                "head_count": int(base_cfg.get("head_count", 10)),
-                "remain_ratio": float(base_cfg.get("remain_ratio", 0.1)),
-                "max_hold_num": 12,
-                "until_win": False,
+                "price_benchmark": float(base_cfg.get("price_benchmark", 115)),
+                "premium_benchmark": float(base_cfg.get("premium_benchmark", 25)),
+                "stock_weight": float(base_cfg.get("stock_weight", 0.3)),
+                "premium_weight": float(base_cfg.get("premium_weight", 0.3)),
+                "volatility_benchmark": float(base_cfg.get("volatility_benchmark", 30)),
+                "max_candidate_price": float(base_cfg.get("max_candidate_price", 130)),
+                "candidate_count": 12,
+                "outstanding_amount_weight": float(base_cfg.get("outstanding_amount_weight", 0.1)),
+                "max_hold_count": 12,
+                "hold_until_profit": False,
             }
         except Exception:
             return dict(self._FALLBACK_SETTING)
 
     def _load_module(self):
-        """返回已融合进 `vnpy` 的 Phase A 核心模块。"""
+        """返回已融合进 `vnpy` 的策略核心模块。"""
         return cb_strategy_core
 
     @staticmethod

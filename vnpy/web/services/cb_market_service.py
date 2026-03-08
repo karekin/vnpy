@@ -216,43 +216,43 @@ class CbMarketService:
             rows: list[BondMarketRow] = []
 
             for _, row in frame.iterrows():
-                price = _to_float(row.get("price"))
+                price = _to_float(row.get("close_price"))
                 if price is None or price <= 0:
                     continue
 
-                amount_wan = _to_float(row.get("market_cap"))
+                amount_wan = _to_float(row.get("turnover_amount_wan"))
                 if amount_wan is not None and amount_wan < min_volume_wan:
                     continue
 
-                premium = _to_float(row.get("premium_rate")) or 0.0
+                premium = _to_float(row.get("conversion_premium_pct")) or 0.0
                 convert_value = price / (1 + premium / 100) if premium > -99 else None
-                remain_years = _parse_year_text(row.get("date_remain_distance"))
-                remain_scale_yi = _to_float(row.get("remain_amount"))
-                expiry_ytm_pre_tax = _to_float(row.get("rate_expire_aftertax")) or _to_float(row.get("rate_expire"))
-                put_ytm = _to_float(row.get("rate_return"))
+                remain_years = (_to_float(row.get("days_to_maturity")) or 0.0) / 365.0
+                remain_scale_yi = _to_float(row.get("outstanding_amount_yi"))
+                expiry_ytm_pre_tax = _to_float(row.get("ytm_to_maturity_after_tax_pct")) or _to_float(row.get("ytm_to_maturity_pct"))
+                put_ytm = _to_float(row.get("ytm_to_put_pct"))
                 stock_market = (_safe_text(row.get("market")) or "").lower()
 
                 rows.append(
                     BondMarketRow(
-                        bond_id=_to_code6(row.get("cb_code")),
-                        bond_name=_safe_text(row.get("cb_name")) or "",
+                        bond_id=_to_code6(row.get("bond_code")),
+                        bond_name=_safe_text(row.get("bond_name")) or "",
                         price=round(price, 3),
-                        increase_rt=round(_to_float(row.get("cb_percent")) or 0.0, 2),
-                        stock_id=f"{stock_market}{_to_code6(row.get('stock_code'))}" if stock_market else _to_code6(row.get("stock_code")),
-                        stock_name=_safe_text(row.get("stock_name")) or "",
-                        stock_price=_to_float(row.get("stock_price")),
-                        stock_increase_rt=_to_float(row.get("stock_percent")),
-                        stock_pb=_to_float(row.get("pb")),
-                        convert_price=_to_float(row.get("convert_stock_price")),
-                        pure_bond_value=_to_float(row.get("new_style")),
+                        increase_rt=round(_to_float(row.get("bond_pct_change")) or 0.0, 2),
+                        stock_id=f"{stock_market}{_to_code6(row.get('underlying_stock_code'))}" if stock_market else _to_code6(row.get("underlying_stock_code")),
+                        stock_name=_safe_text(row.get("underlying_stock_name")) or "",
+                        stock_price=_to_float(row.get("underlying_close_price")),
+                        stock_increase_rt=_to_float(row.get("underlying_pct_change")),
+                        stock_pb=_to_float(row.get("underlying_pb")),
+                        convert_price=_to_float(row.get("conversion_price")),
+                        pure_bond_value=_to_float(row.get("pure_bond_value")),
                         premium_rt=round(premium, 2),
                         convert_value=round(convert_value, 3) if convert_value is not None else 0.0,
                         dblow=round(price + premium, 3),
-                        option_value=_to_float(row.get("old_style")),
-                        stock_volatility=_to_float(row.get("stock_stdevry")),
+                        option_value=_to_float(row.get("option_value")),
+                        stock_volatility=_to_float(row.get("underlying_volatility")),
                         put_trigger_price=None,
                         redeem_trigger_price=None,
-                        float_mv_ratio=_to_float(row.get("remain_to_cap")),
+                        float_mv_ratio=_to_float(row.get("outstanding_to_market_cap_ratio")),
                         fund_holding_ratio=None,
                         maturity_date=None,
                         remain_years=remain_years,
@@ -264,7 +264,7 @@ class CbMarketService:
                         volume_wan=round(amount_wan, 1) if amount_wan is not None else 0.0,
                         issue_scale_yi=remain_scale_yi,
                         rating=_safe_text(row.get("rating")),
-                        listed_date=_to_date_str(row.get("issue_date")),
+                        listed_date=_to_date_str(row.get("listing_date")),
                         convert_start_date=None,
                         subscribe_date=None,
                         source="snapshot.local",

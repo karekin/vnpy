@@ -1,133 +1,64 @@
-"""可转债日级快照的标准字段定义。
+"""可转债标准快照 schema。
 
-这份 schema 是 `cb_daily_snapshot.payload_json` 的唯一标准来源。
-所有写库路径都应把原始行整理成这里定义的字段集合，避免：
+这份模型是 `cb_daily_snapshot.payload_json` 的唯一真源：
 
-- 不同数据源写出不同字段名
-- 历史兼容字段无限累积
-- 策略核心和本地快照回退读取到的字段口径不一致
+- 数据写库前统一规范到 `SnapshotRow`
+- 策略核心和回测统一消费这些标准字段
+- 中文名、默认值、类型只在这一处维护
 """
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Any
 
-
-SNAPSHOT_FIELD_DEFAULTS: dict[str, Any] = {
-    "cb_code": "",
-    "cb_name": "",
-    "stock_code": "",
-    "stock_name": "",
-    "price": 0.0,
-    "cb_percent": 0.0,
-    "premium_rate": 0.0,
-    "convert_stock_price": 0.0,
-    "new_style": 0.0,
-    "old_style": 0.0,
-    "cb_to_pb": 1.0,
-    "stock_stdevry": 30.0,
-    "stock_price": 0.0,
-    "stock_percent": 0.0,
-    "pb": 1.5,
-    "market_cap": 0.0,
-    "remain_amount": 10.0,
-    "remain_to_cap": 0.0,
-    "issue_date": "2022-01-01",
-    "date_return_distance": "未到",
-    "date_remain_distance": "0天",
-    "date_convert_distance": "已到",
-    "is_unlist": "N",
-    "last_is_unlist": "N",
-    "is_ransom_flag": "False",
-    "is_call": "",
-    "redeem_remain_days": None,
-    "rate_expire": 0.0,
-    "rate_expire_aftertax": 0.0,
-    "rate_return": 0.0,
-    "market": "",
-    "rating": "",
-    "volume": 0.0,
-    "market_source": "",
-}
+from pydantic import BaseModel, ConfigDict, Field
 
 
-SNAPSHOT_FIELD_LABELS: dict[str, str] = {
-    "cb_code": "可转债代码",
-    "cb_name": "可转债名称",
-    "stock_code": "股票代码",
-    "stock_name": "股票名称",
-    "price": "转债价格",
-    "cb_percent": "转债涨跌幅",
-    "premium_rate": "转股溢价率",
-    "convert_stock_price": "转股价格",
-    "new_style": "纯债价值",
-    "old_style": "期权价值",
-    "cb_to_pb": "转债价格/纯债价值",
-    "stock_stdevry": "正股波动率",
-    "stock_price": "股价",
-    "stock_percent": "股价涨跌幅",
-    "pb": "市净率",
-    "market_cap": "股票市值",
-    "remain_amount": "剩余规模",
-    "remain_to_cap": "转债剩余/市值比例",
-    "issue_date": "发行日期",
-    "date_return_distance": "距离回售时间",
-    "date_remain_distance": "距离到期时间",
-    "date_convert_distance": "距离转股时间",
-    "is_unlist": "未发行",
-    "last_is_unlist": "上期未发行",
-    "is_ransom_flag": "是否满足强赎条件",
-    "is_call": "强赎状态",
-    "redeem_remain_days": "强赎剩余天数",
-    "rate_expire": "到期收益率",
-    "rate_expire_aftertax": "税后到期收益率",
-    "rate_return": "回售收益率",
-    "market": "市场",
-    "rating": "债券评级",
-    "volume": "成交额",
-    "market_source": "行情来源",
-}
+class SnapshotField(StrEnum):
+    BOND_CODE = "bond_code"
+    BOND_NAME = "bond_name"
+    UNDERLYING_STOCK_CODE = "underlying_stock_code"
+    UNDERLYING_STOCK_NAME = "underlying_stock_name"
+    CLOSE_PRICE = "close_price"
+    BOND_PCT_CHANGE = "bond_pct_change"
+    CONVERSION_PREMIUM_PCT = "conversion_premium_pct"
+    CONVERSION_PRICE = "conversion_price"
+    PURE_BOND_VALUE = "pure_bond_value"
+    OPTION_VALUE = "option_value"
+    BOND_PURE_VALUE_RATIO = "bond_pure_value_ratio"
+    UNDERLYING_VOLATILITY = "underlying_volatility"
+    UNDERLYING_CLOSE_PRICE = "underlying_close_price"
+    UNDERLYING_PCT_CHANGE = "underlying_pct_change"
+    UNDERLYING_PB = "underlying_pb"
+    UNDERLYING_MARKET_CAP_YI = "underlying_market_cap_yi"
+    OUTSTANDING_AMOUNT_YI = "outstanding_amount_yi"
+    OUTSTANDING_TO_MARKET_CAP_RATIO = "outstanding_to_market_cap_ratio"
+    LISTING_DATE = "listing_date"
+    PUT_STATUS = "put_status"
+    DAYS_TO_MATURITY = "days_to_maturity"
+    DAYS_TO_CONVERSION_START = "days_to_conversion_start"
+    IS_LISTED = "is_listed"
+    WAS_LISTED_PREV_DAY = "was_listed_prev_day"
+    IS_REDEEM_TRIGGERED = "is_redeem_triggered"
+    REDEEM_STATUS = "redeem_status"
+    DAYS_TO_REDEEM = "days_to_redeem"
+    YTM_TO_MATURITY_PCT = "ytm_to_maturity_pct"
+    YTM_TO_MATURITY_AFTER_TAX_PCT = "ytm_to_maturity_after_tax_pct"
+    YTM_TO_PUT_PCT = "ytm_to_put_pct"
+    MARKET = "market"
+    RATING = "rating"
+    TURNOVER_AMOUNT_WAN = "turnover_amount_wan"
+    DATA_SOURCE = "data_source"
 
 
-_FLOAT_FIELDS = {
-    "price",
-    "cb_percent",
-    "premium_rate",
-    "convert_stock_price",
-    "new_style",
-    "old_style",
-    "cb_to_pb",
-    "stock_stdevry",
-    "stock_price",
-    "stock_percent",
-    "pb",
-    "market_cap",
-    "remain_amount",
-    "remain_to_cap",
-    "rate_expire",
-    "rate_expire_aftertax",
-    "rate_return",
-    "volume",
-}
-_TEXT_FIELDS = {
-    "cb_code",
-    "cb_name",
-    "stock_code",
-    "stock_name",
-    "issue_date",
-    "date_return_distance",
-    "date_remain_distance",
-    "date_convert_distance",
-    "is_call",
-    "market",
-    "rating",
-    "market_source",
-}
-_YN_FIELDS = {"is_unlist", "last_is_unlist"}
-_TF_FIELDS = {"is_ransom_flag"}
+class PutStatus(StrEnum):
+    NOT_APPLICABLE = "not_applicable"
+    NOT_REACHED = "not_reached"
+    ACTIVE = "active"
 
 
-def _safe_float(value: Any, default: float) -> float:
+def _to_float(value: Any, default: float) -> float:
     try:
         if value is None:
             return default
@@ -138,80 +69,136 @@ def _safe_float(value: Any, default: float) -> float:
         return default
 
 
-def _normalize_yn(value: Any, default: str) -> str:
+def _to_int(value: Any, default: int) -> int:
+    try:
+        if value is None:
+            return default
+        if isinstance(value, str) and not value.strip():
+            return default
+        return int(float(value))
+    except Exception:
+        return default
+
+
+def _to_optional_int(value: Any) -> int | None:
+    if value in (None, "", "None"):
+        return None
+    try:
+        return int(float(value))
+    except Exception:
+        return None
+
+
+def _to_bool(value: Any, default: bool) -> bool:
     if value is None:
         return default
     if isinstance(value, bool):
-        return "Y" if value else "N"
-    text = str(value).strip().upper()
-    if text in {"Y", "N"}:
-        return text
-    if text in {"TRUE", "T", "YES", "1"}:
-        return "Y"
-    if text in {"FALSE", "F", "NO", "0"}:
-        return "N"
-    return default
-
-
-def _normalize_tf(value: Any, default: str) -> str:
-    if value is None:
+        return value
+    text = str(value).strip().lower()
+    if not text:
         return default
-    if isinstance(value, bool):
-        return "True" if value else "False"
-    text = str(value).strip()
-    if text in {"True", "False"}:
-        return text
-    upper = text.upper()
-    if upper in {"TRUE", "T", "YES", "1"}:
-        return "True"
-    if upper in {"FALSE", "F", "NO", "0"}:
-        return "False"
+    if text in {"1", "true", "t", "yes", "y"}:
+        return True
+    if text in {"0", "false", "f", "no", "n"}:
+        return False
     return default
+
+
+class SnapshotRow(BaseModel):
+    """回测快照的标准字段模型。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    bond_code: str = Field(default="", json_schema_extra={"label": "可转债代码"})
+    bond_name: str = Field(default="", json_schema_extra={"label": "可转债名称"})
+    underlying_stock_code: str = Field(default="", json_schema_extra={"label": "正股代码"})
+    underlying_stock_name: str = Field(default="", json_schema_extra={"label": "正股名称"})
+    close_price: float = Field(default=0.0, json_schema_extra={"label": "转债收盘价", "unit": "元"})
+    bond_pct_change: float = Field(default=0.0, json_schema_extra={"label": "转债涨跌幅", "unit": "%"})
+    conversion_premium_pct: float = Field(default=0.0, json_schema_extra={"label": "转股溢价率", "unit": "%"})
+    conversion_price: float = Field(default=0.0, json_schema_extra={"label": "转股价", "unit": "元"})
+    pure_bond_value: float = Field(default=0.0, json_schema_extra={"label": "纯债价值", "unit": "元"})
+    option_value: float = Field(default=0.0, json_schema_extra={"label": "期权价值", "unit": "元"})
+    bond_pure_value_ratio: float = Field(default=1.0, json_schema_extra={"label": "债价债底比"})
+    underlying_volatility: float = Field(default=30.0, json_schema_extra={"label": "正股波动率"})
+    underlying_close_price: float = Field(default=0.0, json_schema_extra={"label": "正股价格", "unit": "元"})
+    underlying_pct_change: float = Field(default=0.0, json_schema_extra={"label": "正股涨跌幅", "unit": "%"})
+    underlying_pb: float = Field(default=1.5, json_schema_extra={"label": "正股 PB"})
+    underlying_market_cap_yi: float = Field(default=0.0, json_schema_extra={"label": "正股市值", "unit": "亿"})
+    outstanding_amount_yi: float = Field(default=10.0, json_schema_extra={"label": "剩余规模", "unit": "亿"})
+    outstanding_to_market_cap_ratio: float = Field(default=0.0, json_schema_extra={"label": "剩余规模/市值比"})
+    listing_date: str = Field(default="2022-01-01", json_schema_extra={"label": "上市日期"})
+    put_status: PutStatus = Field(default=PutStatus.NOT_REACHED, json_schema_extra={"label": "回售状态"})
+    days_to_maturity: int = Field(default=0, json_schema_extra={"label": "距离到期天数", "unit": "天"})
+    days_to_conversion_start: int = Field(default=0, json_schema_extra={"label": "距离转股开始天数", "unit": "天"})
+    is_listed: bool = Field(default=True, json_schema_extra={"label": "是否已上市"})
+    was_listed_prev_day: bool = Field(default=True, json_schema_extra={"label": "上一交易日是否已上市"})
+    is_redeem_triggered: bool = Field(default=False, json_schema_extra={"label": "是否满足强赎条件"})
+    redeem_status: str = Field(default="", json_schema_extra={"label": "强赎状态"})
+    days_to_redeem: int | None = Field(default=None, json_schema_extra={"label": "距离强赎天数", "unit": "天"})
+    ytm_to_maturity_pct: float = Field(default=0.0, json_schema_extra={"label": "到期收益率", "unit": "%"})
+    ytm_to_maturity_after_tax_pct: float = Field(default=0.0, json_schema_extra={"label": "税后到期收益率", "unit": "%"})
+    ytm_to_put_pct: float = Field(default=0.0, json_schema_extra={"label": "回售收益率", "unit": "%"})
+    market: str = Field(default="", json_schema_extra={"label": "市场"})
+    rating: str = Field(default="", json_schema_extra={"label": "评级"})
+    turnover_amount_wan: float = Field(default=0.0, json_schema_extra={"label": "成交额", "unit": "万"})
+    data_source: str = Field(default="", json_schema_extra={"label": "数据来源"})
+
+
+def _build_field_labels() -> dict[str, str]:
+    labels: dict[str, str] = {}
+    for key, field_info in SnapshotRow.model_fields.items():
+        extra = field_info.json_schema_extra or {}
+        labels[key] = str(extra.get("label") or key)
+    return labels
+
+
+SNAPSHOT_FIELD_LABELS: dict[str, str] = _build_field_labels()
+SNAPSHOT_FIELD_DEFAULTS: dict[str, Any] = SnapshotRow().model_dump()
 
 
 def normalize_snapshot_row(row: dict[str, Any]) -> dict[str, Any]:
     """把任意来源的快照行收口到标准字段集合。"""
-    normalized: dict[str, Any] = {}
-    source = str(row.get("market_source") or row.get("source") or "").strip()
-
-    for key, default in SNAPSHOT_FIELD_DEFAULTS.items():
-        value = row.get(key, default)
-        if key == "market_source":
-            value = source
-        elif key in _FLOAT_FIELDS:
-            value = _safe_float(value, float(default))
-        elif key in _TEXT_FIELDS:
-            value = str(value or default).strip()
-        elif key in _YN_FIELDS:
-            value = _normalize_yn(value, str(default))
-        elif key in _TF_FIELDS:
-            value = _normalize_tf(value, str(default))
-        elif key == "redeem_remain_days":
-            if value in (None, "", "None"):
-                value = None
-            else:
-                try:
-                    value = int(float(value))
-                except Exception:
-                    value = None
-        normalized[key] = value
-
-    normalized["cb_code"] = str(normalized["cb_code"]).strip()
-    normalized["stock_code"] = str(normalized["stock_code"]).strip()
-    normalized["issue_date"] = str(normalized["issue_date"] or SNAPSHOT_FIELD_DEFAULTS["issue_date"])[:10]
-    normalized["date_return_distance"] = str(
-        normalized["date_return_distance"] or SNAPSHOT_FIELD_DEFAULTS["date_return_distance"]
+    data = dict(row)
+    normalized = SnapshotRow(
+        bond_code=str(data.get("bond_code") or "").strip(),
+        bond_name=str(data.get("bond_name") or "").strip(),
+        underlying_stock_code=str(data.get("underlying_stock_code") or "").strip(),
+        underlying_stock_name=str(data.get("underlying_stock_name") or "").strip(),
+        close_price=_to_float(data.get("close_price"), 0.0),
+        bond_pct_change=_to_float(data.get("bond_pct_change"), 0.0),
+        conversion_premium_pct=_to_float(data.get("conversion_premium_pct"), 0.0),
+        conversion_price=_to_float(data.get("conversion_price"), 0.0),
+        pure_bond_value=_to_float(data.get("pure_bond_value"), 0.0),
+        option_value=_to_float(data.get("option_value"), 0.0),
+        bond_pure_value_ratio=_to_float(data.get("bond_pure_value_ratio"), 1.0),
+        underlying_volatility=_to_float(data.get("underlying_volatility"), 30.0),
+        underlying_close_price=_to_float(data.get("underlying_close_price"), 0.0),
+        underlying_pct_change=_to_float(data.get("underlying_pct_change"), 0.0),
+        underlying_pb=_to_float(data.get("underlying_pb"), 1.5),
+        underlying_market_cap_yi=_to_float(data.get("underlying_market_cap_yi"), 0.0),
+        outstanding_amount_yi=_to_float(data.get("outstanding_amount_yi"), 10.0),
+        outstanding_to_market_cap_ratio=_to_float(data.get("outstanding_to_market_cap_ratio"), 0.0),
+        listing_date=str(data.get("listing_date") or SNAPSHOT_FIELD_DEFAULTS["listing_date"])[:10],
+        put_status=PutStatus(str(data.get("put_status") or PutStatus.NOT_REACHED)),
+        days_to_maturity=max(0, _to_int(data.get("days_to_maturity"), 0)),
+        days_to_conversion_start=max(0, _to_int(data.get("days_to_conversion_start"), 0)),
+        is_listed=_to_bool(data.get("is_listed"), True),
+        was_listed_prev_day=_to_bool(data.get("was_listed_prev_day"), True),
+        is_redeem_triggered=_to_bool(data.get("is_redeem_triggered"), False),
+        redeem_status=str(data.get("redeem_status") or "").strip(),
+        days_to_redeem=_to_optional_int(data.get("days_to_redeem")),
+        ytm_to_maturity_pct=_to_float(data.get("ytm_to_maturity_pct"), 0.0),
+        ytm_to_maturity_after_tax_pct=_to_float(data.get("ytm_to_maturity_after_tax_pct"), 0.0),
+        ytm_to_put_pct=_to_float(data.get("ytm_to_put_pct"), 0.0),
+        market=str(data.get("market") or "").strip(),
+        rating=str(data.get("rating") or "").strip(),
+        turnover_amount_wan=_to_float(data.get("turnover_amount_wan"), 0.0),
+        data_source=str(data.get("data_source") or "").strip(),
     )
-    normalized["date_remain_distance"] = str(
-        normalized["date_remain_distance"] or SNAPSHOT_FIELD_DEFAULTS["date_remain_distance"]
-    )
-    normalized["date_convert_distance"] = str(
-        normalized["date_convert_distance"] or SNAPSHOT_FIELD_DEFAULTS["date_convert_distance"]
-    )
-
-    if normalized["cb_to_pb"] <= 0:
-        pure_bond_value = float(normalized["new_style"])
-        price = float(normalized["price"])
-        normalized["cb_to_pb"] = round(price / pure_bond_value, 4) if pure_bond_value > 0 else 1.0
-
-    return normalized
+    dumped = normalized.model_dump()
+    if dumped["bond_pure_value_ratio"] <= 0:
+        pure_bond_value = float(dumped["pure_bond_value"])
+        close_price = float(dumped["close_price"])
+        dumped["bond_pure_value_ratio"] = round(close_price / pure_bond_value, 4) if pure_bond_value > 0 else 1.0
+    return dumped

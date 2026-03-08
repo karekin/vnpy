@@ -2,11 +2,11 @@
 
 本模块承担两类工作：
 
-1. 把 Tushare 的原始表同步到本地 ODS/因子表/快照表
+1. 把 Tushare 的原始表同步到本地 ODS/因子表/标准快照表
 2. 把多张 Tushare 表临时拼成前端可直接消费的市场列表
 
-难点不在“请求接口”，而在于把 Tushare 字段整形成项目历史上一直使用的
-crawler 兼容格式，保证老回测逻辑无需大改也能继续工作。
+难点不在“请求接口”，而在于把多源字段稳定收口到当前标准快照 schema，
+保证回测、优化和行情回退路径都使用同一套字段口径。
 """
 
 from __future__ import annotations
@@ -236,7 +236,7 @@ class CbTushareService:
         2. 转债基础表
         3. 可选事件表（强赎、转股价调整等）
         4. 每个交易日的转债日线、正股日线/估值
-        5. 生成因子表与 crawler 兼容快照表
+        5. 生成因子表与标准快照表
         """
         token = self._load_token()
         resolved_http_url = str(http_url or self._load_http_url()).strip()
@@ -812,20 +812,20 @@ class CbTushareService:
         trade_date: str,
         row: dict[str, Any],
     ) -> dict[str, Any]:
-        """把 Tushare 的强赎事件文本解析成回测可用标记。
+        """把 Tushare 的强赎事件文本解析成内部事件字典。
 
-        输出里最关键的是：
-        - `is_ransom_flag`: 是否视为高风险强赎
-        - `redeem_remain_days`: 若能算出，距离赎回还有多少天
+        这里先保留一份简短的中间结构，后续在生成标准快照时再统一映射到：
+        - `is_redeem_triggered`
+        - `days_to_redeem`
         """
         trade_dt = datetime.strptime(trade_date, "%Y-%m-%d").date()
         call_type = str(_pick(row, "call_type", default="")).strip()
-        is_call = str(_pick(row, "is_call", default="")).strip()
+        redeem_status = str(_pick(row, "is_call", default="")).strip()
         countdown_active = False
         risk_active = False
-        if "强赎" in call_type and "不强赎" not in is_call:
-            countdown_active = any(keyword in is_call for keyword in ("满足强赎", "提示强赎", "实施强赎", "强赎"))
-            risk_active = any(keyword in is_call for keyword in ("已满足强赎条件", "公告实施强赎", "实施强赎"))
+        if "强赎" in call_type and "不强赎" not in redeem_status:
+            countdown_active = any(keyword in redeem_status for keyword in ("满足强赎", "提示强赎", "实施强赎", "强赎"))
+            risk_active = any(keyword in redeem_status for keyword in ("已满足强赎条件", "公告实施强赎", "实施强赎"))
 
         remaining_candidates: list[int] = []
         for field_name in ("call_reg_date", "call_date", "payment_date"):
@@ -840,17 +840,17 @@ class CbTushareService:
             if delta >= 0:
                 remaining_candidates.append(delta)
 
-        redeem_remain_days: int | None = min(remaining_candidates) if remaining_candidates else None
-        if countdown_active and redeem_remain_days is None:
+        days_to_redeem: int | None = min(remaining_candidates) if remaining_candidates else None
+        if countdown_active and days_to_redeem is None:
             # Tushare announces “已满足/提示/实施强赎”时，优先按高风险 0 天处理。
-            redeem_remain_days = 0
+            days_to_redeem = 0
 
         return {
             "call_type": call_type,
-            "is_call": is_call,
+            "redeem_status": redeem_status,
             "ann_date": _to_ymd(_pick(row, "ann_date")) if _pick(row, "ann_date") else None,
-            "redeem_remain_days": redeem_remain_days,
-            "is_ransom_flag": "True" if risk_active else "False",
+            "days_to_redeem": days_to_redeem,
+            "is_redeem_triggered": risk_active,
         }
 
     @staticmethod
@@ -948,7 +948,7 @@ class CbTushareService:
                 price_cache[code6] = price
             premium_rate = _safe_float(_pick(cb_row, "bond_prem", "premium_rt", "premium_rate"), 0.0)
             pure_bond_value = _safe_float(_pick(cb_row, "bond_value", "pure_bond_value"), 0.0)
-            cb_to_pb = price / pure_bond_value if pure_bond_value > 0 else 1.0
+            bond_pure_value_ratio = price / pure_bond_value if pure_bond_value > 0 else 1.0
 
             market_cap = _safe_float(_pick(stock_basic, "total_mv", "circ_mv"), 0.0)
             if market_cap > 0:
@@ -969,28 +969,32 @@ class CbTushareService:
 
             factor_row = {
                 "trade_date": trade_date,
-                "cb_code": code6,
-                "cb_name": str(_pick(basic, "bond_short_name", "bond_name", default=ts_code)),
+                "bond_code": code6,
+                "bond_name": str(_pick(basic, "bond_short_name", "bond_name", default=ts_code)),
+                "underlying_stock_code": _ts_code_to_code6(stock_ts_code),
+                "underlying_stock_name": str(_pick(stock_daily, "name", default="")),
                 "stock_ts_code": stock_ts_code,
-                "price": round(price, 4),
+                "close_price": round(price, 4),
                 "price_fill_source": price_fill_source,
-                "premium_rate": round(premium_rate, 4),
-                "cb_to_pb": round(cb_to_pb, 4),
-                "pb": round(stock_pb, 4),
-                "stock_stdevry": round(stock_stdevry, 4),
-                "remain_amount": round(remain_amount, 4),
-                "market_cap": round(market_cap, 4),
-                "issue_date": issue_date,
-                "date_return_distance": return_distance,
-                "date_remain_distance": remain_distance,
+                "conversion_premium_pct": round(premium_rate, 4),
+                "bond_pure_value_ratio": round(bond_pure_value_ratio, 4),
+                "underlying_pb": round(stock_pb, 4),
+                "underlying_volatility": round(stock_stdevry, 4),
+                "outstanding_amount_yi": round(remain_amount, 4),
+                "underlying_market_cap_yi": round(market_cap, 4),
+                "listing_date": issue_date,
+                "put_status": "active" if return_distance == "回售内" else "not_reached",
+                "days_to_maturity": max(0, int(round(remain_years * 365.0))) if remain_years is not None else 0,
                 "remain_years": round(remain_years, 4) if remain_years is not None else None,
-                "is_unlist": "N",
-                "last_is_unlist": "N",
-                "is_ransom_flag": str(call_info.get("is_ransom_flag", "False")),
-                "is_call": str(call_info.get("is_call", "")).strip(),
-                "redeem_remain_days": call_info.get("redeem_remain_days"),
-                "new_style": round(pure_bond_value, 4),
-                "source": "tushare.pro",
+                "is_listed": True,
+                "was_listed_prev_day": True,
+                "is_redeem_triggered": bool(call_info.get("is_redeem_triggered", False)),
+                "redeem_status": str(call_info.get("redeem_status", "")).strip(),
+                "days_to_redeem": call_info.get("days_to_redeem"),
+                "pure_bond_value": round(pure_bond_value, 4),
+                "underlying_close_price": round(_safe_float(_pick(stock_daily, "close"), 0.0), 4),
+                "underlying_pct_change": round(stock_pct_chg, 4),
+                "data_source": "tushare.pro",
             }
             factor_rows.append(factor_row)
 

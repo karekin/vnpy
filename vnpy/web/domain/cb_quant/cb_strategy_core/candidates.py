@@ -6,50 +6,34 @@ from typing import Any
 
 import pandas as pd
 
-from vnpy.web.domain.cb_quant.cb_strategy_core.normalizer import _safe_float
 from vnpy.web.domain.cb_quant.cb_strategy_core.scoring import filter_multiple_factors
-from vnpy.web.domain.cb_quant.cb_strategy_core.settings import multiple_factors_config
+from vnpy.web.domain.cb_quant.cb_strategy_core.settings import (
+    StrategyParameters,
+    build_strategy_parameters as normalize_strategy_parameters,
+)
 
 
-def build_strategy_config(setting: dict[str, Any]) -> dict[str, Any]:
-    """把外部参数组合整理成筛债逻辑使用的多因子配置。
-
-    这一步的职责是：
-    - 以默认配置为基线补齐缺省字段
-    - 把外部参数组合里真正参与筛债的字段投影到 cfg
-    - 派生 `bond_ratio = 1 - stock_ratio`
-    - 对少数分母型阈值做最小值保护，避免评分公式失真
-    """
-    cfg = dict(multiple_factors_config)
-    stock_ratio = _safe_float(setting["stock_ratio"], cfg["stock_ratio"])
-    bond_ratio = round(1 - stock_ratio, 2)
-
-    cfg["price_bemchmark"] = max(0.01, _safe_float(setting["price_bemchmark"], cfg["price_bemchmark"]))
-    cfg["premium_bemchmark"] = max(0.01, _safe_float(setting["premium_bemchmark"], cfg["premium_bemchmark"]))
-    cfg["stock_ratio"] = stock_ratio
-    cfg["bond_ratio"] = bond_ratio
-    cfg["premium_ratio"] = _safe_float(setting["premium_ratio"], cfg["premium_ratio"])
-    cfg["stock_stdevry_bemchmark"] = max(
-        0.01,
-        _safe_float(setting["stock_stdevry_bemchmark"], cfg["stock_stdevry_bemchmark"]),
-    )
-    cfg["max_price"] = _safe_float(setting["max_price"], cfg["max_price"])
-    cfg["remain_ratio"] = _safe_float(setting["remain_ratio"], cfg["remain_ratio"])
-    cfg["redeem_remain_days_limit"] = setting.get("redeem_remain_days_limit", cfg.get("redeem_remain_days_limit"))
-    return cfg
+def build_strategy_parameters(setting: dict[str, Any] | StrategyParameters) -> StrategyParameters:
+    """把外部参数组合整理成筛债逻辑使用的标准参数模型。"""
+    return normalize_strategy_parameters(setting)
 
 
-def build_candidates(df_all: pd.DataFrame, date_text: str, cfg: dict[str, Any], head_count: int) -> pd.DataFrame:
+def build_candidates(
+    df_all: pd.DataFrame,
+    trade_date: str,
+    strategy_parameters: StrategyParameters,
+    candidate_count: int,
+) -> pd.DataFrame:
     """给定单日全市场快照，生成按得分排序的候选债列表。"""
     try:
         df_candidate = filter_multiple_factors(
             df_all.copy(),
-            date=date_text,
-            multiple_factors_config=cfg,
+            trade_date=trade_date,
+            strategy_parameters=strategy_parameters,
         )
     except KeyError:
         return pd.DataFrame(columns=df_all.columns)
 
-    if head_count > 0:
-        df_candidate = df_candidate.head(head_count)
+    if candidate_count > 0:
+        df_candidate = df_candidate.head(candidate_count)
     return df_candidate

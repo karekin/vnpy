@@ -1028,9 +1028,6 @@ class CbQuantService:
             message_parts.append("未产生有效交易策略，请放宽阈值或调整参数范围。")
         if task_config.benchmark_name and task_config.benchmark_name != "转债等权":
             message_parts.append(f"已记录任务基准“{task_config.benchmark_name}”，当前分析暂按转债等权进行对比。")
-        if task_config.fee_permille > 0:
-            message_parts.append(f"已记录单边手续费 {task_config.fee_permille:.3f}‰，当前分析尚未扣减手续费成本。")
-
         response = StrategyOptimizeTaskAnalysisResponse(
             task_id=task.task_id,
             template_id=task.template_id,
@@ -2206,8 +2203,8 @@ class CbQuantService:
         self,
         *,
         dataset: list[tuple[str, Any]],
-        cfg: dict[str, Any],
-        head_count: int,
+        strategy_parameters: cb_strategy_core.StrategyParameters,
+        candidate_count: int,
     ) -> dict[str, list[str]]:
         """预先为每个交易日构建候选代码列表。
 
@@ -2216,18 +2213,23 @@ class CbQuantService:
         candidate_code_map: dict[str, list[str]] = {}
         for trade_date, frame in dataset:
             try:
-                candidate = cb_strategy_core.build_candidates(frame, trade_date, cfg, head_count)
+                candidate = cb_strategy_core.build_candidates(
+                    frame,
+                    trade_date,
+                    strategy_parameters,
+                    candidate_count,
+                )
             except Exception:
                 candidate = None
             if candidate is None or getattr(candidate, "empty", True):
                 candidate_code_map[trade_date] = []
                 continue
             try:
-                codes = candidate["cb_code"].astype(str).tolist()
+                codes = candidate["bond_code"].astype(str).tolist()
             except Exception:
                 candidate_code_map[trade_date] = []
                 continue
-            candidate_code_map[trade_date] = codes[: max(1, head_count)]
+            candidate_code_map[trade_date] = codes[: max(1, candidate_count)]
         return candidate_code_map
 
     def _run_backtest_from_candidate_map(
@@ -2244,12 +2246,12 @@ class CbQuantService:
         过去这里单独维护了一套轻量回测状态机，导致它和 `cb_strategy_core.run_backtest(...)`
         长期存在“逻辑非常相似、但又不是同一份代码”的问题。现在优化链路也直接
         委托给 `cb_strategy_core.run_backtest_from_candidates(...)`，把持仓轮动、调仓频率、
-        强赎、止盈止损、`until_win` 等规则统一到同一套核心实现上。
+        强赎、止盈止损、`hold_until_profit` 等规则统一到同一套核心实现上。
         """
         return cb_strategy_core.run_backtest_from_candidates(
             dataset=dataset,
             candidate_code_map=candidate_code_map,
-            setting=setting,
+            runtime_config=cb_strategy_core.build_runtime_config(setting),
         )
 
     def _evaluate_combo(
@@ -2286,13 +2288,13 @@ class CbQuantService:
         # 先把任务级运行配置叠加到参数组合 setting 上。
         # 例如调仓频率、仓位、止盈止损等，最终都要以这里的 setting 为准。
         setting = self._apply_task_config_to_setting(setting, task_config)
-        head_count = max(1, int(round(self._to_float(setting.get("head_count"), 10.0))))
-        max_hold_num = max(1, int(round(self._to_float(setting.get("max_hold_num"), 12.0))))
-        until_win = bool(setting.get("until_win", False))
+        candidate_count = max(1, int(round(self._to_float(setting.get("candidate_count"), 10.0))))
+        max_hold_count = max(1, int(round(self._to_float(setting.get("max_hold_count"), 12.0))))
+        hold_until_profit = bool(setting.get("hold_until_profit", False))
 
         # 把通用 setting 转成 cb_strategy_core 真正用于筛债的 cfg。
         # 后面 `build_candidates(...)` 会直接使用这个 cfg。
-        cfg = cb_strategy_core.build_strategy_config(setting)
+        strategy_parameters = cb_strategy_core.build_strategy_parameters(setting)
         base_dataset: list[tuple[str, Any]] = []
         if window_dataset_map is not None:
             # 当调用方已经提前准备好多个窗口切片时，这里优先挑“长度最大”的一份数据集，
@@ -2307,8 +2309,8 @@ class CbQuantService:
         # 候选池基于“可用范围最大的一份数据集”预计算一次，避免多窗口重复生成。
         candidate_code_map = self._build_candidate_code_map(
             dataset=base_dataset,
-            cfg=cfg,
-            head_count=head_count,
+            strategy_parameters=strategy_parameters,
+            candidate_count=candidate_count,
         )
 
         all_metrics: list[dict[str, float]] = []
@@ -2449,51 +2451,51 @@ class CbQuantService:
     def _build_setting_from_factor_values(self, values: dict[str, Any]) -> dict[str, Any]:
         setting = self._adapter.default_setting()
         direct_map: dict[str, str] = {
-            "price_bemchmark": "price_bemchmark",
-            "premium_bemchmark": "premium_bemchmark",
-            "stock_ratio": "stock_ratio",
-            "premium_ratio": "premium_ratio",
-            "stock_stdevry_bemchmark": "stock_stdevry_bemchmark",
-            "max_price": "max_price",
-            "head_count": "head_count",
-            "remain_ratio": "remain_ratio",
-            "max_hold_num": "max_hold_num",
+            "price_benchmark": "price_benchmark",
+            "premium_benchmark": "premium_benchmark",
+            "stock_weight": "stock_weight",
+            "premium_weight": "premium_weight",
+            "volatility_benchmark": "volatility_benchmark",
+            "max_candidate_price": "max_candidate_price",
+            "candidate_count": "candidate_count",
+            "outstanding_amount_weight": "outstanding_amount_weight",
+            "max_hold_count": "max_hold_count",
         }
         for factor_key, setting_key in direct_map.items():
             if factor_key in values:
                 setting[setting_key] = values[factor_key]
 
-        if "premium_max" in values and "premium_bemchmark" not in values:
-            setting["premium_bemchmark"] = self._to_float(values["premium_max"], 25.0)
-        if "conv_prem" in values and "premium_bemchmark" not in values:
-            setting["premium_bemchmark"] = self._to_float(values["conv_prem"], 25.0)
+        if "premium_max" in values and "premium_benchmark" not in values:
+            setting["premium_benchmark"] = self._to_float(values["premium_max"], 25.0)
+        if "conv_prem" in values and "premium_benchmark" not in values:
+            setting["premium_benchmark"] = self._to_float(values["conv_prem"], 25.0)
         if "price_max" in values:
-            setting["max_price"] = self._to_float(values["price_max"], setting.get("max_price", 130.0))
-        if "remain_size" in values and "remain_ratio" not in values:
+            setting["max_candidate_price"] = self._to_float(values["price_max"], setting.get("max_candidate_price", 130.0))
+        if "remain_size" in values and "outstanding_amount_weight" not in values:
             remain_size = self._to_float(values["remain_size"], 12.0)
-            setting["remain_ratio"] = max(0.05, min(0.50, remain_size / 100.0))
-        if "turnover" in values and "stock_stdevry_bemchmark" not in values:
+            setting["outstanding_amount_weight"] = max(0.05, min(0.50, remain_size / 100.0))
+        if "turnover" in values and "volatility_benchmark" not in values:
             turnover = self._to_float(values["turnover"], 2.0)
-            setting["stock_stdevry_bemchmark"] = max(10.0, min(60.0, turnover * 4.0 + 12.0))
-        if "dblow" in values and "price_bemchmark" not in values:
+            setting["volatility_benchmark"] = max(10.0, min(60.0, turnover * 4.0 + 12.0))
+        if "dblow" in values and "price_benchmark" not in values:
             dblow = self._to_float(values["dblow"], 140.0)
-            premium = self._to_float(setting.get("premium_bemchmark"), 25.0)
-            setting["price_bemchmark"] = max(90.0, min(180.0, dblow - premium))
+            premium = self._to_float(setting.get("premium_benchmark"), 25.0)
+            setting["price_benchmark"] = max(90.0, min(180.0, dblow - premium))
         if "rating" in values:
             rating = str(values["rating"]).upper()
             if rating == "AAA":
-                setting["premium_ratio"] = 0.2
-                setting["max_price"] = min(130.0, self._to_float(setting.get("max_price"), 130.0))
+                setting["premium_weight"] = 0.2
+                setting["max_candidate_price"] = min(130.0, self._to_float(setting.get("max_candidate_price"), 130.0))
             elif rating == "AA+":
-                setting["premium_ratio"] = 0.25
+                setting["premium_weight"] = 0.25
             else:
-                setting["premium_ratio"] = 0.3
+                setting["premium_weight"] = 0.3
 
-        setting["head_count"] = max(1, int(round(self._to_float(setting.get("head_count"), 10.0))))
-        setting["max_hold_num"] = max(1, int(round(self._to_float(setting.get("max_hold_num"), 12.0))))
-        setting["stock_ratio"] = max(0.0, min(1.0, self._to_float(setting.get("stock_ratio"), 0.3)))
-        setting["premium_ratio"] = max(0.0, min(1.0, self._to_float(setting.get("premium_ratio"), 0.3)))
-        setting["until_win"] = bool(setting.get("until_win", False))
+        setting["candidate_count"] = max(1, int(round(self._to_float(setting.get("candidate_count"), 10.0))))
+        setting["max_hold_count"] = max(1, int(round(self._to_float(setting.get("max_hold_count"), 12.0))))
+        setting["stock_weight"] = max(0.0, min(1.0, self._to_float(setting.get("stock_weight"), 0.3)))
+        setting["premium_weight"] = max(0.0, min(1.0, self._to_float(setting.get("premium_weight"), 0.3)))
+        setting["hold_until_profit"] = bool(setting.get("hold_until_profit", False))
         return setting
 
     def _score_current_market(self, setting: dict[str, Any], limit: int = 20) -> tuple[list[StrategyTopBondRow], str]:
@@ -2501,17 +2503,17 @@ class CbQuantService:
         if market.source.startswith("fallback.mock"):
             raise RuntimeError(f"realtime market source unavailable: {market.source}")
         rows = []
-        price_b = max(1.0, self._to_float(setting.get("price_bemchmark"), 115.0))
-        premium_b = max(1.0, self._to_float(setting.get("premium_bemchmark"), 25.0))
-        stock_ratio = max(0.0, min(1.0, self._to_float(setting.get("stock_ratio"), 0.3)))
-        bond_ratio = max(0.0, min(1.0, 1.0 - stock_ratio))
-        premium_ratio = max(0.0, min(1.0, self._to_float(setting.get("premium_ratio"), 0.3)))
-        remain_ratio = max(0.0, min(1.0, self._to_float(setting.get("remain_ratio"), 0.1)))
-        stdev_b = max(5.0, self._to_float(setting.get("stock_stdevry_bemchmark"), 30.0))
-        max_price = self._to_float(setting.get("max_price"), 130.0)
+        price_b = max(1.0, self._to_float(setting.get("price_benchmark"), 115.0))
+        premium_b = max(1.0, self._to_float(setting.get("premium_benchmark"), 25.0))
+        stock_weight = max(0.0, min(1.0, self._to_float(setting.get("stock_weight"), 0.3)))
+        bond_weight = max(0.0, min(1.0, 1.0 - stock_weight))
+        premium_weight = max(0.0, min(1.0, self._to_float(setting.get("premium_weight"), 0.3)))
+        outstanding_amount_weight = max(0.0, min(1.0, self._to_float(setting.get("outstanding_amount_weight"), 0.1)))
+        stdev_b = max(5.0, self._to_float(setting.get("volatility_benchmark"), 30.0))
+        max_candidate_price = self._to_float(setting.get("max_candidate_price"), 130.0)
 
         for item in market.items:
-            if item.price > max_price:
+            if item.price > max_candidate_price:
                 continue
             if item.premium_rt > 200:
                 continue
@@ -2534,8 +2536,8 @@ class CbQuantService:
             stdev_score = min(1.5, max(0.6, 1 - (stdev_b - stock_vol) / stdev_b))
 
             score = round(
-                bond_ratio * price_score
-                + stock_ratio * (premium_score * premium_ratio + stdev_score * 0.2 + remain_score * remain_ratio + pb_score * 0.1),
+                bond_weight * price_score
+                + stock_weight * (premium_score * premium_weight + stdev_score * 0.2 + remain_score * outstanding_amount_weight + pb_score * 0.1),
                 4,
             )
             if score <= 0:
@@ -2580,11 +2582,11 @@ class CbQuantService:
         - 每日换手
         - 每次轮动后的持仓快照
         """
-        cfg = cb_strategy_core.build_strategy_config(setting)
-        head_count = max(1, int(round(self._to_float(setting.get("head_count"), 10.0))))
-        max_hold_num = max(1, int(round(self._to_float(setting.get("max_hold_num"), 12.0))))
-        until_win = bool(setting.get("until_win", False))
-        per_position = self._position_ratio(setting=setting, max_hold_num=max_hold_num)
+        strategy_parameters = cb_strategy_core.build_strategy_parameters(setting)
+        candidate_count = max(1, int(round(self._to_float(setting.get("candidate_count"), 10.0))))
+        max_hold_count = max(1, int(round(self._to_float(setting.get("max_hold_count"), 12.0))))
+        hold_until_profit = bool(setting.get("hold_until_profit", False))
+        per_position = self._position_ratio(setting=setting, max_hold_count=max_hold_count)
 
         dates: list[str] = []
         daily_returns: list[float] = []
@@ -2608,13 +2610,18 @@ class CbQuantService:
         last_rebalance_index = 0
 
         for index, (trade_date, df_all) in enumerate(dataset):
-            candidate = cb_strategy_core.build_candidates(df_all, trade_date, cfg, head_count)
+            candidate = cb_strategy_core.build_candidates(
+                df_all,
+                trade_date,
+                strategy_parameters,
+                candidate_count,
+            )
             if candidate is None:
                 candidate = df_all.iloc[0:0]
             if candidate is None or candidate.empty:
                 candidate_codes: set[str] = set()
             else:
-                candidate_codes = set(candidate["cb_code"].astype(str).tolist())
+                candidate_codes = set(candidate["bond_code"].astype(str).tolist())
             rebalance_due = self._should_rebalance(
                 index=index,
                 trade_date=trade_date,
@@ -2627,13 +2634,13 @@ class CbQuantService:
                 # 首个交易日不计算收益，只负责用当日候选池初始化持仓。
                 # 这样从第二个交易日起，收益率才有明确的“昨收 -> 今收”基准。
                 if candidate is not None and not candidate.empty:
-                    for _, row in candidate.head(max_hold_num).iterrows():
-                        price = self._to_float(row.get("price"), 0.0)
+                    for _, row in candidate.head(max_hold_count).iterrows():
+                        price = self._to_float(row.get("close_price"), 0.0)
                         if price <= 0:
                             continue
                         holdings.append(
                             {
-                                "code": str(row.get("cb_code", "")),
+                                "code": str(row.get("bond_code", "")),
                                 "buy_price": price,
                                 "last_price": price,
                                 "ratio": per_position,
@@ -2670,7 +2677,7 @@ class CbQuantService:
                 if code not in df_all.index:
                     continue
                 row = df_all.loc[code]
-                cur_price = self._to_float(row.get("price"), self._to_float(item.get("last_price"), 0.0))
+                cur_price = self._to_float(row.get("close_price"), self._to_float(item.get("last_price"), 0.0))
                 last_price = self._to_float(item.get("last_price"), cur_price)
                 ratio = self._to_float(item.get("ratio"), 0.0)
                 if last_price > 0:
@@ -2691,7 +2698,7 @@ class CbQuantService:
             # 先做卖出/留仓判断：
             # - 不在快照中的券直接卖出
             # - 强赎、止盈止损命中则卖出
-            # - until_win 打开时，亏损仓位可延迟退出
+            # - hold_until_profit 打开时，亏损仓位可延迟退出
             # - 到调仓日后，再根据 candidate_codes 判定是否继续持有
             for item in holdings:
                 code = str(item.get("code", ""))
@@ -2699,15 +2706,15 @@ class CbQuantService:
                     sell_list.append(item)
                     continue
                 row = df_all.loc[code]
-                cur_price = self._to_float(row.get("price"), self._to_float(item.get("last_price"), 0.0))
-                is_ransom = str(row.get("is_ransom_flag", "False")) == "True"
-                if is_ransom:
+                cur_price = self._to_float(row.get("close_price"), self._to_float(item.get("last_price"), 0.0))
+                is_redeem_triggered = bool(row.get("is_redeem_triggered", False))
+                if is_redeem_triggered:
                     sell_list.append(item)
                     continue
                 if self._should_exit_by_price_limits(setting=setting, item=item, current_price=cur_price):
                     sell_list.append(item)
                     continue
-                if until_win and cur_price <= self._to_float(item.get("buy_price"), cur_price):
+                if hold_until_profit and cur_price <= self._to_float(item.get("buy_price"), cur_price):
                     keep_list.append(item)
                     continue
                 if not rebalance_due:
@@ -2722,7 +2729,7 @@ class CbQuantService:
                 code = str(item.get("code", ""))
                 if code in df_all.index:
                     row = df_all.loc[code]
-                    sell_price = self._to_float(row.get("price"), self._to_float(item.get("last_price"), 0.0))
+                    sell_price = self._to_float(row.get("close_price"), self._to_float(item.get("last_price"), 0.0))
                 else:
                     sell_price = self._to_float(item.get("last_price"), 0.0)
                 buy_price = self._to_float(item.get("buy_price"), sell_price)
@@ -2732,15 +2739,15 @@ class CbQuantService:
 
             existing_codes = {str(item.get("code", "")) for item in keep_list}
             if rebalance_due:
-                # 只有调仓日才会从候选池补买，且补到 max_hold_num 为止。
+                # 只有调仓日才会从候选池补买，且补到 max_hold_count 为止。
                 # 非调仓日即使有更高分标的出现，也不会主动替换现有持仓。
                 for _, row in candidate.iterrows():
-                    if len(keep_list) >= max_hold_num:
+                    if len(keep_list) >= max_hold_count:
                         break
-                    code = str(row.get("cb_code", ""))
+                    code = str(row.get("bond_code", ""))
                     if code in existing_codes:
                         continue
-                    price = self._to_float(row.get("price"), 0.0)
+                    price = self._to_float(row.get("close_price"), 0.0)
                     if price <= 0:
                         continue
                     keep_list.append(
@@ -2760,7 +2767,7 @@ class CbQuantService:
                 day_turnover = changed_count / max(1, len(prev_codes)) * 100.0
             else:
                 changed_count = len(current_codes)
-                day_turnover = changed_count / max(1, max_hold_num) * 100.0
+                day_turnover = changed_count / max(1, max_hold_count) * 100.0
 
             holdings = keep_list
             prev_codes = current_codes
@@ -3058,7 +3065,7 @@ class CbQuantService:
                 if hasattr(row, "to_dict"):
                     row = row.to_dict()
                 if isinstance(row, dict):
-                    name = str(row.get("cb_name", "")).strip()
+                    name = str(row.get("bond_name", "")).strip()
             if not name:
                 name = code
             labels.append(f"{name}({code})")
@@ -3100,15 +3107,13 @@ class CbQuantService:
                 config = BacktestTaskConfig.model_validate(task_config or {})
             except Exception:
                 config = BacktestTaskConfig()
-        min_hold = max(1, int(config.min_hold_count))
-        max_hold = max(min_hold, int(config.max_hold_count))
-        freq_value = max(1, int(config.rebalance_frequency_value))
+        max_hold = max(1, int(config.max_hold_count))
+        freq_value = max(1, int(config.rebalance_interval_value))
         initial_capital_wan = max(0.0001, float(config.initial_capital_wan))
-        fee_permille = max(0.0, float(config.fee_permille))
-        max_single_position_pct = max(0.0, min(100.0, float(config.max_single_position_pct)))
-        exclude_redeem_remain_days = config.exclude_redeem_remain_days
-        if exclude_redeem_remain_days is not None:
-            exclude_redeem_remain_days = max(0, int(exclude_redeem_remain_days))
+        max_position_pct = max(0.0, min(100.0, float(config.max_position_pct)))
+        exclude_redeem_days_below = config.exclude_redeem_days_below
+        if exclude_redeem_days_below is not None:
+            exclude_redeem_days_below = max(0, int(exclude_redeem_days_below))
         take_profit_pct = config.take_profit_pct
         stop_loss_pct = config.stop_loss_pct
         if take_profit_pct is not None:
@@ -3118,12 +3123,10 @@ class CbQuantService:
         return config.model_copy(
             update={
                 "initial_capital_wan": initial_capital_wan,
-                "fee_permille": fee_permille,
-                "min_hold_count": min_hold,
                 "max_hold_count": max_hold,
-                "rebalance_frequency_value": freq_value,
-                "max_single_position_pct": max_single_position_pct,
-                "exclude_redeem_remain_days": exclude_redeem_remain_days,
+                "rebalance_interval_value": freq_value,
+                "max_position_pct": max_position_pct,
+                "exclude_redeem_days_below": exclude_redeem_days_below,
                 "take_profit_pct": take_profit_pct,
                 "stop_loss_pct": stop_loss_pct,
             }
@@ -3138,33 +3141,26 @@ class CbQuantService:
         config = self._normalize_task_config(task_config)
         merged = dict(setting)
         merged["initial_capital_wan"] = config.initial_capital_wan
-        merged["fee_permille"] = config.fee_permille
         merged["benchmark_name"] = config.benchmark_name
-        merged["symbol_pool_mode"] = config.symbol_pool_mode
-        merged["symbol_pool_name"] = config.symbol_pool_name
-        merged["rebalance_frequency_type"] = config.rebalance_frequency_type
-        merged["rebalance_frequency_value"] = config.rebalance_frequency_value
-        merged["holding_weight"] = config.holding_weight
-        merged["max_single_position_pct"] = config.max_single_position_pct
-        merged["min_hold_count"] = config.min_hold_count
-        merged["max_hold_num"] = config.max_hold_count
-        merged["rebalance_threshold"] = float(config.rebalance_threshold)
-        merged["rebalance_timing"] = config.rebalance_timing
-        merged["redeem_remain_days_limit"] = config.exclude_redeem_remain_days
+        merged["rebalance_interval_type"] = config.rebalance_interval_type
+        merged["rebalance_interval_value"] = config.rebalance_interval_value
+        merged["max_position_pct"] = config.max_position_pct
+        merged["max_hold_count"] = config.max_hold_count
+        merged["exclude_redeem_days_below"] = config.exclude_redeem_days_below
         merged["take_profit_pct"] = config.take_profit_pct
         merged["stop_loss_pct"] = config.stop_loss_pct
-        merged["head_count"] = max(
-            int(round(self._to_float(merged.get("head_count"), float(config.max_hold_count)))),
+        merged["candidate_count"] = max(
+            int(round(self._to_float(merged.get("candidate_count"), float(config.max_hold_count)))),
             config.max_hold_count,
         )
         return merged
 
-    def _position_ratio(self, *, setting: dict[str, Any], max_hold_num: int) -> float:
+    def _position_ratio(self, *, setting: dict[str, Any], max_hold_count: int) -> float:
         """根据持仓数和单标的上限，计算单个仓位的目标权重。"""
-        if max_hold_num <= 0:
+        if max_hold_count <= 0:
             return 0.0
-        base_ratio = 1.0 / max_hold_num
-        cap_ratio = self._to_float(setting.get("max_single_position_pct"), 100.0) / 100.0
+        base_ratio = 1.0 / max_hold_count
+        cap_ratio = self._to_float(setting.get("max_position_pct"), 100.0) / 100.0
         cap_ratio = max(0.0, min(1.0, cap_ratio))
         return min(base_ratio, cap_ratio if cap_ratio > 0 else base_ratio)
 
@@ -3180,8 +3176,8 @@ class CbQuantService:
         """根据任务配置判断今天是否到达调仓日。"""
         if index == 0:
             return True
-        freq_type = str(setting.get("rebalance_frequency_type", "trade_day") or "trade_day")
-        freq_value = max(1, int(round(self._to_float(setting.get("rebalance_frequency_value"), 1.0))))
+        freq_type = str(setting.get("rebalance_interval_type", "trade_day") or "trade_day")
+        freq_value = max(1, int(round(self._to_float(setting.get("rebalance_interval_value"), 1.0))))
         if freq_type == "trade_day":
             return (index - last_rebalance_index) >= freq_value
 
@@ -3717,15 +3713,15 @@ class CbQuantService:
             "remain_size": (1, 80, 1),
             "price_max": (105, 150, 1),
             "premium_max": (5, 35, 0.5),
-            "price_bemchmark": (106, 124, 2),
-            "premium_bemchmark": (16, 34, 2),
-            "stock_ratio": (0.20, 0.35, 0.05),
-            "premium_ratio": (0.15, 0.35, 0.05),
-            "stock_stdevry_bemchmark": (20, 35, 5),
-            "max_price": (130, 200, 10),
-            "head_count": (5, 15, 5),
-            "remain_ratio": (0.10, 0.20, 0.05),
-            "max_hold_num": (5, 10, 5),
+            "price_benchmark": (106, 124, 2),
+            "premium_benchmark": (16, 34, 2),
+            "stock_weight": (0.20, 0.35, 0.05),
+            "premium_weight": (0.15, 0.35, 0.05),
+            "volatility_benchmark": (20, 35, 5),
+            "max_candidate_price": (130, 200, 10),
+            "candidate_count": (5, 15, 5),
+            "outstanding_amount_weight": (0.10, 0.20, 0.05),
+            "max_hold_count": (5, 10, 5),
         }
         enum_defaults: dict[str, list[str]] = {
             "rating": ["AA", "AA+", "AAA"],

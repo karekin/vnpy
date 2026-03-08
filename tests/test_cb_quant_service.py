@@ -46,7 +46,7 @@ class _DummyExecutor:
 class _DummyAdapter:
     @staticmethod
     def default_setting() -> dict[str, Any]:
-        return {"price_bemchmark": 110.0}
+        return {"price_benchmark": 110.0}
 
 
 def _build_service() -> CbQuantService:
@@ -178,7 +178,7 @@ class TestBacktestCreateJobsStrictCandidate:
         monkeypatch.setattr(
             service,
             "_resolve_setting_for_combo",
-            lambda **_kwargs: {"price_bemchmark": 110.0, "premium_bemchmark": 25.0},
+            lambda **_kwargs: {"price_benchmark": 110.0, "premium_benchmark": 25.0},
         )
 
         request = BacktestCreateJobsRequest(
@@ -195,7 +195,7 @@ class TestBacktestCreateJobsStrictCandidate:
         assert payload.jobs[0].started_at == ""
         assert payload.jobs[0].worker == ""
         assert len(service._store.saved) == 1
-        assert service._store.saved[0]["context"]["setting"]["price_bemchmark"] == 110.0
+        assert service._store.saved[0]["context"]["setting"]["price_benchmark"] == 110.0
         assert len(service._executor.submitted) == 1
 
     def test_create_jobs_should_support_one_week_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -204,7 +204,7 @@ class TestBacktestCreateJobsStrictCandidate:
         monkeypatch.setattr(
             service,
             "_resolve_setting_for_combo",
-            lambda **_kwargs: {"price_bemchmark": 110.0, "premium_bemchmark": 25.0},
+            lambda **_kwargs: {"price_benchmark": 110.0, "premium_benchmark": 25.0},
         )
 
         request = BacktestCreateJobsRequest(

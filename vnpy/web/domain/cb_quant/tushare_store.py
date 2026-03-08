@@ -174,7 +174,7 @@ class CbTushareStore:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         values: list[tuple[str, str, str, str]] = []
         for row in rows:
-            bond_id = str(row.get("cb_code") or row.get("bond_id") or "").strip()
+            bond_id = str(row.get("bond_code") or row.get("bond_id") or "").strip()
             if not bond_id:
                 continue
             values.append(
@@ -220,13 +220,13 @@ class CbTushareStore:
 
         placeholders = ",".join("?" for _ in normalized)
         sql = (
-            "SELECT src.bond_id, CAST(json_extract(src.row_json, '$.price') AS REAL) AS price "
+            "SELECT src.bond_id, CAST(json_extract(src.row_json, '$.close_price') AS REAL) AS price "
             "FROM ts_cb_factor_daily AS src "
             "JOIN ("
             "  SELECT bond_id, MAX(trade_date) AS max_trade_date "
             "  FROM ts_cb_factor_daily "
             f"  WHERE trade_date < ? AND bond_id IN ({placeholders}) "
-            "    AND CAST(json_extract(row_json, '$.price') AS REAL) > 0 "
+            "    AND CAST(json_extract(row_json, '$.close_price') AS REAL) > 0 "
             "  GROUP BY bond_id"
             ") AS latest "
             "ON src.bond_id = latest.bond_id AND src.trade_date = latest.max_trade_date"

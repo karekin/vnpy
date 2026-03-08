@@ -14,7 +14,7 @@ from vnpy.web.domain.cb_quant.cb_strategy_core.backtest import (
     run_backtest,
     run_backtest_from_candidates,
 )
-from vnpy.web.domain.cb_quant.cb_strategy_core.candidates import build_candidates, build_strategy_config
+from vnpy.web.domain.cb_quant.cb_strategy_core.candidates import build_candidates, build_strategy_parameters
 from vnpy.web.domain.cb_quant.cb_strategy_core.cli import (
     GLOBAL_TARGET,
     build_optimization_setting,
@@ -25,14 +25,23 @@ from vnpy.web.domain.cb_quant.cb_strategy_core.cli import (
     save_results,
 )
 from vnpy.web.domain.cb_quant.cb_strategy_core.normalizer import normalize_market_frame
-from vnpy.web.domain.cb_quant.cb_strategy_core.settings import multiple_factors_config, rename_map
+from vnpy.web.domain.cb_quant.cb_strategy_core.settings import (
+    BacktestRuntimeConfig,
+    StrategyParameters,
+    build_runtime_config,
+    multiple_factors_config,
+    rename_map,
+)
 
 __all__ = [
     "GLOBAL_TARGET",
+    "BacktestRuntimeConfig",
     "Holding",
+    "StrategyParameters",
     "build_candidates",
     "build_optimization_setting",
-    "build_strategy_config",
+    "build_runtime_config",
+    "build_strategy_parameters",
     "compute_daily_return",
     "evaluate_setting",
     "key_func",

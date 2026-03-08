@@ -77,19 +77,12 @@ function defaultDateRange(): { start: string; end: string } {
 function defaultTaskConfig(): BacktestTaskConfig {
   return {
     initialCapitalWan: 100,
-    feePermille: 1,
     benchmarkName: "转债等权",
-    symbolPoolMode: "all",
-    symbolPoolName: "",
-    rebalanceFrequencyType: "trade_day",
-    rebalanceFrequencyValue: 1,
-    holdingWeight: "equal_amount",
-    maxSinglePositionPct: 20,
-    minHoldCount: 5,
+    rebalanceIntervalType: "trade_day",
+    rebalanceIntervalValue: 1,
+    maxPositionPct: 20,
     maxHoldCount: 12,
-    rebalanceThreshold: 0,
-    rebalanceTiming: "close",
-    excludeRedeemRemainDays: null,
+    excludeRedeemDaysBelow: null,
     takeProfitPct: null,
     stopLossPct: null,
   };
@@ -610,11 +603,6 @@ export default function CbQuantBacktestEvaluationPage() {
       setError("至少选择一个回测窗口");
       return;
     }
-    if (taskConfig.minHoldCount > taskConfig.maxHoldCount) {
-      setError("持有范围设置不合法：最少持仓数不能大于最多持仓数。");
-      return;
-    }
-
     setCreating(true);
     setError("");
     setHint("");
@@ -785,22 +773,6 @@ export default function CbQuantBacktestEvaluationPage() {
               />
             </div>
             <div>
-              <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">手续费(单边, ‰)</label>
-              <input
-                type="number"
-                min={0}
-                step="0.1"
-                value={taskConfig.feePermille}
-                onChange={(event) =>
-                  setTaskConfig((prev) => ({
-                    ...prev,
-                    feePermille: Math.max(0, Number(event.target.value) || 0),
-                  }))
-                }
-                className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
-              />
-            </div>
-            <div>
               <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">基准指标</label>
               <select
                 value={taskConfig.benchmarkName}
@@ -882,36 +854,13 @@ export default function CbQuantBacktestEvaluationPage() {
             </div>
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <div>
-                <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">标的池</label>
-                <select
-                  value={taskConfig.symbolPoolMode}
-                  onChange={(event) =>
-                    setTaskConfig((prev) => ({ ...prev, symbolPoolMode: event.target.value as BacktestTaskConfig["symbolPoolMode"] }))
-                  }
-                  className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
-                >
-                  <option value="all">全部标的</option>
-                  <option value="custom">自定义筛选池</option>
-                </select>
-              </div>
-              <div>
-                <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">自定义池名称</label>
-                <input
-                  type="text"
-                  value={taskConfig.symbolPoolName}
-                  onChange={(event) => setTaskConfig((prev) => ({ ...prev, symbolPoolName: event.target.value }))}
-                  placeholder={taskConfig.symbolPoolMode === "custom" ? "例如：双低池/评级池" : "默认沿用全部标的"}
-                  className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
-                />
-              </div>
-              <div>
                 <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">换仓频率类型</label>
                 <select
-                  value={taskConfig.rebalanceFrequencyType}
+                  value={taskConfig.rebalanceIntervalType}
                   onChange={(event) =>
                     setTaskConfig((prev) => ({
                       ...prev,
-                      rebalanceFrequencyType: event.target.value as BacktestTaskConfig["rebalanceFrequencyType"],
+                      rebalanceIntervalType: event.target.value as BacktestTaskConfig["rebalanceIntervalType"],
                     }))
                   }
                   className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
@@ -928,28 +877,15 @@ export default function CbQuantBacktestEvaluationPage() {
                   type="number"
                   min={1}
                   max={365}
-                  value={taskConfig.rebalanceFrequencyValue}
+                  value={taskConfig.rebalanceIntervalValue}
                   onChange={(event) =>
                     setTaskConfig((prev) => ({
                       ...prev,
-                      rebalanceFrequencyValue: Math.max(1, Number(event.target.value) || 1),
+                      rebalanceIntervalValue: Math.max(1, Number(event.target.value) || 1),
                     }))
                   }
                   className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
                 />
-              </div>
-              <div>
-                <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">持有权重</label>
-                <select
-                  value={taskConfig.holdingWeight}
-                  onChange={(event) =>
-                    setTaskConfig((prev) => ({ ...prev, holdingWeight: event.target.value as BacktestTaskConfig["holdingWeight"] }))
-                  }
-                  className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
-                >
-                  <option value="equal_amount">等金额</option>
-                  <option value="equal_weight">等权重</option>
-                </select>
               </div>
               <div>
                 <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">单标的最大仓位(%)</label>
@@ -958,25 +894,12 @@ export default function CbQuantBacktestEvaluationPage() {
                   min={0}
                   max={100}
                   step="0.1"
-                  value={taskConfig.maxSinglePositionPct}
+                  value={taskConfig.maxPositionPct}
                   onChange={(event) =>
                     setTaskConfig((prev) => ({
                       ...prev,
-                      maxSinglePositionPct: Math.min(100, Math.max(0, Number(event.target.value) || 0)),
+                      maxPositionPct: Math.min(100, Math.max(0, Number(event.target.value) || 0)),
                     }))
-                  }
-                  className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
-                />
-              </div>
-              <div>
-                <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">最少持仓数</label>
-                <input
-                  type="number"
-                  min={1}
-                  max={200}
-                  value={taskConfig.minHoldCount}
-                  onChange={(event) =>
-                    setTaskConfig((prev) => ({ ...prev, minHoldCount: Math.max(1, Number(event.target.value) || 1) }))
                   }
                   className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
                 />
@@ -995,48 +918,22 @@ export default function CbQuantBacktestEvaluationPage() {
                 />
               </div>
               <div>
-                <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">换仓阈值</label>
-                <input
-                  type="number"
-                  min={0}
-                  step="0.1"
-                  value={taskConfig.rebalanceThreshold}
-                  onChange={(event) =>
-                    setTaskConfig((prev) => ({ ...prev, rebalanceThreshold: Math.max(0, Number(event.target.value) || 0) }))
-                  }
-                  className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
-                />
-              </div>
-              <div>
                 <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">{"排除强赎剩余计数 <= N"}</label>
                 <input
                   type="number"
                   min={0}
                   max={365}
-                  value={taskConfig.excludeRedeemRemainDays ?? ""}
+                  value={taskConfig.excludeRedeemDaysBelow ?? ""}
                   onChange={(event) => {
                     const value = event.target.value.trim();
                     setTaskConfig((prev) => ({
                       ...prev,
-                      excludeRedeemRemainDays: value ? Math.max(0, Number(value) || 0) : null,
+                      excludeRedeemDaysBelow: value ? Math.max(0, Number(value) || 0) : null,
                     }));
                   }}
                   placeholder="留空=不排除"
                   className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
                 />
-              </div>
-              <div>
-                <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">换仓时间</label>
-                <select
-                  value={taskConfig.rebalanceTiming}
-                  onChange={(event) =>
-                    setTaskConfig((prev) => ({ ...prev, rebalanceTiming: event.target.value as BacktestTaskConfig["rebalanceTiming"] }))
-                  }
-                  className="h-11 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
-                >
-                  <option value="close">每日收盘买卖</option>
-                  <option value="open">每日开盘买卖</option>
-                </select>
               </div>
               <div>
                 <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">止盈(%)</label>

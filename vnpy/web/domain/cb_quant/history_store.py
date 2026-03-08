@@ -60,7 +60,7 @@ class CbHistoryStore:
         values: list[tuple[str, str, str, str, str]] = []
         for row in rows:
             normalized_row = normalize_snapshot_row(dict(row))
-            bond_id = str(normalized_row.get("cb_code") or "").strip()
+            bond_id = str(normalized_row.get("bond_code") or "").strip()
             if not bond_id:
                 continue
             payload = json.dumps(normalized_row, ensure_ascii=False, separators=(",", ":"))
@@ -101,10 +101,10 @@ class CbHistoryStore:
                 if not raw_rows:
                     continue
                 frame = pd.DataFrame(raw_rows)
-                if "cb_code" not in frame.columns:
+                if "bond_code" not in frame.columns:
                     continue
-                frame["cb_code"] = frame["cb_code"].astype(str)
-                frame = frame.set_index("cb_code", drop=False)
+                frame["bond_code"] = frame["bond_code"].astype(str)
+                frame = frame.set_index("bond_code", drop=False)
                 dataset.append((trade_date, frame))
         return dataset
 

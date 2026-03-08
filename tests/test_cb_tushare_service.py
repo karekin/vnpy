@@ -208,12 +208,12 @@ class TestCbTushareServiceSyncRangeSuccess:
         dataset = isolated_service._history_store.load_market_dataset()
         frames = {trade_date: frame for trade_date, frame in dataset}
         first_day = frames["2024-01-29"]
-        assert int(first_day.loc["110001", "redeem_remain_days"]) == 4
-        assert first_day.loc["110001", "is_call"] == "公告提示强赎"
-        assert first_day.loc["110001", "is_ransom_flag"] == "False"
+        assert int(first_day.loc["110001", "days_to_redeem"]) == 4
+        assert first_day.loc["110001", "redeem_status"] == "公告提示强赎"
+        assert bool(first_day.loc["110001", "is_redeem_triggered"]) is False
         assert "price_fill_source" not in first_day.columns
         assert "stock_ts_code" not in first_day.columns
-        assert "market_source" in first_day.columns
+        assert "data_source" in first_day.columns
 
 
 class TestCbTushareServiceSyncRangeFailure:
@@ -282,7 +282,7 @@ class TestCbTusharePriceCleaning:
 
         assert len(factor_rows) == 1
         assert len(snapshot_rows) == 1
-        assert factor_rows[0]["price"] == 101.5
+        assert factor_rows[0]["close_price"] == 101.5
         assert factor_rows[0]["price_fill_source"] == "pre_close"
         assert cache["110001"] == 101.5
 
@@ -295,9 +295,9 @@ class TestCbTusharePriceCleaning:
             rows=[
                 {
                     "trade_date": "2024-01-29",
-                    "cb_code": "110001",
-                    "price": 88.8,
-                    "source": "unit",
+                    "bond_code": "110001",
+                    "close_price": 88.8,
+                    "data_source": "unit",
                 }
             ],
         )
@@ -328,7 +328,7 @@ class TestCbTusharePriceCleaning:
         )
 
         assert len(factor_rows) == 1
-        assert factor_rows[0]["price"] == 88.8
+        assert factor_rows[0]["close_price"] == 88.8
         assert factor_rows[0]["price_fill_source"] == "prev_valid"
         assert cache["110001"] == 88.8
 
