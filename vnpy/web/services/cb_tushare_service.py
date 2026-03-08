@@ -616,6 +616,7 @@ class CbTushareService:
             )
             rows = self._build_market_rows(
                 trade_date=trade_date,
+                as_of=as_of.isoformat(),
                 cb_daily_rows=cb_daily_rows,
                 cb_basic_map=cb_basic_map,
                 stock_daily_map=stock_daily_map,
@@ -647,6 +648,7 @@ class CbTushareService:
         stock_basic_map = self._store.load_trade_row_map(table="ts_stock_daily_basic_ods", trade_date=trade_date)
         rows = self._build_market_rows(
             trade_date=trade_date,
+            as_of=date.today().isoformat(),
             cb_daily_rows=list(cb_daily_map.values()),
             cb_basic_map=cb_basic_map,
             stock_daily_map=stock_daily_map,
@@ -659,6 +661,7 @@ class CbTushareService:
         self,
         *,
         trade_date: str,
+        as_of: str,
         cb_daily_rows: list[dict[str, Any]],
         cb_basic_map: dict[str, dict[str, Any]],
         stock_daily_map: dict[str, dict[str, Any]],
@@ -672,6 +675,14 @@ class CbTushareService:
         """
         rows: list[BondMarketRow] = []
         trade_dt = datetime.strptime(trade_date, "%Y-%m-%d").date()
+        as_of_dt = datetime.strptime(_to_ymd(as_of), "%Y-%m-%d").date()
+        cb_call_map = self._load_cb_call_map(
+            trade_date=trade_date,
+            ts_codes=[
+                str(_pick(item, "ts_code", "bond_code", "code", default="")).strip()
+                for item in cb_daily_rows
+            ],
+        )
         for cb_row in cb_daily_rows:
             ts_code = str(_pick(cb_row, "ts_code", "bond_code", "code", default="")).strip()
             if not ts_code:
@@ -679,6 +690,9 @@ class CbTushareService:
 
             basic = cb_basic_map.get(ts_code, {})
             if not self._is_listed_on_trade_date(basic=basic, trade_date=trade_dt):
+                continue
+            call_info = cb_call_map.get(ts_code, {})
+            if not self._is_tradeable_on_as_of(as_of=as_of_dt, call_info=call_info):
                 continue
 
             code6 = _ts_code_to_code6(ts_code)
@@ -812,6 +826,37 @@ class CbTushareService:
             result[ts_code] = self._parse_cb_call_event(trade_date=trade_date, row=row)
         return result
 
+    def _is_tradeable_on_as_of(self, *, as_of: date, call_info: dict[str, Any]) -> bool:
+        """判断到参考日期时债券是否仍处于可交易阶段。"""
+        call_type = str(call_info.get("call_type") or "").strip()
+        redeem_status = str(call_info.get("redeem_status") or "").strip()
+        if "到赎" not in call_type and "到期赎回" not in redeem_status:
+            return True
+
+        record_date_text = str(call_info.get("call_reg_date") or "").strip()
+        if not record_date_text:
+            return True
+        try:
+            record_date = datetime.strptime(_to_ymd(record_date_text), "%Y-%m-%d").date()
+        except ValueError:
+            return True
+
+        prior_open_dates = self._store.list_open_trade_dates(
+            start_date=(record_date - timedelta(days=15)).isoformat(),
+            end_date=(record_date - timedelta(days=1)).isoformat(),
+        )
+        if len(prior_open_dates) >= 2:
+            stop_trade_date_text = prior_open_dates[-2]
+        elif prior_open_dates:
+            stop_trade_date_text = prior_open_dates[-1]
+        else:
+            return True
+        try:
+            stop_trade_date = datetime.strptime(stop_trade_date_text, "%Y-%m-%d").date()
+        except ValueError:
+            return True
+        return as_of < stop_trade_date
+
     def _parse_cb_call_event(
         self,
         *,
@@ -855,6 +900,9 @@ class CbTushareService:
             "call_type": call_type,
             "redeem_status": redeem_status,
             "ann_date": _to_ymd(_pick(row, "ann_date")) if _pick(row, "ann_date") else None,
+            "call_reg_date": _to_ymd(_pick(row, "call_reg_date")) if _pick(row, "call_reg_date") else None,
+            "call_date": _to_ymd(_pick(row, "call_date")) if _pick(row, "call_date") else None,
+            "payment_date": _to_ymd(_pick(row, "payment_date")) if _pick(row, "payment_date") else None,
             "days_to_redeem": days_to_redeem,
             "is_redeem_triggered": risk_active,
         }

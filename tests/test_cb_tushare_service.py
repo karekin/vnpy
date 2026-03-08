@@ -351,6 +351,7 @@ class TestCbTushareMarketRows:
     ) -> None:
         rows = isolated_service._build_market_rows(
             trade_date="2026-03-06",
+            as_of="2026-03-06",
             cb_daily_rows=[
                 {
                     "ts_code": "127033.SZ",
@@ -394,6 +395,88 @@ class TestCbTushareMarketRows:
                 "600000.SH": {"close": 101.0, "pct_chg": 1.2},
             },
             stock_basic_map={
+                "600000.SH": {"pb": 1.4, "circ_mv": 600000},
+            },
+            min_volume_wan=0,
+        )
+
+        assert [row.bond_id for row in rows] == ["110001"]
+
+    def test_build_market_rows_should_skip_bonds_in_maturity_redemption_stop_trade_window(
+        self,
+        isolated_service: CbTushareService,
+    ) -> None:
+        isolated_service._store.upsert_trade_calendar(
+            [
+                {"cal_date": "20260306", "is_open": "1"},
+                {"cal_date": "20260309", "is_open": "1"},
+                {"cal_date": "20260310", "is_open": "1"},
+                {"cal_date": "20260311", "is_open": "1"},
+            ]
+        )
+        isolated_service._store.upsert_cb_event_rows(
+            event_type="cb_call",
+            rows=[
+                {
+                    "ts_code": "110067.SH",
+                    "call_type": "到赎",
+                    "is_call": "公告到期赎回",
+                    "ann_date": "20260203",
+                    "call_date": "20260312",
+                    "payment_date": "20260312",
+                    "call_reg_date": "20260311",
+                }
+            ],
+        )
+
+        rows = isolated_service._build_market_rows(
+            trade_date="2026-03-06",
+            as_of="2026-03-09",
+            cb_daily_rows=[
+                {
+                    "ts_code": "110067.SH",
+                    "close": 106.999,
+                    "pre_close": 107.014,
+                    "pct_chg": -0.014,
+                    "amount": 61526.3065,
+                },
+                {
+                    "ts_code": "110001.SH",
+                    "close": 102.0,
+                    "pre_close": 101.0,
+                    "pct_chg": 0.99,
+                    "amount": 2345.6,
+                },
+            ],
+            cb_basic_map={
+                "110067.SH": {
+                    "bond_short_name": "华安转债",
+                    "stk_code": "600909.SH",
+                    "stk_short_name": "华安证券",
+                    "maturity_date": "20260312",
+                    "delist_date": "20260312",
+                    "list_date": "20200409",
+                    "conv_price": 5.78,
+                    "remain_size": "1092951165.66",
+                    "issue_size": "2800000000",
+                },
+                "110001.SH": {
+                    "bond_short_name": "CB-ONE",
+                    "stk_code": "600000.SH",
+                    "stk_short_name": "STK-ONE",
+                    "maturity_date": "2028-12-31",
+                    "list_date": "20240101",
+                    "conv_price": 10.0,
+                    "remain_size": "1200000000",
+                    "issue_size": "1200000000",
+                },
+            },
+            stock_daily_map={
+                "600909.SH": {"close": 5.9, "pct_chg": 0.1},
+                "600000.SH": {"close": 101.0, "pct_chg": 1.2},
+            },
+            stock_basic_map={
+                "600909.SH": {"pb": 1.2, "circ_mv": 800000},
                 "600000.SH": {"pb": 1.4, "circ_mv": 600000},
             },
             min_volume_wan=0,
