@@ -151,22 +151,28 @@ class CrawlerPhaseABacktestAdapter:
         if not normalized:
             return []
 
-        if start_date or end_date:
-            begin = datetime.combine(start_date, datetime.min.time()) if start_date else normalized[0][0]
-            end = datetime.combine(end_date, datetime.max.time()) if end_date else normalized[-1][0]
-            return [(ds, frame) for dt, ds, frame in normalized if begin <= dt <= end]
-
-        end = normalized[-1][0]
+        # 窗口名和起止日期都可能存在。
+        # 期望语义应为“先得到窗口自身覆盖范围，再与用户指定日期范围取交集”，
+        # 而不是像旧逻辑那样只要传了 start/end 就把 1w/1y/3y 全部覆盖掉。
+        dataset_begin = normalized[0][0]
+        dataset_end = normalized[-1][0]
+        begin = dataset_begin
+        end = dataset_end
         if window_name == "3y":
-            begin = CrawlerPhaseABacktestAdapter._minus_years(end, years=3)
-            return [(ds, frame) for dt, ds, frame in normalized if dt >= begin]
-        if window_name == "1y":
-            begin = CrawlerPhaseABacktestAdapter._minus_years(end, years=1)
-            return [(ds, frame) for dt, ds, frame in normalized if dt >= begin]
-        if window_name == "1w":
-            begin = end - timedelta(days=7)
-            return [(ds, frame) for dt, ds, frame in normalized if dt >= begin]
-        return [(ds, frame) for _, ds, frame in normalized]
+            begin = CrawlerPhaseABacktestAdapter._minus_years(dataset_end, years=3)
+        elif window_name == "1y":
+            begin = CrawlerPhaseABacktestAdapter._minus_years(dataset_end, years=1)
+        elif window_name == "1w":
+            begin = dataset_end - timedelta(days=7)
+
+        if start_date:
+            begin = max(begin, datetime.combine(start_date, datetime.min.time()))
+        if end_date:
+            end = min(end, datetime.combine(end_date, datetime.max.time()))
+
+        if begin > end:
+            return []
+        return [(ds, frame) for dt, ds, frame in normalized if begin <= dt <= end]
 
     @staticmethod
     def _minus_years(value: datetime, years: int) -> datetime:

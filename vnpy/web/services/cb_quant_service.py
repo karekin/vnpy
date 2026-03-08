@@ -947,6 +947,8 @@ class CbQuantService:
                 message_parts.append(
                     f"指定区间无可用快照，已回退到 {sliced[0][0]}~{sliced[-1][0]}。"
                 )
+        if sliced:
+            message_parts.append(f"实际分析区间：{sliced[0][0]}~{sliced[-1][0]}。")
 
         if not sliced:
             response = StrategyOptimizeTaskAnalysisResponse(
@@ -1530,10 +1532,10 @@ class CbQuantService:
         api_key = self._llm_api_key()
         if not api_key:
             raise RuntimeError("missing MOONSHOT_API_KEY")
+        model = self._llm_model()
         base_url = self._llm_base_url()
         payload = {
-            "model": self._llm_model(),
-            "temperature": 0.2,
+            "model": model,
             "messages": [
                 {
                     "role": "system",
@@ -1544,7 +1546,12 @@ class CbQuantService:
                     "content": prompt_markdown,
                 },
             ],
+            "max_tokens": 1024 * 8,
         }
+        # Kimi K2.5 官方文档示例建议通过 extra_body 禁用 thinking。
+        # 直接走 HTTP 时，本质上就是把该字段并入请求体。
+        if model.startswith("kimi-k2.5") or model.startswith("kimi-k2"):
+            payload["thinking"] = {"type": "disabled"}
         response = requests.post(
             f"{base_url}/chat/completions",
             headers={
@@ -1554,7 +1561,14 @@ class CbQuantService:
             json=payload,
             timeout=(10, 120),
         )
-        response.raise_for_status()
+        if not response.ok:
+            detail = response.text.strip()
+            try:
+                body = response.json()
+                detail = json.dumps(body, ensure_ascii=False)
+            except Exception:
+                pass
+            raise RuntimeError(f"HTTP {response.status_code}: {detail}")
         body = response.json()
         choices = body.get("choices") or []
         if not choices:
@@ -1612,7 +1626,7 @@ class CbQuantService:
 
     @classmethod
     def _llm_model(cls) -> str:
-        return cls._env_or_local("MOONSHOT_MODEL", "kimi-latest")
+        return cls._env_or_local("MOONSHOT_MODEL", "kimi-k2.5")
 
     def get_optimize_summary(
         self,
