@@ -7,6 +7,7 @@ import {
   deleteStrategyTemplate,
   expandStrategyFactorCombos,
   getStrategyTemplateDetail,
+  listFactorCatalog,
   listStrategyTemplates,
   updateStrategyTemplate,
   updateStrategyTemplateConfig,
@@ -41,18 +42,32 @@ function choose(n: number, k: number): number {
 const baselineFactorKeys = [
   "dblow",
   "conv_prem",
+  "bond_prem",
+  "theory_bias",
+  "theory_value",
+  "option_value",
+  "pure_value",
+  "conv_value",
+  "conv_price",
+  "close",
+  "open",
+  "high",
+  "low",
+  "pre_close",
+  "pct_chg",
+  "vol",
+  "amount",
   "turnover",
+  "cap_mv_rate",
+  "ytm",
+  "theory_conv_prem",
+  "mod_conv_prem",
+  "left_years",
   "remain_size",
-  "rating",
-  "price_benchmark",
-  "premium_benchmark",
-  "stock_weight",
-  "premium_weight",
-  "volatility_benchmark",
-  "max_candidate_price",
-  "candidate_count",
-  "outstanding_amount_weight",
-  "max_hold_count",
+  "issue_size",
+  "remain_cap",
+  "list_days",
+  "limit",
 ];
 
 function baselineParamRow(factorKey: string): StrategyParamSpaceRow {
@@ -71,17 +86,32 @@ function baselineParamRow(factorKey: string): StrategyParamSpaceRow {
   const defaults: Record<string, [number, number, number]> = {
     dblow: [100, 180, 5],
     conv_prem: [0, 40, 2],
+    bond_prem: [0, 30, 2],
+    theory_bias: [0, 20, 2],
+    theory_value: [80, 160, 5],
+    option_value: [5, 40, 2],
+    pure_value: [70, 130, 5],
+    conv_value: [80, 160, 5],
+    conv_price: [5, 30, 1],
+    close: [90, 180, 5],
+    open: [90, 180, 5],
+    high: [90, 180, 5],
+    low: [90, 180, 5],
+    pre_close: [90, 180, 5],
+    pct_chg: [0, 10, 1],
+    vol: [100, 100000, 5000],
+    amount: [1000, 50000, 1000],
     turnover: [0.2, 8, 0.2],
+    cap_mv_rate: [1, 80, 1],
+    ytm: [0, 8, 0.5],
+    theory_conv_prem: [0, 30, 2],
+    mod_conv_prem: [0, 40, 2],
+    left_years: [0.5, 6, 0.5],
     remain_size: [1, 80, 1],
-    price_benchmark: [106, 124, 2],
-    premium_benchmark: [16, 34, 2],
-    stock_weight: [0.2, 0.35, 0.05],
-    premium_weight: [0.15, 0.35, 0.05],
-    volatility_benchmark: [20, 35, 5],
-    max_candidate_price: [130, 200, 10],
-    candidate_count: [5, 15, 5],
-    outstanding_amount_weight: [0.1, 0.2, 0.05],
-    max_hold_count: [5, 10, 5],
+    issue_size: [1, 120, 2],
+    remain_cap: [1, 120, 2],
+    list_days: [30, 1500, 30],
+    limit: [-1, 1, 1],
   };
   const [minValue, maxValue, step] = defaults[factorKey] ?? [0, 10, 1];
   return {
@@ -212,6 +242,11 @@ export default function CbQuantStrategyGenerationPage() {
     setRunningActionId("GLOBAL_EXPAND");
     try {
       const allStrategies = await loadAllStrategies();
+      const factorCatalog = await listFactorCatalog({ category: "all", enabledOnly: true });
+      const strongSupportedFactorKeys = factorCatalog.items.flatMap((category) =>
+        category.factors.filter((factor) => factor.templateSelectable).map((factor) => factor.factorKey),
+      );
+      const strongSupportedFactorSet = new Set(strongSupportedFactorKeys);
       let targets = selectedStrategyIds.length
         ? allStrategies.filter((row) => selectedSet.has(row.id))
         : allStrategies;
@@ -222,29 +257,39 @@ export default function CbQuantStrategyGenerationPage() {
           setError("当前筛选结果为空，请清空搜索或调整筛选条件后重试。");
           return;
         }
-        autoCreatedTemplate = await createStrategyTemplate({ name: "双三因子基准策略", owner: "quant_new" });
+        autoCreatedTemplate = await createStrategyTemplate({ name: "双因子基准策略", owner: "quant_new" });
         await updateStrategyTemplateConfig(autoCreatedTemplate.id, {
-          factorKeys: baselineFactorKeys,
+          factorKeys: strongSupportedFactorKeys.length ? strongSupportedFactorKeys : baselineFactorKeys,
           expressionDraft: "",
-          parameterSpace: baselineFactorKeys.map((factorKey) => baselineParamRow(factorKey)),
+          parameterSpace: (strongSupportedFactorKeys.length ? strongSupportedFactorKeys : baselineFactorKeys).map((factorKey) =>
+            baselineParamRow(factorKey),
+          ),
         });
         const detail = await getStrategyTemplateDetail(autoCreatedTemplate.id);
         targets = [detail.template];
       }
 
-      const eligibleTargets = targets.filter((row) => row.factorCount >= 2);
+      const targetDetails = await Promise.all(targets.map(async (row) => getStrategyTemplateDetail(row.id)));
+      const targetSupport = targetDetails.map((detail) => {
+        const supportedCount = detail.config.factorKeys.filter((key) => strongSupportedFactorSet.has(key)).length;
+        return {
+          template: detail.template,
+          supportedCount,
+        };
+      });
+
+      const eligibleTargets = targetSupport
+        .filter((item) => item.supportedCount >= 2)
+        .map((item) => item.template);
 
       if (!eligibleTargets.length) {
-        setError("所选策略因子数不足 2，无法生成双因子/三因子组合。");
+        setError("所选策略强支持因子数不足 2，无法生成双因子组合。");
         return;
       }
 
-      const subsetEstimate = eligibleTargets.reduce(
-        (sum, row) => sum + choose(row.factorCount, 2) + choose(row.factorCount, 3),
-        0,
-      );
+      const subsetEstimate = targetSupport.reduce((sum, item) => sum + choose(item.supportedCount, 2), 0);
       const ok = window.confirm(
-        `将为 ${eligibleTargets.length} 个策略生成全部“双因子+三因子”组合（理论子集约 ${subsetEstimate.toLocaleString()} 个），继续执行吗？`,
+        `将为 ${eligibleTargets.length} 个策略生成全部“双因子”组合（理论子集约 ${subsetEstimate.toLocaleString()} 个），继续执行吗？`,
       );
       if (!ok) {
         return;
@@ -255,7 +300,7 @@ export default function CbQuantStrategyGenerationPage() {
       for (const target of eligibleTargets) {
         const result = await expandStrategyFactorCombos(target.id, {
           minFactorCount: 2,
-          maxFactorCount: 3,
+          maxFactorCount: 2,
         });
         createdTotal += result.createdCount;
         subsetTotal += result.totalSubsets;
@@ -263,10 +308,10 @@ export default function CbQuantStrategyGenerationPage() {
 
       await loadStrategies();
       const skippedCount = targets.length - eligibleTargets.length;
-      const skippedHint = skippedCount > 0 ? `，跳过 ${skippedCount} 个因子数不足 2 的策略` : "";
+      const skippedHint = skippedCount > 0 ? `，跳过 ${skippedCount} 个强支持因子数不足 2 的策略` : "";
       const autoCreateHint = autoCreatedTemplate ? `已自动创建基准策略 ${autoCreatedTemplate.id}。` : "";
       setHint(
-        `${autoCreateHint}已完成 ${eligibleTargets.length} 个策略的双/三因子组合生成，新增策略 ${createdTotal} 个（理论子集 ${subsetTotal.toLocaleString()} 个）${skippedHint}。`,
+        `${autoCreateHint}已完成 ${eligibleTargets.length} 个策略的双因子组合生成，新增策略 ${createdTotal} 个（理论子集 ${subsetTotal.toLocaleString()} 个）${skippedHint}。`,
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "全局生成组合失败");
@@ -381,13 +426,13 @@ export default function CbQuantStrategyGenerationPage() {
   return (
     <CbQuantPageShell
       title="策略生成行动页"
-      subtitle="维护策略参数并批量生成双因子/三因子组合。"
+      subtitle="维护策略参数并批量生成双因子组合。"
     >
       <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
         <div className="flex flex-col gap-3 border-b border-gray-200 px-5 py-4 dark:border-gray-800 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <h3 className="text-lg font-semibold text-gray-800 dark:text-white/90">策略库</h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400">先配置参数空间，再批量生成双因子/三因子组合。</p>
+            <p className="text-sm text-gray-500 dark:text-gray-400">先配置参数空间，再批量生成双因子组合。</p>
           </div>
           <div className="flex flex-nowrap items-center gap-2 overflow-x-auto pb-1">
             <div className="relative">
@@ -418,7 +463,7 @@ export default function CbQuantStrategyGenerationPage() {
               disabled={Boolean(runningActionId) || loading}
               className="inline-flex h-11 items-center justify-center whitespace-nowrap rounded-lg border border-brand-500 px-4 text-sm font-medium text-brand-600 hover:bg-brand-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-brand-400 dark:text-brand-300"
             >
-              {runningActionId === "GLOBAL_EXPAND" ? "生成中..." : "生成双/三因子"}
+              {runningActionId === "GLOBAL_EXPAND" ? "生成中..." : "生成双因子"}
             </button>
             <button
               type="button"
