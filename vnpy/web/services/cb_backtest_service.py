@@ -4,19 +4,19 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from vnpy.web.core import cb_backtest
 from vnpy.web.domain.cb_quant.history_store import CbHistoryStore
-from vnpy.web.domain.cb_quant import cb_strategy_core
 
 
-class CrawlerPhaseABacktestAdapter:
-    """可转债策略回测适配层。
+class CbBacktestService:
+    """可转债回测基础服务。
 
-    历史上这里曾通过外部脚本动态加载策略核心；现在运行时核心已经迁入 `vnpy`，
-    这里保留适配层，
-    主要负责：
-    - 统一历史快照读取入口
-    - 提供窗口切片能力
-    - 让上层服务不必感知底层策略内核的位置变化
+    负责共享的回测基础能力：
+    - 历史快照读取
+    - 数据标准化
+    - 窗口切片
+    - 默认回测参数
+    - 单次回测执行
     """
 
     _FALLBACK_SETTING: dict[str, Any] = {
@@ -47,7 +47,7 @@ class CrawlerPhaseABacktestAdapter:
     ) -> dict[str, Any]:
         module = self._load_module()
         dataset = self.load_market_data()
-        sliced = self._slice_dataset(
+        sliced = self.slice_dataset(
             dataset=dataset,
             window_name=window_name,
             start_date=start_date,
@@ -58,7 +58,7 @@ class CrawlerPhaseABacktestAdapter:
 
         if not sliced and (start_date or end_date):
             fallback_used = True
-            sliced = self._slice_dataset(
+            sliced = self.slice_dataset(
                 dataset=dataset,
                 window_name=window_name,
                 start_date=None,
@@ -90,11 +90,6 @@ class CrawlerPhaseABacktestAdapter:
         return stats
 
     def load_market_data(self) -> list[tuple[str, Any]]:
-        """优先从 cb_snapshots.db 加载历史快照。
-
-        这里不再把 crawler 目录里的 Excel 作为运行时主数据源；
-        如果快照库为空，就返回空数据集，由上层决定是否提示同步或做 bootstrap。
-        """
         dataset = self._history_store.load_market_dataset()
         if dataset:
             module = self._load_module()
@@ -128,11 +123,10 @@ class CrawlerPhaseABacktestAdapter:
             return dict(self._FALLBACK_SETTING)
 
     def _load_module(self):
-        """返回已融合进 `vnpy` 的策略核心模块。"""
-        return cb_strategy_core
+        return cb_backtest
 
     @staticmethod
-    def _slice_dataset(
+    def slice_dataset(
         *,
         dataset: list[tuple[str, Any]],
         window_name: str,
@@ -151,17 +145,14 @@ class CrawlerPhaseABacktestAdapter:
         if not normalized:
             return []
 
-        # 窗口名和起止日期都可能存在。
-        # 期望语义应为“先得到窗口自身覆盖范围，再与用户指定日期范围取交集”，
-        # 而不是像旧逻辑那样只要传了 start/end 就把 1w/1y/3y 全部覆盖掉。
         dataset_begin = normalized[0][0]
         dataset_end = normalized[-1][0]
         begin = dataset_begin
         end = dataset_end
         if window_name == "3y":
-            begin = CrawlerPhaseABacktestAdapter._minus_years(dataset_end, years=3)
+            begin = CbBacktestService._minus_years(dataset_end, years=3)
         elif window_name == "1y":
-            begin = CrawlerPhaseABacktestAdapter._minus_years(dataset_end, years=1)
+            begin = CbBacktestService._minus_years(dataset_end, years=1)
         elif window_name == "1w":
             begin = dataset_end - timedelta(days=7)
 
@@ -179,5 +170,4 @@ class CrawlerPhaseABacktestAdapter:
         try:
             return value.replace(year=value.year - years)
         except ValueError:
-            # Handle leap-day rollbacks like 2024-02-29 -> 2023-02-28.
             return value.replace(month=2, day=28, year=value.year - years)

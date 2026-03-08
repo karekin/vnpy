@@ -13,7 +13,7 @@ from typing import Any
 
 import pandas as pd
 
-from vnpy.web.domain.cb_quant.cb_strategy_core.settings import StrategyParameters
+from vnpy.web.core.cb_backtest.settings import StrategyParameters
 from vnpy.web.domain.cb_quant.snapshot_schema import PutStatus
 
 

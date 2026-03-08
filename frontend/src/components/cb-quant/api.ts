@@ -1411,6 +1411,29 @@ export async function expandStrategyFactorCombos(
   };
 }
 
+export async function generateStrongFactorPairs(): Promise<{
+  factorCount: number;
+  totalPairs: number;
+  createdCount: number;
+  message: string;
+}> {
+  const response = await requestJson<{
+    factor_count: number;
+    total_pairs: number;
+    created_count: number;
+    message: string;
+  }>(buildUrl("/api/v1/cb-quant/strategy/templates/generate-strong-pairs"), {
+    method: "POST",
+  });
+
+  return {
+    factorCount: response.factor_count,
+    totalPairs: response.total_pairs,
+    createdCount: response.created_count,
+    message: response.message,
+  };
+}
+
 export async function updateStrategyTemplate(
   templateId: string,
   payload: {

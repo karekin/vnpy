@@ -27,12 +27,12 @@ from typing import Any, Iterable, TypeVar
 
 import requests
 
-from vnpy.web.adapters import CrawlerPhaseABacktestAdapter
-from vnpy.web.domain.cb_quant import cb_strategy_core
-from vnpy.web.domain.cb_quant.factor_support import is_template_selectable_factor
+from vnpy.web.core import cb_backtest
+from vnpy.web.domain.cb_quant.factor_support import STRONG_SUPPORTED_FACTOR_KEYS, is_template_selectable_factor
 from vnpy.web.domain.cb_quant.quant_store import CbQuantStore
+from vnpy.web.services.cb_backtest_service import CbBacktestService
 from vnpy.web.services.cb_market_service import CbMarketService
-from vnpy.web.schemas import (
+from vnpy.web.contracts.cb_quant import (
     BacktestTaskConfig,
     BacktestCompareResponse,
     BacktestCompareRow,
@@ -69,6 +69,7 @@ from vnpy.web.schemas import (
     StrategyTemplateDetailResponse,
     StrategyExpandFactorCombosRequest,
     StrategyExpandFactorCombosResponse,
+    StrategyGenerateStrongPairsResponse,
     StrategyTemplateListResponse,
     StrategyParamSpaceRow,
     StrategyTemplateRow,
@@ -127,7 +128,7 @@ class CbQuantService:
         """初始化全部运行态缓存，并从本地存储恢复历史状态。"""
         self._lock: Lock = Lock()
         self._executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="cbq-bt")
-        self._adapter: CrawlerPhaseABacktestAdapter = CrawlerPhaseABacktestAdapter()
+        self._backtest_service: CbBacktestService = CbBacktestService()
         self._market_service: CbMarketService = CbMarketService()
         self._seq: int = 0
         self._template_seq: int = 0
@@ -135,7 +136,7 @@ class CbQuantService:
         self._candidate_settings: dict[str, dict[str, Any]] = {}
         self._job_context: dict[str, dict[str, Any]] = {}
         self._leaderboard_business_dates: dict[tuple[str, str, str], str] = {}
-        self._storage_dir: Path = self._adapter.data_dir / "_cb_quant"
+        self._storage_dir: Path = self._backtest_service.data_dir / "_cb_quant"
         self._storage_dir.mkdir(parents=True, exist_ok=True)
         self._store: CbQuantStore = CbQuantStore(self._storage_dir / "cb_quant.db")
         self._templates_file: Path = self._storage_dir / "templates.json"
@@ -464,6 +465,90 @@ class CbQuantService:
             message=message,
         )
 
+    def generate_strong_factor_pairs(self) -> StrategyGenerateStrongPairsResponse:
+        """直接按强支持因子两两组合创建双因子策略模板。
+
+        这条链路不再依赖“先造一个母模板再展开子集”的旧实现，
+        而是把强支持因子集合视为策略来源，直接落地成一批双因子模板。
+        """
+        factor_keys = [key for key in STRONG_SUPPORTED_FACTOR_KEYS if is_template_selectable_factor(key)]
+        factor_count = len(factor_keys)
+        if factor_count < 2:
+            return StrategyGenerateStrongPairsResponse(
+                factor_count=factor_count,
+                total_pairs=0,
+                created_count=0,
+                message="当前强支持因子数不足 2，无法生成双因子策略。",
+            )
+
+        total_pairs = comb(factor_count, 2)
+        created_rows: list[StrategyTemplateRow] = []
+        created_configs: dict[str, StrategyTemplateConfigResponse] = {}
+
+        with self._lock:
+            existing_pair_signatures = {
+                tuple(sorted(config.factor_keys))
+                for config in self._template_configs.values()
+                if len(config.factor_keys) == 2
+            }
+            for subset in combinations(factor_keys, 2):
+                pair_signature = tuple(sorted(subset))
+                if pair_signature in existing_pair_signatures:
+                    continue
+                self._template_seq += 1
+                new_id = f"TPL-{self._template_seq:03d}"
+                now = _now_readable()
+                subset_keys = list(subset)
+                normalized_space = self._normalize_parameter_space(
+                    factor_keys=subset_keys,
+                    parameter_space=[self._default_param_space_row(key) for key in subset_keys],
+                )
+                combo_size = self._calculate_combo_size(
+                    factor_keys=subset_keys,
+                    parameter_space=normalized_space,
+                )
+                name = f"双因子策略-{subset_keys[0]}-{subset_keys[1]}"
+
+                created_rows.append(
+                    StrategyTemplateRow(
+                        id=new_id,
+                        name=name,
+                        version="v0.1.0",
+                        status="draft",
+                        factor_count=2,
+                        rebalance="weekly",
+                        risk_preset="balanced",
+                        combo_size=combo_size,
+                        owner="quant_new",
+                        updated_at=now,
+                    )
+                )
+                created_configs[new_id] = StrategyTemplateConfigResponse(
+                    template_id=new_id,
+                    factor_keys=subset_keys,
+                    expression_draft="",
+                    parameter_space=normalized_space,
+                    combo_size=combo_size,
+                    updated_at=now,
+                )
+
+            if created_rows:
+                self._templates = list(reversed(created_rows)) + self._templates
+                self._template_configs.update(created_configs)
+                self._save_templates_and_configs()
+
+        skipped_existing = total_pairs - len(created_rows)
+        message = f"已基于 {factor_count} 个强支持因子直接生成 {len(created_rows)} 个双因子策略。"
+        if skipped_existing > 0:
+            message += f" 已跳过 {skipped_existing} 个已存在的因子对。"
+
+        return StrategyGenerateStrongPairsResponse(
+            factor_count=factor_count,
+            total_pairs=total_pairs,
+            created_count=len(created_rows),
+            message=message,
+        )
+
     def update_template_config(
         self,
         template_id: str,
@@ -554,7 +639,7 @@ class CbQuantService:
             )
         )
         if not preview_settings:
-            preview_settings = [(f"CMB-{100000 + idx}", self._adapter.default_setting()) for idx in range(request.rows_per_window)]
+            preview_settings = [(f"CMB-{100000 + idx}", self._backtest_service.default_setting()) for idx in range(request.rows_per_window)]
 
         rows: list[CandidateRow] = []
         for window_name in windows:
@@ -671,7 +756,7 @@ class CbQuantService:
     def get_history_data_summary(self) -> HistoryDataSummaryResponse:
         """读取回测快照库摘要，供前端判断是否具备回测条件。"""
         try:
-            dataset = self._adapter.load_market_data()
+            dataset = self._backtest_service.load_market_data()
         except Exception:
             dataset = []
         normalized = sorted(dataset, key=lambda item: item[0])
@@ -679,7 +764,7 @@ class CbQuantService:
             return HistoryDataSummaryResponse(
                 snapshot_count=0,
                 latest_bond_count=0,
-                data_dir=str(self._adapter.data_dir / "_cb_quant" / "cb_snapshots.db"),
+                data_dir=str(self._backtest_service.data_dir / "_cb_quant" / "cb_snapshots.db"),
             )
 
         latest_df = normalized[-1][1]
@@ -689,7 +774,7 @@ class CbQuantService:
             date_end=normalized[-1][0],
             latest_trade_date=normalized[-1][0],
             latest_bond_count=int(len(latest_df)),
-            data_dir=str(self._adapter.data_dir / "_cb_quant" / "cb_snapshots.db"),
+            data_dir=str(self._backtest_service.data_dir / "_cb_quant" / "cb_snapshots.db"),
         )
 
     def create_optimize_task(
@@ -715,8 +800,8 @@ class CbQuantService:
 
         这条链路里几个最容易问到的问题是：
         - 历史数据在哪查：
-          `_run_optimize_task` 里通过 `self._adapter.load_market_data()` 读取，
-          adapter 优先从 `CbHistoryStore.load_market_dataset()` 的本地快照库读取，
+          `_run_optimize_task` 里通过 `self._backtest_service.load_market_data()` 读取，
+          `CbBacktestService` 优先从 `CbHistoryStore.load_market_dataset()` 的本地快照库读取，
           读不到时返回空数据集，由上层决定是否提示同步
         - 配置在哪读：
           这里的 `config = self._template_configs.get(template.id)` 读取模板配置，
@@ -741,7 +826,7 @@ class CbQuantService:
         )
 
         # windows 只是回测窗口定义，不在这里切数据；真正切片在 `_run_optimize_task`
-        # -> `_prepare_window_dataset_map` -> `adapter._slice_dataset(...)`。
+        # -> `_prepare_window_dataset_map` -> `CbBacktestService.slice_dataset(...)`。
         windows = self._normalize_windows(request.windows)
         if not windows:
             windows = ["full", "3y", "1y"]
@@ -793,7 +878,7 @@ class CbQuantService:
         try:
             # 真正的优化计算从这里开始异步提交。
             # 当前请求返回后，后台线程才会进入 `_run_optimize_task(...)`：
-            # 1. `self._adapter.load_market_data()` 读取历史快照
+            # 1. `self._backtest_service.load_market_data()` 读取历史快照
             # 2. `_prepare_window_dataset_map(...)` 按 full/3y/1y/1w 等窗口切片
             # 3. `_iter_combo_results_parallel(...)` 并行遍历参数组合
             # 4. `_evaluate_combo(...)` 评估单个组合
@@ -940,8 +1025,8 @@ class CbQuantService:
         start_date = self._parse_iso_date(task.start_date)
         end_date = self._parse_iso_date(task.end_date)
 
-        dataset = self._adapter.load_market_data()
-        sliced = self._adapter._slice_dataset(
+        dataset = self._backtest_service.load_market_data()
+        sliced = self._backtest_service.slice_dataset(
             dataset=dataset,
             window_name=window,
             start_date=start_date,
@@ -949,7 +1034,7 @@ class CbQuantService:
         )
         message_parts: list[str] = []
         if not sliced and (start_date or end_date):
-            sliced = self._adapter._slice_dataset(
+            sliced = self._backtest_service.slice_dataset(
                 dataset=dataset,
                 window_name=window,
                 start_date=None,
@@ -1775,9 +1860,9 @@ class CbQuantService:
             message="任务已出队，正在初始化引擎与加载数据",
         )
 
-        # 读取历史快照数据集。adapter 会优先从 cb_snapshots.db 读取标准化日快照；
+        # 读取历史快照数据集。`CbBacktestService` 会优先从 cb_snapshots.db 读取标准化日快照；
         # 如果本地快照库没有数据，就返回空数据集，由当前任务统一走“无数据失败”分支。
-        dataset = self._adapter.load_market_data()
+        dataset = self._backtest_service.load_market_data()
         total = max(1, task.total_combinations)
 
         # workers 控制参数组合评估时的并行度；不是数据库连接数，也不是 Web 请求并发数。
@@ -1803,7 +1888,7 @@ class CbQuantService:
             )
             return
 
-        # 到这里说明：cb_strategy_core 已直接引用、历史快照已读取、窗口切片已准备完毕。
+        # 到这里说明：cb_backtest 核心已直接引用、历史快照已读取、窗口切片已准备完毕。
         self._update_optimize_task(
             task_id,
             status="running",
@@ -2360,7 +2445,7 @@ class CbQuantService:
         end_raw = context.get("end_date")
         start_date = self._parse_iso_date(start_raw) if isinstance(start_raw, str) else start_raw
         end_date = self._parse_iso_date(end_raw) if isinstance(end_raw, str) else end_raw
-        setting = dict(context.get("setting", self._adapter.default_setting()))
+        setting = dict(context.get("setting", self._backtest_service.default_setting()))
 
         ticker_stop = Event()
         ticker = Thread(
@@ -2383,7 +2468,7 @@ class CbQuantService:
             if self._is_job_cancel_requested(job_id):
                 self._update_job(job_id, status="cancelled", eta="cancelled")
                 return
-            stats = self._adapter.run_backtest(
+            stats = self._backtest_service.run_backtest(
                 setting=setting,
                 window_name=window_name,
                 start_date=start_date,
@@ -2458,7 +2543,7 @@ class CbQuantService:
                 self._jobs[index] = merged
                 context = self._job_context.get(job_id) or self._store.get_job_context(job_id) or {
                     "window_name": "full",
-                    "setting": self._adapter.default_setting(),
+                    "setting": self._backtest_service.default_setting(),
                     "start_date": None,
                     "end_date": None,
                     "cancel_requested": False,
@@ -2502,7 +2587,7 @@ class CbQuantService:
     def _sync_optimize_task_as_backtest_job(self, task: StrategyOptimizeTaskRow) -> None:
         best_row = (self._optimize_results.get(task.task_id) or [None])[0]
         combo_id = best_row.combo_id if best_row is not None else "--"
-        setting = dict(best_row.params) if best_row is not None else self._adapter.default_setting()
+        setting = dict(best_row.params) if best_row is not None else self._backtest_service.default_setting()
         setting = self._apply_task_config_to_setting(setting, task.task_config)
         status = task.status if task.status in {"queued", "running", "finished", "failed"} else "failed"
         business_date = (task.created_at or "")[:10] or date.today().isoformat()
@@ -2566,14 +2651,14 @@ class CbQuantService:
     ) -> dict[WindowName, list[tuple[str, Any]]]:
         sliced_map: dict[WindowName, list[tuple[str, Any]]] = {}
         for window_name in self._normalize_windows(windows):
-            sliced = self._adapter._slice_dataset(
+            sliced = self._backtest_service.slice_dataset(
                 dataset=dataset,
                 window_name=window_name,
                 start_date=start_date,
                 end_date=end_date,
             )
             if not sliced and (start_date or end_date):
-                sliced = self._adapter._slice_dataset(
+                sliced = self._backtest_service.slice_dataset(
                     dataset=dataset,
                     window_name=window_name,
                     start_date=None,
@@ -2795,7 +2880,7 @@ class CbQuantService:
         self,
         *,
         dataset: list[tuple[str, Any]],
-        strategy_parameters: cb_strategy_core.StrategyParameters,
+        strategy_parameters: cb_backtest.StrategyParameters,
         candidate_count: int,
     ) -> dict[str, list[str]]:
         """预先为每个交易日构建候选代码列表。
@@ -2805,7 +2890,7 @@ class CbQuantService:
         candidate_code_map: dict[str, list[str]] = {}
         for trade_date, frame in dataset:
             try:
-                candidate = cb_strategy_core.build_candidates(
+                candidate = cb_backtest.build_candidates(
                     frame,
                     trade_date,
                     strategy_parameters,
@@ -2835,15 +2920,15 @@ class CbQuantService:
 
         这是优化阶段使用的快路径。
 
-        过去这里单独维护了一套轻量回测状态机，导致它和 `cb_strategy_core.run_backtest(...)`
+        过去这里单独维护了一套轻量回测状态机，导致它和 `cb_backtest.run_backtest(...)`
         长期存在“逻辑非常相似、但又不是同一份代码”的问题。现在优化链路也直接
-        委托给 `cb_strategy_core.run_backtest_from_candidates(...)`，把持仓轮动、调仓频率、
+        委托给 `cb_backtest.run_backtest_from_candidates(...)`，把持仓轮动、调仓频率、
         强赎、止盈止损、`hold_until_profit` 等规则统一到同一套核心实现上。
         """
-        return cb_strategy_core.run_backtest_from_candidates(
+        return cb_backtest.run_backtest_from_candidates(
             dataset=dataset,
             candidate_code_map=candidate_code_map,
-            runtime_config=cb_strategy_core.build_runtime_config(setting),
+            runtime_config=cb_backtest.build_runtime_config(setting),
         )
 
     def _evaluate_combo(
@@ -2884,9 +2969,9 @@ class CbQuantService:
         max_hold_count = max(1, int(round(self._to_float(setting.get("max_hold_count"), 12.0))))
         hold_until_profit = bool(setting.get("hold_until_profit", False))
 
-        # 把通用 setting 转成 cb_strategy_core 真正用于筛债的 cfg。
+        # 把通用 setting 转成 cb_backtest 真正用于筛债的 cfg。
         # 后面 `build_candidates(...)` 会直接使用这个 cfg。
-        strategy_parameters = cb_strategy_core.build_strategy_parameters(setting)
+        strategy_parameters = cb_backtest.build_strategy_parameters(setting)
         base_dataset: list[tuple[str, Any]] = []
         if window_dataset_map is not None:
             # 当调用方已经提前准备好多个窗口切片时，这里优先挑“长度最大”的一份数据集，
@@ -2917,7 +3002,7 @@ class CbQuantService:
                 sliced = window_dataset_map.get(window_name)
             if sliced is None:
                 # 如果调用方没提供该窗口数据，这里再现场切一遍。
-                sliced = self._adapter._slice_dataset(
+                sliced = self._backtest_service.slice_dataset(
                     dataset=dataset,
                     window_name=window_name,
                     start_date=start_date,
@@ -2950,7 +3035,7 @@ class CbQuantService:
                 if window_dataset_map is not None:
                     sliced = window_dataset_map.get(window_name)
                 if sliced is None or not sliced:
-                    sliced = self._adapter._slice_dataset(
+                    sliced = self._backtest_service.slice_dataset(
                         dataset=dataset,
                         window_name=window_name,
                         start_date=None,
@@ -3012,7 +3097,7 @@ class CbQuantService:
 
         enabled_rows = [row for row in cfg.parameter_space if row.enabled and row.factor_key in cfg.factor_keys]
         if not enabled_rows:
-            return [(f"CMB-{idx:06d}", self._adapter.default_setting()) for idx in range(1, limit + 1)]
+            return [(f"CMB-{idx:06d}", self._backtest_service.default_setting()) for idx in range(1, limit + 1)]
 
         factor_keys = [row.factor_key for row in enabled_rows]
         all_choices = [self._choices_for_param_row(row) for row in enabled_rows]
@@ -3041,7 +3126,7 @@ class CbQuantService:
         return values
 
     def _build_setting_from_factor_values(self, values: dict[str, Any]) -> dict[str, Any]:
-        setting = self._adapter.default_setting()
+        setting = self._backtest_service.default_setting()
         setting["selected_factor_keys"] = list(values.keys())
         setting["factor_values"] = dict(values)
         for factor_key, value in values.items():
@@ -3187,7 +3272,7 @@ class CbQuantService:
         - 每日换手
         - 每次轮动后的持仓快照
         """
-        strategy_parameters = cb_strategy_core.build_strategy_parameters(setting)
+        strategy_parameters = cb_backtest.build_strategy_parameters(setting)
         candidate_count = max(1, int(round(self._to_float(setting.get("candidate_count"), 10.0))))
         max_hold_count = max(1, int(round(self._to_float(setting.get("max_hold_count"), 12.0))))
         hold_until_profit = bool(setting.get("hold_until_profit", False))
@@ -3215,7 +3300,7 @@ class CbQuantService:
         last_rebalance_index = 0
 
         for index, (trade_date, df_all) in enumerate(dataset):
-            candidate = cb_strategy_core.build_candidates(
+            candidate = cb_backtest.build_candidates(
                 df_all,
                 trade_date,
                 strategy_parameters,
@@ -3846,7 +3931,7 @@ class CbQuantService:
         combo_seq = self._parse_combo_sequence(combo_id)
         enabled_rows = [row for row in cfg.parameter_space if row.enabled and row.factor_key in cfg.factor_keys]
         if not enabled_rows:
-            return self._adapter.default_setting()
+            return self._backtest_service.default_setting()
         if combo_seq is None or combo_seq <= 0:
             # Backward compatibility fallback for legacy/custom combo ids.
             row_map: dict[str, StrategyParamSpaceRow] = {row.factor_key: row for row in enabled_rows}
@@ -3859,7 +3944,7 @@ class CbQuantService:
         all_choices = [self._choices_for_param_row(row) for row in enabled_rows]
         for choices in all_choices:
             if not choices:
-                return self._adapter.default_setting()
+                return self._backtest_service.default_setting()
 
         total_combos = 1
         for choices in all_choices:
@@ -4152,7 +4237,7 @@ class CbQuantService:
                         template_id = row.id
                         break
             if not template_id:
-                settings[candidate.combo_id] = self._adapter.default_setting()
+                settings[candidate.combo_id] = self._backtest_service.default_setting()
                 continue
             settings[candidate.combo_id] = self._build_candidate_setting(
                 template_id=template_id,
@@ -4318,8 +4403,32 @@ class CbQuantService:
         numeric_defaults: dict[str, tuple[float, float, float]] = {
             "dblow": (100, 180, 5),
             "conv_prem": (0, 40, 2),
+            "bond_prem": (0, 30, 2),
+            "theory_bias": (0, 20, 2),
+            "theory_value": (80, 160, 5),
+            "option_value": (5, 40, 2),
+            "pure_value": (70, 130, 5),
+            "conv_value": (80, 160, 5),
+            "conv_price": (5, 30, 1),
+            "close": (90, 180, 5),
+            "open": (90, 180, 5),
+            "high": (90, 180, 5),
+            "low": (90, 180, 5),
+            "pre_close": (90, 180, 5),
+            "pct_chg": (0, 10, 1),
+            "vol": (100, 100000, 5000),
+            "amount": (1000, 50000, 1000),
             "turnover": (0.2, 8.0, 0.2),
+            "cap_mv_rate": (1, 80, 1),
+            "ytm": (0, 8, 0.5),
+            "theory_conv_prem": (0, 30, 2),
+            "mod_conv_prem": (0, 40, 2),
+            "left_years": (0.5, 6, 0.5),
             "remain_size": (1, 80, 1),
+            "issue_size": (1, 120, 2),
+            "remain_cap": (1, 120, 2),
+            "list_days": (30, 1500, 30),
+            "limit": (-1, 1, 1),
             "price_max": (105, 150, 1),
             "premium_max": (5, 35, 0.5),
             "price_benchmark": (106, 124, 2),
@@ -4568,7 +4677,7 @@ class CbQuantService:
                 "window_name": item.get("window_name") or "full",
                 "start_date": self._parse_iso_date(item.get("start_date")),
                 "end_date": self._parse_iso_date(item.get("end_date")),
-                "setting": dict(item.get("setting") or self._adapter.default_setting()),
+                "setting": dict(item.get("setting") or self._backtest_service.default_setting()),
                 "cancel_requested": bool(item.get("cancel_requested")),
                 "business_date": row.business_date or date.today().isoformat(),
                 "created_at": row.created_at or _now_readable(),

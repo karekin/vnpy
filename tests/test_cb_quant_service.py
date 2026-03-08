@@ -6,8 +6,8 @@ from typing import Any
 
 import pytest
 
-from vnpy.web.adapters.crawler_phase_a_adapter import CrawlerPhaseABacktestAdapter
-from vnpy.web.schemas import (
+from vnpy.web.services.cb_backtest_service import CbBacktestService
+from vnpy.web.contracts.cb_quant import (
     BacktestCreateJobsRequest,
     BacktestJobRow,
     CandidateRow,
@@ -49,7 +49,7 @@ class _DummyExecutor:
         self.submitted.append((func, args))
 
 
-class _DummyAdapter:
+class _DummyBacktestService:
     @staticmethod
     def default_setting() -> dict[str, Any]:
         return {"price_benchmark": 110.0}
@@ -92,7 +92,7 @@ def _build_service() -> CbQuantService:
     service._optimize_tasks = []
     service._optimize_results = {}
     service._optimize_top_bonds = {}
-    service._adapter = _DummyAdapter()
+    service._backtest_service = _DummyBacktestService()
     service._store = _DummyStore()
     service._executor = _DummyExecutor()
     return service
@@ -348,6 +348,23 @@ class TestOptimizeSamplingHelpers:
         assert ["open"] in created_factor_sets
         assert ["dblow", "open"] in created_factor_sets
 
+    def test_generate_strong_factor_pairs_should_create_all_two_factor_templates(self) -> None:
+        service = _build_service()
+
+        payload = service.generate_strong_factor_pairs()
+
+        assert payload.factor_count == 28
+        assert payload.total_pairs == 378
+        assert payload.created_count == 378
+        created_configs = [cfg for key, cfg in service._template_configs.items() if key != "TPL-001"]
+        assert len(created_configs) == 378
+        assert all(len(cfg.factor_keys) == 2 for cfg in created_configs)
+        assert not any(len(cfg.factor_keys) == 28 for cfg in created_configs)
+
+        second = service.generate_strong_factor_pairs()
+        assert second.created_count == 0
+        assert "已跳过 378 个已存在的因子对" in second.message
+
 
 class TestWindowHelpers:
     def test_slice_dataset_should_support_one_week_window(self) -> None:
@@ -359,7 +376,7 @@ class TestWindowHelpers:
             ("2026-03-06", object()),
         ]
 
-        sliced = CrawlerPhaseABacktestAdapter._slice_dataset(
+        sliced = CbBacktestService.slice_dataset(
             dataset=dataset,
             window_name="1w",
             start_date=None,

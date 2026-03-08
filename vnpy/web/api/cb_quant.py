@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query
 
-from vnpy.web.schemas import (
+from vnpy.web.contracts.cb_quant import (
     BacktestCompareResponse,
     BacktestCreateJobsRequest,
     BacktestCreateJobsResponse,
@@ -13,7 +13,6 @@ from vnpy.web.schemas import (
     HistoryDataSummaryResponse,
     HistorySyncResponse,
     HistorySyncStatusResponse,
-    OperationResponse,
     TushareDataSummaryResponse,
     TushareSyncRequest,
     TushareSyncResponse,
@@ -30,6 +29,7 @@ from vnpy.web.schemas import (
     StrategyOptimizeSummaryResponse,
     StrategyExpandFactorCombosRequest,
     StrategyExpandFactorCombosResponse,
+    StrategyGenerateStrongPairsResponse,
     StrategyTemplateBatchDeleteRequest,
     StrategyTemplateBatchEnableRequest,
     StrategyTemplateBatchResponse,
@@ -41,6 +41,7 @@ from vnpy.web.schemas import (
     StrategyTemplateRow,
     StrategyTemplateUpdateRequest,
 )
+from vnpy.web.contracts.system import OperationResponse
 from vnpy.web.services import cb_catalog_service, cb_history_service, cb_market_service, cb_quant_service, cb_tushare_service
 
 router = APIRouter(prefix="/cb-quant", tags=["cb-quant"])
@@ -154,6 +155,11 @@ def expand_strategy_factor_combos(
     if not expanded:
         raise HTTPException(status_code=404, detail=f"template not found: {template_id}")
     return expanded
+
+
+@router.post("/strategy/templates/generate-strong-pairs", response_model=StrategyGenerateStrongPairsResponse)
+def generate_strong_factor_pairs() -> StrategyGenerateStrongPairsResponse:
+    return cb_quant_service.generate_strong_factor_pairs()
 
 
 @router.delete("/strategy/templates/{template_id}", response_model=OperationResponse)

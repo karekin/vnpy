@@ -18,9 +18,9 @@ from math import ceil
 
 import requests
 
-from vnpy.web.adapters import CrawlerPhaseABacktestAdapter
+from vnpy.web.services.cb_backtest_service import CbBacktestService
 from vnpy.web.services.cb_tushare_service import CbTushareService
-from vnpy.web.schemas import BondMarketResponse, BondMarketRow
+from vnpy.web.contracts.cb_quant import BondMarketResponse, BondMarketRow
 
 EM_BOND_LIST_URL = "https://16.push2.eastmoney.com/api/qt/clist/get"
 EM_BOND_META_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
@@ -207,8 +207,8 @@ class CbMarketService:
         回测兼容，适合兜底展示与验证。
         """
         try:
-            adapter = CrawlerPhaseABacktestAdapter()
-            dataset = adapter.load_market_data()
+            backtest_service = CbBacktestService()
+            dataset = backtest_service.load_market_data()
             if not dataset:
                 return [], None
 

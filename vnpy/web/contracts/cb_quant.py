@@ -14,17 +14,6 @@ StrategyTemplateStatus = Literal["active", "draft", "archived"]
 CandidateSource = Literal["generated", "mock"]
 
 
-class HealthResponse(BaseModel):
-    status: str = "ok"
-    service: str = "vnpy-web"
-    version: str = "v1"
-
-
-class OperationResponse(BaseModel):
-    ok: bool = True
-    message: str = "ok"
-
-
 class CandidateRow(BaseModel):
     rank: int
     template_id: str | None = None
@@ -222,6 +211,13 @@ class StrategyExpandFactorCombosResponse(BaseModel):
     total_subsets: int
     created_count: int
     truncated: bool = False
+    message: str
+
+
+class StrategyGenerateStrongPairsResponse(BaseModel):
+    factor_count: int
+    total_pairs: int
+    created_count: int
     message: str
 
 

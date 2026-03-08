@@ -6,9 +6,9 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from vnpy.web.domain.cb_quant.cb_strategy_core.candidates import build_candidates
-from vnpy.web.domain.cb_quant.cb_strategy_core.normalizer import _safe_float
-from vnpy.web.domain.cb_quant.cb_strategy_core.settings import BacktestRuntimeConfig, StrategyParameters
+from vnpy.web.core.cb_backtest.candidates import build_candidates
+from vnpy.web.core.cb_backtest.normalizer import _safe_float
+from vnpy.web.core.cb_backtest.settings import BacktestRuntimeConfig, StrategyParameters
 
 
 @dataclass

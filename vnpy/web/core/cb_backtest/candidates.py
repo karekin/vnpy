@@ -6,8 +6,8 @@ from typing import Any
 
 import pandas as pd
 
-from vnpy.web.domain.cb_quant.cb_strategy_core.scoring import filter_multiple_factors
-from vnpy.web.domain.cb_quant.cb_strategy_core.settings import (
+from vnpy.web.core.cb_backtest.scoring import filter_multiple_factors
+from vnpy.web.core.cb_backtest.settings import (
     StrategyParameters,
     build_strategy_parameters as normalize_strategy_parameters,
 )

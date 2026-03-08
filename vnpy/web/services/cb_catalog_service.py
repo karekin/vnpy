@@ -13,7 +13,7 @@ from __future__ import annotations
 from vnpy.web.domain.cb_quant.enums import FactorCategory, FunctionCategory
 from vnpy.web.domain.cb_quant.factor_support import factor_support_level, is_template_selectable_factor
 from vnpy.web.domain.cb_quant.registry import FACTOR_REGISTRY, FUNCTION_REGISTRY
-from vnpy.web.schemas import (
+from vnpy.web.contracts.cb_quant import (
     FactorCatalogCategory,
     FactorCatalogResponse,
     FactorCatalogRow,

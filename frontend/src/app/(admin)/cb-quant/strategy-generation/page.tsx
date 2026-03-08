@@ -5,13 +5,11 @@ import {
   batchEnableStrategyTemplates,
   createStrategyTemplate,
   deleteStrategyTemplate,
-  expandStrategyFactorCombos,
+  generateStrongFactorPairs,
   getStrategyTemplateDetail,
-  listFactorCatalog,
   listStrategyTemplates,
   updateStrategyTemplate,
   updateStrategyTemplateConfig,
-  type StrategyParamSpaceRow,
   type StrategyTemplate,
 } from "@/components/cb-quant/api";
 import CbQuantPageShell from "@/components/cb-quant/CbQuantPageShell";
@@ -27,102 +25,6 @@ function getStrategyTone(status: "active" | "draft" | "archived") {
   if (status === "active") return "green" as const;
   if (status === "draft") return "yellow" as const;
   return "slate" as const;
-}
-
-function choose(n: number, k: number): number {
-  if (k < 0 || n < k) return 0;
-  if (k === 0 || n === k) return 1;
-  let result = 1;
-  for (let i = 1; i <= k; i += 1) {
-    result = (result * (n - i + 1)) / i;
-  }
-  return Math.round(result);
-}
-
-const baselineFactorKeys = [
-  "dblow",
-  "conv_prem",
-  "bond_prem",
-  "theory_bias",
-  "theory_value",
-  "option_value",
-  "pure_value",
-  "conv_value",
-  "conv_price",
-  "close",
-  "open",
-  "high",
-  "low",
-  "pre_close",
-  "pct_chg",
-  "vol",
-  "amount",
-  "turnover",
-  "cap_mv_rate",
-  "ytm",
-  "theory_conv_prem",
-  "mod_conv_prem",
-  "left_years",
-  "remain_size",
-  "issue_size",
-  "remain_cap",
-  "list_days",
-  "limit",
-];
-
-function baselineParamRow(factorKey: string): StrategyParamSpaceRow {
-  if (factorKey === "rating") {
-    return {
-      factorKey,
-      valueType: "enum",
-      enabled: true,
-      minValue: null,
-      maxValue: null,
-      step: null,
-      enumValues: ["AA", "AA+", "AAA"],
-    };
-  }
-
-  const defaults: Record<string, [number, number, number]> = {
-    dblow: [100, 180, 5],
-    conv_prem: [0, 40, 2],
-    bond_prem: [0, 30, 2],
-    theory_bias: [0, 20, 2],
-    theory_value: [80, 160, 5],
-    option_value: [5, 40, 2],
-    pure_value: [70, 130, 5],
-    conv_value: [80, 160, 5],
-    conv_price: [5, 30, 1],
-    close: [90, 180, 5],
-    open: [90, 180, 5],
-    high: [90, 180, 5],
-    low: [90, 180, 5],
-    pre_close: [90, 180, 5],
-    pct_chg: [0, 10, 1],
-    vol: [100, 100000, 5000],
-    amount: [1000, 50000, 1000],
-    turnover: [0.2, 8, 0.2],
-    cap_mv_rate: [1, 80, 1],
-    ytm: [0, 8, 0.5],
-    theory_conv_prem: [0, 30, 2],
-    mod_conv_prem: [0, 40, 2],
-    left_years: [0.5, 6, 0.5],
-    remain_size: [1, 80, 1],
-    issue_size: [1, 120, 2],
-    remain_cap: [1, 120, 2],
-    list_days: [30, 1500, 30],
-    limit: [-1, 1, 1],
-  };
-  const [minValue, maxValue, step] = defaults[factorKey] ?? [0, 10, 1];
-  return {
-    factorKey,
-    valueType: "number",
-    enabled: true,
-    minValue,
-    maxValue,
-    step,
-    enumValues: [],
-  };
 }
 
 export default function CbQuantStrategyGenerationPage() {
@@ -241,78 +143,16 @@ export default function CbQuantStrategyGenerationPage() {
 
     setRunningActionId("GLOBAL_EXPAND");
     try {
-      const allStrategies = await loadAllStrategies();
-      const factorCatalog = await listFactorCatalog({ category: "all", enabledOnly: true });
-      const strongSupportedFactorKeys = factorCatalog.items.flatMap((category) =>
-        category.factors.filter((factor) => factor.templateSelectable).map((factor) => factor.factorKey),
-      );
-      const strongSupportedFactorSet = new Set(strongSupportedFactorKeys);
-      let targets = selectedStrategyIds.length
-        ? allStrategies.filter((row) => selectedSet.has(row.id))
-        : allStrategies;
-      let autoCreatedTemplate: StrategyTemplate | null = null;
-
-      if (!targets.length) {
-        if (keyword) {
-          setError("当前筛选结果为空，请清空搜索或调整筛选条件后重试。");
-          return;
-        }
-        autoCreatedTemplate = await createStrategyTemplate({ name: "双因子基准策略", owner: "quant_new" });
-        await updateStrategyTemplateConfig(autoCreatedTemplate.id, {
-          factorKeys: strongSupportedFactorKeys.length ? strongSupportedFactorKeys : baselineFactorKeys,
-          expressionDraft: "",
-          parameterSpace: (strongSupportedFactorKeys.length ? strongSupportedFactorKeys : baselineFactorKeys).map((factorKey) =>
-            baselineParamRow(factorKey),
-          ),
-        });
-        const detail = await getStrategyTemplateDetail(autoCreatedTemplate.id);
-        targets = [detail.template];
-      }
-
-      const targetDetails = await Promise.all(targets.map(async (row) => getStrategyTemplateDetail(row.id)));
-      const targetSupport = targetDetails.map((detail) => {
-        const supportedCount = detail.config.factorKeys.filter((key) => strongSupportedFactorSet.has(key)).length;
-        return {
-          template: detail.template,
-          supportedCount,
-        };
-      });
-
-      const eligibleTargets = targetSupport
-        .filter((item) => item.supportedCount >= 2)
-        .map((item) => item.template);
-
-      if (!eligibleTargets.length) {
-        setError("所选策略强支持因子数不足 2，无法生成双因子组合。");
-        return;
-      }
-
-      const subsetEstimate = targetSupport.reduce((sum, item) => sum + choose(item.supportedCount, 2), 0);
       const ok = window.confirm(
-        `将为 ${eligibleTargets.length} 个策略生成全部“双因子”组合（理论子集约 ${subsetEstimate.toLocaleString()} 个），继续执行吗？`,
+        "将直接基于强支持因子库生成全部双因子策略，不再创建原模板，继续执行吗？",
       );
       if (!ok) {
         return;
       }
 
-      let createdTotal = 0;
-      let subsetTotal = 0;
-      for (const target of eligibleTargets) {
-        const result = await expandStrategyFactorCombos(target.id, {
-          minFactorCount: 2,
-          maxFactorCount: 2,
-        });
-        createdTotal += result.createdCount;
-        subsetTotal += result.totalSubsets;
-      }
-
+      const result = await generateStrongFactorPairs();
       await loadStrategies();
-      const skippedCount = targets.length - eligibleTargets.length;
-      const skippedHint = skippedCount > 0 ? `，跳过 ${skippedCount} 个强支持因子数不足 2 的策略` : "";
-      const autoCreateHint = autoCreatedTemplate ? `已自动创建基准策略 ${autoCreatedTemplate.id}。` : "";
-      setHint(
-        `${autoCreateHint}已完成 ${eligibleTargets.length} 个策略的双因子组合生成，新增策略 ${createdTotal} 个（理论子集 ${subsetTotal.toLocaleString()} 个）${skippedHint}。`,
-      );
+      setHint(result.message);
     } catch (err) {
       setError(err instanceof Error ? err.message : "全局生成组合失败");
     } finally {

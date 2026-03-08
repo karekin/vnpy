@@ -17,8 +17,8 @@ from typing import Any
 
 import pandas as pd
 
-from vnpy.web.adapters import CrawlerPhaseABacktestAdapter
 from vnpy.web.domain.cb_quant.history_store import CbHistoryStore, HistoryStoreSummary, HistorySyncLog
+from vnpy.web.services.cb_backtest_service import CbBacktestService
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -82,10 +82,9 @@ class CbHistoryService:
 
     def __init__(self) -> None:
         """初始化本地快照库、适配器和定时同步线程状态。"""
-        adapter = CrawlerPhaseABacktestAdapter()
-        storage_dir: Path = adapter.data_dir / "_cb_quant"
+        backtest_service = CbBacktestService()
+        storage_dir: Path = backtest_service.data_dir / "_cb_quant"
         self._store = CbHistoryStore(storage_dir / "cb_snapshots.db")
-        self._adapter = adapter
         self._sync_thread: Thread | None = None
         self._stop_event: Event = Event()
         self._start_lock: Lock = Lock()

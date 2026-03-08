@@ -10,9 +10,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from vnpy.web.domain.cb_quant.cb_strategy_core.backtest import run_backtest
-from vnpy.web.domain.cb_quant.cb_strategy_core.candidates import build_strategy_parameters
-from vnpy.web.domain.cb_quant.cb_strategy_core.settings import build_runtime_config
+from vnpy.web.core.cb_backtest.backtest import run_backtest
+from vnpy.web.core.cb_backtest.candidates import build_strategy_parameters
+from vnpy.web.core.cb_backtest.settings import build_runtime_config
 from vnpy.web.domain.cb_quant.history_store import CbHistoryStore
 
 PROJECT_ROOT = Path(__file__).resolve().parents[5]

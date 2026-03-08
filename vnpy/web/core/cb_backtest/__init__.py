@@ -8,14 +8,14 @@
 - CLI 兼容入口
 """
 
-from vnpy.web.domain.cb_quant.cb_strategy_core.backtest import (
+from vnpy.web.core.cb_backtest.backtest import (
     Holding,
     compute_daily_return,
     run_backtest,
     run_backtest_from_candidates,
 )
-from vnpy.web.domain.cb_quant.cb_strategy_core.candidates import build_candidates, build_strategy_parameters
-from vnpy.web.domain.cb_quant.cb_strategy_core.cli import (
+from vnpy.web.core.cb_backtest.candidates import build_candidates, build_strategy_parameters
+from vnpy.web.core.cb_backtest.cli import (
     GLOBAL_TARGET,
     build_optimization_setting,
     evaluate_setting,
@@ -24,8 +24,8 @@ from vnpy.web.domain.cb_quant.cb_strategy_core.cli import (
     parse_args,
     save_results,
 )
-from vnpy.web.domain.cb_quant.cb_strategy_core.normalizer import normalize_market_frame
-from vnpy.web.domain.cb_quant.cb_strategy_core.settings import (
+from vnpy.web.core.cb_backtest.normalizer import normalize_market_frame
+from vnpy.web.core.cb_backtest.settings import (
     BacktestRuntimeConfig,
     StrategyParameters,
     build_runtime_config,

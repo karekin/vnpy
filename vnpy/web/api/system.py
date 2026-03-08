@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from vnpy.web.schemas import HealthResponse
+from vnpy.web.contracts.system import HealthResponse
 
 router = APIRouter(prefix="/system", tags=["system"])
 

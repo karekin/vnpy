@@ -19,10 +19,10 @@ from typing import Any
 
 import pandas as pd
 
-from vnpy.web.adapters import CrawlerPhaseABacktestAdapter
 from vnpy.web.domain.cb_quant.history_store import CbHistoryStore
 from vnpy.web.domain.cb_quant.tushare_store import CbTushareStore, TushareStoreSummary, TushareSyncLog
-from vnpy.web.schemas import BondMarketRow
+from vnpy.web.contracts.cb_quant import BondMarketRow
+from vnpy.web.services.cb_backtest_service import CbBacktestService
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -162,8 +162,8 @@ class CbTushareService:
 
     def __init__(self) -> None:
         """初始化 Tushare 库和回测快照库。"""
-        adapter = CrawlerPhaseABacktestAdapter()
-        storage_dir: Path = adapter.data_dir / "_cb_quant"
+        backtest_service = CbBacktestService()
+        storage_dir: Path = backtest_service.data_dir / "_cb_quant"
         self._store = CbTushareStore(storage_dir / "cb_tushare.db")
         self._history_store = CbHistoryStore(storage_dir / "cb_snapshots.db")
 
@@ -888,7 +888,7 @@ class CbTushareService:
         """把 Tushare 原始数据转换成：
 
         1. 因子表行：供后续研究和扩展
-        2. 回测快照行：供 `cb_strategy_core / cb_quant` 直接回放
+        2. 回测快照行：供 `cb_backtest / cb_quant` 直接回放
 
         注意：快照行在真正写库前还会经过标准 schema 收口，
         因此这里可以保留少量中间字段，但最终落库字段以快照 schema 为准。

@@ -6,28 +6,28 @@ from pathlib import Path
 import pandas as pd
 
 from vnpy.web import app as web_app
-from vnpy.web.adapters.crawler_phase_a_adapter import CrawlerPhaseABacktestAdapter
-from vnpy.web.domain.cb_quant import cb_strategy_core
-from vnpy.web.domain.cb_quant.cb_strategy_core import cli as phase_a_cli
-from vnpy.web.domain.cb_quant.cb_strategy_core import backtest as phase_a_backtest
+from vnpy.web.core import cb_backtest
+from vnpy.web.core.cb_backtest import cli as phase_a_cli
+from vnpy.web.core.cb_backtest import backtest as phase_a_backtest
+from vnpy.web.services.cb_backtest_service import CbBacktestService
 from vnpy.web.services.cb_history_service import CbHistoryService
 
 
-def test_adapter_should_load_integrated_cb_strategy_core() -> None:
-    adapter = CrawlerPhaseABacktestAdapter()
-    module = adapter._load_module()
+def test_backtest_service_should_load_integrated_cb_backtest_core() -> None:
+    backtest_service = CbBacktestService()
+    module = backtest_service._load_module()
 
-    assert module is cb_strategy_core
+    assert module is cb_backtest
     assert hasattr(module, "build_candidates")
     assert hasattr(module, "run_backtest")
 
 
-def test_cb_strategy_core_cli_should_load_snapshots_from_db(tmp_path: Path) -> None:
+def test_cb_backtest_core_cli_should_load_snapshots_from_db(tmp_path: Path) -> None:
     data_root = tmp_path / "cb_quant"
     store_dir = data_root / "_cb_quant"
     store_dir.mkdir(parents=True, exist_ok=True)
-    adapter = CrawlerPhaseABacktestAdapter(data_dir=data_root)
-    history_store = adapter._history_store
+    backtest_service = CbBacktestService(data_dir=data_root)
+    history_store = backtest_service._history_store
     history_store.upsert_snapshot_rows(
         trade_date="2024-02-01",
         source="unit-test",
@@ -57,7 +57,7 @@ def test_cb_strategy_core_cli_should_load_snapshots_from_db(tmp_path: Path) -> N
     assert "legacy_only_field" not in frame.columns
 
 
-def test_cb_strategy_core_should_share_same_backtest_core_for_candidates(monkeypatch) -> None:
+def test_cb_backtest_core_should_share_same_backtest_core_for_candidates(monkeypatch) -> None:
     dataset = [
         (
             "2024-02-01",
@@ -92,13 +92,13 @@ def test_cb_strategy_core_should_share_same_backtest_core_for_candidates(monkeyp
 
     cli_stats = phase_a_backtest.run_backtest(
         dataset=dataset,
-        strategy_parameters=cb_strategy_core.build_strategy_parameters({}),
-        runtime_config=cb_strategy_core.build_runtime_config({"candidate_count": 2, "max_hold_count": 2}),
+        strategy_parameters=cb_backtest.build_strategy_parameters({}),
+        runtime_config=cb_backtest.build_runtime_config({"candidate_count": 2, "max_hold_count": 2}),
     )
     optimize_stats = phase_a_backtest.run_backtest_from_candidates(
         dataset=dataset,
         candidate_code_map=candidate_map,
-        runtime_config=cb_strategy_core.build_runtime_config(setting),
+        runtime_config=cb_backtest.build_runtime_config(setting),
     )
 
     assert optimize_stats["total_return_pct"] == cli_stats["total_return_pct"]
@@ -107,11 +107,10 @@ def test_cb_strategy_core_should_share_same_backtest_core_for_candidates(monkeyp
     assert optimize_stats["win_rate_pct"] == cli_stats["win_rate_pct"]
 
 
-def test_history_bootstrap_should_use_cb_strategy_core_loader(monkeypatch, tmp_path: Path) -> None:
+def test_history_bootstrap_should_use_cb_backtest_core_loader(monkeypatch, tmp_path: Path) -> None:
     service = object.__new__(CbHistoryService)
-    adapter = CrawlerPhaseABacktestAdapter(data_dir=tmp_path)
-    service._adapter = adapter
-    service._store = adapter._history_store
+    backtest_service = CbBacktestService(data_dir=tmp_path)
+    service._store = backtest_service._history_store
 
     inserted = service.bootstrap_from_crawler_snapshots()
 
