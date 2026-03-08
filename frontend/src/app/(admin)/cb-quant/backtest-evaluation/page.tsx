@@ -2,12 +2,14 @@
 
 import {
   cancelBacktestJob,
+  compareStrategyOptimizeTaskAiInsight,
   createStrategyOptimizeTask,
   getHistoryDataSummary,
   listBacktestJobs,
   getTushareHistorySummary,
   getTushareHistorySyncStatus,
   getStrategyOptimizeTaskAnalysis,
+  getStrategyOptimizeTaskAiInsight,
   getStrategyOptimizeSummary,
   getStrategyOptimizeTaskDetail,
   listStrategyOptimizeTasks,
@@ -19,6 +21,8 @@ import {
   type StrategyBacktestMetricRow,
   type StrategyBacktestRotationRow,
   type StrategyOptimizeTaskAnalysis,
+  type StrategyOptimizeTaskAiInsight,
+  type StrategyOptimizeTaskAiCompare,
   type HistoryDataSummary,
   type TushareDataSummary,
   type TushareSyncStatus,
@@ -108,6 +112,11 @@ function distributionLabel(period: "yearly" | "monthly" | "weekly"): string {
   return "周度回报";
 }
 
+type CompareSelection = {
+  taskId: string;
+  comboId: string;
+};
+
 export default function CbQuantBacktestEvaluationPage() {
   const [strategies, setStrategies] = useState<StrategyTemplate[]>([]);
 
@@ -143,6 +152,14 @@ export default function CbQuantBacktestEvaluationPage() {
   const [analysis, setAnalysis] = useState<StrategyOptimizeTaskAnalysis | null>(null);
   const [analysisLoading, setAnalysisLoading] = useState<boolean>(false);
   const [analysisError, setAnalysisError] = useState<string>("");
+  const [aiInsight, setAiInsight] = useState<StrategyOptimizeTaskAiInsight | null>(null);
+  const [aiInsightLoading, setAiInsightLoading] = useState<boolean>(false);
+  const [aiInsightError, setAiInsightError] = useState<string>("");
+  const [aiCompare, setAiCompare] = useState<StrategyOptimizeTaskAiCompare | null>(null);
+  const [aiCompareLoading, setAiCompareLoading] = useState<boolean>(false);
+  const [aiCompareError, setAiCompareError] = useState<string>("");
+  const [compareSelections, setCompareSelections] = useState<CompareSelection[]>([]);
+  const [copyFeedback, setCopyFeedback] = useState<string>("");
   const [distributionPeriod, setDistributionPeriod] = useState<"yearly" | "monthly" | "weekly">("yearly");
 
   const [loadingTasks, setLoadingTasks] = useState<boolean>(false);
@@ -518,6 +535,104 @@ export default function CbQuantBacktestEvaluationPage() {
     }
   }, [loadAnalysis]);
 
+  const loadAiInsight = useCallback(async (taskId: string, comboId?: string, initialCapitalWan = 100) => {
+    if (!taskId) {
+      setAiInsight(null);
+      return;
+    }
+    setAiInsightLoading(true);
+    setAiInsightError("");
+    try {
+      const response = await getStrategyOptimizeTaskAiInsight(taskId, {
+        comboId,
+        initialCapitalWan,
+      });
+      setAiInsight(response);
+    } catch (err) {
+      setAiInsight(null);
+      setAiInsightError(err instanceof Error ? err.message : "Kimi 白盒解读加载失败");
+    } finally {
+      setAiInsightLoading(false);
+    }
+  }, []);
+
+  const focusStrategy = useCallback(async (taskId: string, comboId?: string, withAi = false) => {
+    if (!taskId) {
+      return;
+    }
+    setSelectedTaskId(taskId);
+    setResultMode("task");
+    try {
+      const response = await getStrategyOptimizeTaskDetail(taskId);
+      setDetail(response);
+      const initialCapitalWan = response.task.taskConfig.initialCapitalWan;
+      await loadAnalysis(taskId, comboId, initialCapitalWan);
+      if (withAi) {
+        await loadAiInsight(taskId, comboId, initialCapitalWan);
+      }
+    } catch (err) {
+      setDetail(null);
+      setError(err instanceof Error ? err.message : "任务详情加载失败");
+    }
+  }, [loadAiInsight, loadAnalysis]);
+
+  const copyText = useCallback(async (label: string, value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopyFeedback(`${label}已复制`);
+      window.setTimeout(() => setCopyFeedback(""), 2000);
+    } catch (err) {
+      setCopyFeedback(err instanceof Error ? err.message : `${label}复制失败`);
+      window.setTimeout(() => setCopyFeedback(""), 2500);
+    }
+  }, []);
+
+  const toggleCompareSelection = useCallback((taskId: string, comboId: string) => {
+    setCompareSelections((prev) => {
+      const exists = prev.some((item) => item.taskId === taskId && item.comboId === comboId);
+      if (exists) {
+        return prev.filter((item) => !(item.taskId === taskId && item.comboId === comboId));
+      }
+      if (prev.length > 0 && prev[0].taskId !== taskId) {
+        setHint("Kimi 横向优劣分析当前仅支持同一任务内的两个组合，已重置对比池。");
+        return [{ taskId, comboId }];
+      }
+      const next = [...prev, { taskId, comboId }];
+      return next.slice(-2);
+    });
+    setAiCompare(null);
+    setAiCompareError("");
+  }, []);
+
+  const loadAiCompare = useCallback(async () => {
+    if (compareSelections.length !== 2) {
+      setAiCompareError("请先选择两个组合再做 Kimi 横向优劣分析。");
+      return;
+    }
+    const [first, second] = compareSelections;
+    if (first.taskId !== second.taskId) {
+      setAiCompareError("当前只支持同一任务内的两个组合做对比。");
+      return;
+    }
+    setAiCompareLoading(true);
+    setAiCompareError("");
+    try {
+      const response = await compareStrategyOptimizeTaskAiInsight(first.taskId, {
+        comboIds: [first.comboId, second.comboId],
+        initialCapitalWan:
+          detail?.task.taskId === first.taskId
+            ? detail.task.taskConfig.initialCapitalWan
+            : taskById.get(first.taskId)?.taskConfig.initialCapitalWan ?? 100,
+      });
+      setAiCompare(response);
+    } catch (err) {
+      setAiCompare(null);
+      setAiCompareError(err instanceof Error ? err.message : "Kimi 横向优劣分析加载失败");
+    } finally {
+      setAiCompareLoading(false);
+    }
+  }, [compareSelections, detail, taskById]);
+
   useEffect(() => {
     void loadBootstrap();
   }, [loadBootstrap]);
@@ -578,6 +693,26 @@ export default function CbQuantBacktestEvaluationPage() {
     summary,
     taskById,
   ]);
+
+  useEffect(() => {
+    if (!analysis) {
+      setAiInsight(null);
+      setAiInsightError("");
+      return;
+    }
+    if (aiInsight?.taskId === analysis.taskId && aiInsight?.comboId === analysis.comboId) {
+      return;
+    }
+    setAiInsight(null);
+    setAiInsightError("");
+  }, [aiInsight?.comboId, aiInsight?.taskId, analysis]);
+
+  useEffect(() => {
+    if (compareSelections.length !== 2) {
+      setAiCompare(null);
+      setAiCompareError("");
+    }
+  }, [compareSelections]);
 
   useEffect(() => {
     // 只有仍有排队/运行中的任务时才继续轮询；任务全部完成后停止请求风暴。
@@ -1244,9 +1379,29 @@ export default function CbQuantBacktestEvaluationPage() {
         <div className="grid grid-cols-1 gap-6">
           <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
             <div className="border-b border-gray-200 px-5 py-4 dark:border-gray-800">
-              <h3 className="text-lg font-semibold text-gray-800 dark:text-white/90">
-                {showingGlobal ? "全局最优策略榜单（跨任务汇总）" : "最优策略榜单（单任务）"}
-              </h3>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <h3 className="text-lg font-semibold text-gray-800 dark:text-white/90">
+                  {showingGlobal ? "全局最优策略榜单（跨任务汇总）" : "最优策略榜单（单任务）"}
+                </h3>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  {compareSelections.map((item, index) => (
+                    <span
+                      key={`${item.taskId}-${item.comboId}`}
+                      className="rounded-full border border-gray-300 px-2 py-1 text-[11px] text-gray-600 dark:border-gray-700 dark:text-gray-300"
+                    >
+                      对比{index + 1}: {item.comboId}
+                    </span>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => void loadAiCompare()}
+                    disabled={compareSelections.length !== 2 || aiCompareLoading}
+                    className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:text-gray-200"
+                  >
+                    {aiCompareLoading ? "Kimi对比中..." : "Kimi横向优劣分析"}
+                  </button>
+                </div>
+              </div>
             </div>
             <div className="p-5">
               <ScrollableDataTable
@@ -1259,37 +1414,69 @@ export default function CbQuantBacktestEvaluationPage() {
                 {displayTopStrategies.map((row) => (
                   <TableRow key={`${row.taskId ?? "task"}-${row.comboId}-${row.rank}`} className="border-b border-gray-100 dark:border-gray-800">
                     <TableCell className="px-4 py-3 text-sm font-semibold text-gray-900 dark:text-white">#{row.rank}</TableCell>
-                    <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.taskId ?? "--"}</TableCell>
-                    <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.templateName ?? "--"}</TableCell>
-                    <TableCell className="px-4 py-3 text-sm font-semibold text-gray-900 dark:text-white">{row.comboId}</TableCell>
+                    <TableCell className="w-px whitespace-nowrap px-4 py-3 align-top text-sm text-gray-700 dark:text-gray-300">
+                      <span title={row.taskId ?? "--"}>{row.taskId ?? "--"}</span>
+                    </TableCell>
+                    <TableCell className="w-px max-w-[18rem] px-4 py-3 align-top text-sm text-gray-700 dark:text-gray-300">
+                      <span className="block truncate whitespace-nowrap" title={row.templateName ?? "--"}>{row.templateName ?? "--"}</span>
+                    </TableCell>
+                    <TableCell className="w-px whitespace-nowrap px-4 py-3 align-top text-sm font-semibold text-gray-900 dark:text-white">
+                      <span title={row.comboId}>{row.comboId}</span>
+                    </TableCell>
                     <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.robustScore.toFixed(2)}</TableCell>
                     <TableCell className="px-4 py-3 text-sm font-medium text-green-600">{toPercent(row.cagr)}</TableCell>
                     <TableCell className="px-4 py-3 text-sm font-medium text-red-600">{toPercent(row.mdd)}</TableCell>
                     <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.calmar.toFixed(2)}</TableCell>
                     <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.totalReturnPct.toFixed(2)}%</TableCell>
                     <TableCell className="px-4 py-3 text-xs text-gray-500 dark:text-gray-400">
-                      <code>{JSON.stringify(row.params)}</code>
+                      <code className="block max-w-[36rem] truncate whitespace-nowrap" title={JSON.stringify(row.params, null, 2)}>
+                        {JSON.stringify(row.params)}
+                      </code>
                     </TableCell>
                     <TableCell className="px-4 py-3">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const taskId = row.taskId ?? selectedTaskId;
-                          if (!taskId) {
-                            return;
-                          }
-                          setSelectedTaskId(taskId);
-                          setResultMode("task");
-                          const initialCapitalWan =
-                            detail?.task.taskId === taskId
-                              ? detail.task.taskConfig.initialCapitalWan
-                              : taskById.get(taskId)?.taskConfig.initialCapitalWan ?? 100;
-                          void loadAnalysis(taskId, row.comboId, initialCapitalWan);
-                        }}
-                        className="rounded-lg border border-brand-500 px-3 py-1.5 text-xs font-medium text-brand-600 hover:bg-brand-50 dark:border-brand-400 dark:text-brand-300"
-                      >
-                        回测分析
-                      </button>
+                      <div className="flex flex-col gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const taskId = row.taskId ?? selectedTaskId;
+                            if (!taskId) {
+                              return;
+                            }
+                            void focusStrategy(taskId, row.comboId, false);
+                          }}
+                          className="rounded-lg border border-brand-500 px-3 py-1.5 text-xs font-medium text-brand-600 hover:bg-brand-50 dark:border-brand-400 dark:text-brand-300"
+                        >
+                          回测分析
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const taskId = row.taskId ?? selectedTaskId;
+                            if (!taskId) {
+                              return;
+                            }
+                            void focusStrategy(taskId, row.comboId, true);
+                          }}
+                          className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-200"
+                        >
+                          Kimi白盒解读
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const taskId = row.taskId ?? selectedTaskId;
+                            if (!taskId) {
+                              return;
+                            }
+                            toggleCompareSelection(taskId, row.comboId);
+                          }}
+                          className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-200"
+                        >
+                          {compareSelections.some((item) => item.taskId === (row.taskId ?? selectedTaskId) && item.comboId === row.comboId)
+                            ? "移出对比"
+                            : "加入对比"}
+                        </button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -1330,13 +1517,27 @@ export default function CbQuantBacktestEvaluationPage() {
 
         <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
           <div className="border-b border-gray-200 px-5 py-4 dark:border-gray-800">
-            <h3 className="text-lg font-semibold text-gray-800 dark:text-white/90">回测结果</h3>
-            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              {analysis
-                ? `任务 ${analysis.taskId} · 策略 ${analysis.comboId} · 基准 ${analysis.benchmarkName} · 窗口 ${analysis.window}`
-                : "选择一个策略后展示专业回测结果。"}
-            </p>
-            {analysis?.message ? <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{analysis.message}</p> : null}
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-800 dark:text-white/90">回测结果</h3>
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  {analysis
+                    ? `任务 ${analysis.taskId} · 策略 ${analysis.comboId} · 基准 ${analysis.benchmarkName} · 窗口 ${analysis.window}`
+                    : "选择一个策略后展示专业回测结果。"}
+                </p>
+                {analysis?.message ? <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{analysis.message}</p> : null}
+              </div>
+              {analysis ? (
+                <button
+                  type="button"
+                  onClick={() => void loadAiInsight(analysis.taskId, analysis.comboId, detail?.task.taskConfig.initialCapitalWan ?? 100)}
+                  disabled={aiInsightLoading}
+                  className="rounded-lg border border-gray-300 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:text-gray-200"
+                >
+                  {aiInsightLoading ? "Kimi 解读中..." : "Kimi 白盒解读"}
+                </button>
+              ) : null}
+            </div>
           </div>
           <div className="p-5">
             {analysisLoading ? <p className="text-sm text-gray-500 dark:text-gray-400">回测结果加载中...</p> : null}
@@ -1345,6 +1546,206 @@ export default function CbQuantBacktestEvaluationPage() {
                 {analysisError}
               </p>
             ) : null}
+            <div className="mb-4 rounded-xl border border-gray-200 bg-gray-50/80 p-4 dark:border-gray-800 dark:bg-gray-900/40">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h4 className="text-sm font-semibold text-gray-900 dark:text-white">Kimi 白盒解读</h4>
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    展示喂给模型的上下文、提示词，以及模型输出，方便核对分析依据。
+                  </p>
+                </div>
+                {aiInsight ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-full border border-gray-300 px-2 py-1 text-[11px] text-gray-600 dark:border-gray-700 dark:text-gray-300">
+                      {aiInsight.provider} · {aiInsight.model}{aiInsight.cached ? " · cache" : ""}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void copyText("Prompt", aiInsight.promptMarkdown)}
+                      className="rounded-lg border border-gray-300 px-2 py-1 text-[11px] font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-200"
+                    >
+                      复制Prompt
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void copyText("上下文", aiInsight.contextMarkdown)}
+                      className="rounded-lg border border-gray-300 px-2 py-1 text-[11px] font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-200"
+                    >
+                      复制上下文
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+              {copyFeedback ? <p className="mt-2 text-xs text-green-600 dark:text-green-300">{copyFeedback}</p> : null}
+              {aiInsightLoading ? <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">正在生成 Kimi 解读...</p> : null}
+              {aiInsightError ? (
+                <p className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600 dark:border-red-900/50 dark:bg-red-500/10 dark:text-red-300">
+                  {aiInsightError}
+                </p>
+              ) : null}
+              {!aiInsightLoading && !aiInsightError && !aiInsight ? (
+                <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">点击上方按钮，可用 Kimi 对当前组合做白盒化结果解读。</p>
+              ) : null}
+              {aiInsight ? (
+                <div className="mt-4 space-y-4">
+                  {aiInsight.message ? (
+                    <p className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700 dark:border-blue-900/50 dark:bg-blue-500/10 dark:text-blue-300">
+                      {aiInsight.message}
+                    </p>
+                  ) : null}
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <div className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-950/40 xl:col-span-2">
+                      <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">一句话结论</div>
+                      <div className="text-sm leading-6 text-gray-800 dark:text-gray-100">{aiInsight.executiveSummary || "模型尚未返回结构化结论。"}</div>
+                    </div>
+                    <div className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-950/40">
+                      <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">收益驱动</div>
+                      <ul className="space-y-2 text-sm leading-6 text-gray-800 dark:text-gray-100">
+                        {(aiInsight.returnDrivers.length ? aiInsight.returnDrivers : ["暂无"]).map((item) => <li key={item}>• {item}</li>)}
+                      </ul>
+                    </div>
+                    <div className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-950/40">
+                      <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">风险暴露</div>
+                      <ul className="space-y-2 text-sm leading-6 text-gray-800 dark:text-gray-100">
+                        {(aiInsight.riskExposures.length ? aiInsight.riskExposures : ["暂无"]).map((item) => <li key={item}>• {item}</li>)}
+                      </ul>
+                    </div>
+                    <div className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-950/40">
+                      <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">参数解读</div>
+                      <ul className="space-y-2 text-sm leading-6 text-gray-800 dark:text-gray-100">
+                        {(aiInsight.parameterInterpretation.length ? aiInsight.parameterInterpretation : ["暂无"]).map((item) => <li key={item}>• {item}</li>)}
+                      </ul>
+                    </div>
+                    <div className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-950/40">
+                      <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">下一步验证建议</div>
+                      <ul className="space-y-2 text-sm leading-6 text-gray-800 dark:text-gray-100">
+                        {(aiInsight.nextSteps.length ? aiInsight.nextSteps : ["暂无"]).map((item) => <li key={item}>• {item}</li>)}
+                      </ul>
+                    </div>
+                    {aiInsight.analysisMarkdown ? (
+                      <div className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-950/40 xl:col-span-2">
+                        <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">模型原始输出</div>
+                        <div className="whitespace-pre-wrap text-sm leading-6 text-gray-800 dark:text-gray-100">{aiInsight.analysisMarkdown}</div>
+                      </div>
+                    ) : null}
+                  </div>
+                  <details className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-950/40">
+                    <summary className="cursor-pointer text-sm font-medium text-gray-800 dark:text-gray-100">查看白盒上下文</summary>
+                    <pre className="mt-3 whitespace-pre-wrap text-xs leading-6 text-gray-600 dark:text-gray-300">{aiInsight.contextMarkdown}</pre>
+                  </details>
+                  <details className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-950/40">
+                    <summary className="cursor-pointer text-sm font-medium text-gray-800 dark:text-gray-100">查看提示词</summary>
+                    <pre className="mt-3 whitespace-pre-wrap text-xs leading-6 text-gray-600 dark:text-gray-300">{aiInsight.promptMarkdown}</pre>
+                  </details>
+                </div>
+              ) : null}
+            </div>
+            <div className="mb-4 rounded-xl border border-gray-200 bg-gray-50/80 p-4 dark:border-gray-800 dark:bg-gray-900/40">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h4 className="text-sm font-semibold text-gray-900 dark:text-white">Kimi 横向优劣分析</h4>
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    从榜单里选择两个组合，比较收益质量、风险暴露和下一步验证重点。
+                  </p>
+                </div>
+                {aiCompare ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-full border border-gray-300 px-2 py-1 text-[11px] text-gray-600 dark:border-gray-700 dark:text-gray-300">
+                      {aiCompare.provider} · {aiCompare.model}{aiCompare.cached ? " · cache" : ""}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void copyText("对比Prompt", aiCompare.promptMarkdown)}
+                      className="rounded-lg border border-gray-300 px-2 py-1 text-[11px] font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-200"
+                    >
+                      复制Prompt
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void copyText("对比上下文", aiCompare.contextMarkdown)}
+                      className="rounded-lg border border-gray-300 px-2 py-1 text-[11px] font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-200"
+                    >
+                      复制上下文
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+              {aiCompareLoading ? <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">正在生成 Kimi 横向优劣分析...</p> : null}
+              {aiCompareError ? (
+                <p className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600 dark:border-red-900/50 dark:bg-red-500/10 dark:text-red-300">
+                  {aiCompareError}
+                </p>
+              ) : null}
+              {!aiCompareLoading && !aiCompareError && !aiCompare ? (
+                <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">先从榜单中加入两个组合到对比池，再点击“Kimi横向优劣分析”。</p>
+              ) : null}
+              {aiCompare ? (
+                <div className="mt-4 space-y-4">
+                  {aiCompare.message ? (
+                    <p className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700 dark:border-blue-900/50 dark:bg-blue-500/10 dark:text-blue-300">
+                      {aiCompare.message}
+                    </p>
+                  ) : null}
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <div className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-950/40 xl:col-span-2">
+                      <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">一句话结论</div>
+                      <div className="text-sm leading-6 text-gray-800 dark:text-gray-100">{aiCompare.executiveSummary || "模型尚未返回结构化结论。"}</div>
+                      {aiCompare.winnerComboId ? (
+                        <p className="mt-3 inline-flex rounded-full border border-green-300 bg-green-50 px-3 py-1 text-xs font-medium text-green-700 dark:border-green-900/50 dark:bg-green-500/10 dark:text-green-300">
+                          当前更优：{aiCompare.winnerComboId}
+                        </p>
+                      ) : null}
+                    </div>
+                    <div className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-950/40">
+                      <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">胜出原因</div>
+                      <ul className="space-y-2 text-sm leading-6 text-gray-800 dark:text-gray-100">
+                        {(aiCompare.winnerReason.length ? aiCompare.winnerReason : ["暂无"]).map((item) => <li key={item}>• {item}</li>)}
+                      </ul>
+                    </div>
+                    <div className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-950/40">
+                      <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">下一步验证</div>
+                      <ul className="space-y-2 text-sm leading-6 text-gray-800 dark:text-gray-100">
+                        {(aiCompare.whatToVerifyNext.length ? aiCompare.whatToVerifyNext : ["暂无"]).map((item) => <li key={item}>• {item}</li>)}
+                      </ul>
+                    </div>
+                    <div className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-950/40">
+                      <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">组合A优势</div>
+                      <ul className="space-y-2 text-sm leading-6 text-gray-800 dark:text-gray-100">
+                        {(aiCompare.comboAStrengths.length ? aiCompare.comboAStrengths : ["暂无"]).map((item) => <li key={item}>• {item}</li>)}
+                      </ul>
+                    </div>
+                    <div className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-950/40">
+                      <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">组合A风险</div>
+                      <ul className="space-y-2 text-sm leading-6 text-gray-800 dark:text-gray-100">
+                        {(aiCompare.comboARisks.length ? aiCompare.comboARisks : ["暂无"]).map((item) => <li key={item}>• {item}</li>)}
+                      </ul>
+                    </div>
+                    <div className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-950/40">
+                      <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">组合B优势</div>
+                      <ul className="space-y-2 text-sm leading-6 text-gray-800 dark:text-gray-100">
+                        {(aiCompare.comboBStrengths.length ? aiCompare.comboBStrengths : ["暂无"]).map((item) => <li key={item}>• {item}</li>)}
+                      </ul>
+                    </div>
+                    <div className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-950/40">
+                      <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">组合B风险</div>
+                      <ul className="space-y-2 text-sm leading-6 text-gray-800 dark:text-gray-100">
+                        {(aiCompare.comboBRisks.length ? aiCompare.comboBRisks : ["暂无"]).map((item) => <li key={item}>• {item}</li>)}
+                      </ul>
+                    </div>
+                    {aiCompare.analysisMarkdown ? (
+                      <div className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-950/40 xl:col-span-2">
+                        <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">模型原始输出</div>
+                        <div className="whitespace-pre-wrap text-sm leading-6 text-gray-800 dark:text-gray-100">{aiCompare.analysisMarkdown}</div>
+                      </div>
+                    ) : null}
+                  </div>
+                  <details className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-950/40">
+                    <summary className="cursor-pointer text-sm font-medium text-gray-800 dark:text-gray-100">查看对比上下文</summary>
+                    <pre className="mt-3 whitespace-pre-wrap text-xs leading-6 text-gray-600 dark:text-gray-300">{aiCompare.contextMarkdown}</pre>
+                  </details>
+                </div>
+              ) : null}
+            </div>
             {!analysisLoading && !analysisError && analysis ? (
               <ScrollableDataTable
                 headers={[

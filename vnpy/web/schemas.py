@@ -492,6 +492,59 @@ class StrategyOptimizeTaskAnalysisResponse(BaseModel):
     message: str = ""
 
 
+class StrategyOptimizeTaskAiInsightRequest(BaseModel):
+    combo_id: str | None = None
+    initial_capital_wan: float | None = Field(default=None, gt=0)
+
+
+class StrategyOptimizeTaskAiInsightResponse(BaseModel):
+    ok: bool = True
+    enabled: bool = True
+    provider: str = "kimi"
+    model: str = ""
+    task_id: str
+    combo_id: str
+    context_markdown: str = ""
+    prompt_markdown: str = ""
+    analysis_markdown: str = ""
+    executive_summary: str = ""
+    return_drivers: list[str] = Field(default_factory=list)
+    risk_exposures: list[str] = Field(default_factory=list)
+    parameter_interpretation: list[str] = Field(default_factory=list)
+    next_steps: list[str] = Field(default_factory=list)
+    message: str = ""
+    generated_at: str | None = None
+    cached: bool = False
+
+
+class StrategyOptimizeTaskAiCompareRequest(BaseModel):
+    combo_ids: list[str] = Field(min_length=2, max_length=2)
+    initial_capital_wan: float | None = Field(default=None, gt=0)
+
+
+class StrategyOptimizeTaskAiCompareResponse(BaseModel):
+    ok: bool = True
+    enabled: bool = True
+    provider: str = "kimi"
+    model: str = ""
+    task_id: str
+    combo_ids: list[str] = Field(default_factory=list)
+    context_markdown: str = ""
+    prompt_markdown: str = ""
+    analysis_markdown: str = ""
+    executive_summary: str = ""
+    winner_combo_id: str = ""
+    winner_reason: list[str] = Field(default_factory=list)
+    combo_a_strengths: list[str] = Field(default_factory=list)
+    combo_a_risks: list[str] = Field(default_factory=list)
+    combo_b_strengths: list[str] = Field(default_factory=list)
+    combo_b_risks: list[str] = Field(default_factory=list)
+    what_to_verify_next: list[str] = Field(default_factory=list)
+    message: str = ""
+    generated_at: str | None = None
+    cached: bool = False
+
+
 class WsEvent(BaseModel):
     event: str
     payload: dict

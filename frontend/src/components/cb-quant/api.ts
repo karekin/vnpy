@@ -351,6 +351,49 @@ export type StrategyOptimizeTaskAnalysis = {
   message: string;
 };
 
+export type StrategyOptimizeTaskAiInsight = {
+  ok: boolean;
+  enabled: boolean;
+  provider: string;
+  model: string;
+  taskId: string;
+  comboId: string;
+  contextMarkdown: string;
+  promptMarkdown: string;
+  analysisMarkdown: string;
+  executiveSummary: string;
+  returnDrivers: string[];
+  riskExposures: string[];
+  parameterInterpretation: string[];
+  nextSteps: string[];
+  message: string;
+  generatedAt: string | null;
+  cached: boolean;
+};
+
+export type StrategyOptimizeTaskAiCompare = {
+  ok: boolean;
+  enabled: boolean;
+  provider: string;
+  model: string;
+  taskId: string;
+  comboIds: string[];
+  contextMarkdown: string;
+  promptMarkdown: string;
+  analysisMarkdown: string;
+  executiveSummary: string;
+  winnerComboId: string;
+  winnerReason: string[];
+  comboAStrengths: string[];
+  comboARisks: string[];
+  comboBStrengths: string[];
+  comboBRisks: string[];
+  whatToVerifyNext: string[];
+  message: string;
+  generatedAt: string | null;
+  cached: boolean;
+};
+
 export type FactorCatalogFactor = {
   id: string;
   factorName: string;
@@ -696,6 +739,49 @@ type StrategyOptimizeTaskAnalysisApi = {
   weekly_distribution: StrategyBacktestDistributionRowApi[];
   rotations: StrategyBacktestRotationRowApi[];
   message: string;
+};
+
+type StrategyOptimizeTaskAiInsightApi = {
+  ok: boolean;
+  enabled: boolean;
+  provider: string;
+  model: string;
+  task_id: string;
+  combo_id: string;
+  context_markdown: string;
+  prompt_markdown: string;
+  analysis_markdown: string;
+  executive_summary: string;
+  return_drivers: string[];
+  risk_exposures: string[];
+  parameter_interpretation: string[];
+  next_steps: string[];
+  message: string;
+  generated_at: string | null;
+  cached: boolean;
+};
+
+type StrategyOptimizeTaskAiCompareApi = {
+  ok: boolean;
+  enabled: boolean;
+  provider: string;
+  model: string;
+  task_id: string;
+  combo_ids: string[];
+  context_markdown: string;
+  prompt_markdown: string;
+  analysis_markdown: string;
+  executive_summary: string;
+  winner_combo_id: string;
+  winner_reason: string[];
+  combo_a_strengths: string[];
+  combo_a_risks: string[];
+  combo_b_strengths: string[];
+  combo_b_risks: string[];
+  what_to_verify_next: string[];
+  message: string;
+  generated_at: string | null;
+  cached: boolean;
 };
 
 const configuredApiBase = [
@@ -1636,6 +1722,81 @@ export async function getStrategyOptimizeTaskAnalysis(
     weeklyDistribution: payload.weekly_distribution.map(mapBacktestDistributionRow),
     rotations: payload.rotations.map(mapBacktestRotationRow),
     message: payload.message,
+  };
+}
+
+export async function getStrategyOptimizeTaskAiInsight(
+  taskId: string,
+  params?: { comboId?: string; initialCapitalWan?: number },
+): Promise<StrategyOptimizeTaskAiInsight> {
+  const payload = await requestJson<StrategyOptimizeTaskAiInsightApi>(
+    buildUrl(`/api/v1/cb-quant/strategy/optimize-tasks/${taskId}/analysis/ai`),
+    {
+      method: "POST",
+      body: JSON.stringify({
+        combo_id: params?.comboId,
+        initial_capital_wan: params?.initialCapitalWan ?? 100,
+      }),
+    },
+    { timeoutMs: 120_000 },
+  );
+  return {
+    ok: payload.ok,
+    enabled: payload.enabled,
+    provider: payload.provider,
+    model: payload.model,
+    taskId: payload.task_id,
+    comboId: payload.combo_id,
+    contextMarkdown: payload.context_markdown,
+    promptMarkdown: payload.prompt_markdown,
+    analysisMarkdown: payload.analysis_markdown,
+    executiveSummary: payload.executive_summary,
+    returnDrivers: payload.return_drivers,
+    riskExposures: payload.risk_exposures,
+    parameterInterpretation: payload.parameter_interpretation,
+    nextSteps: payload.next_steps,
+    message: payload.message,
+    generatedAt: payload.generated_at,
+    cached: payload.cached,
+  };
+}
+
+export async function compareStrategyOptimizeTaskAiInsight(
+  taskId: string,
+  payload: { comboIds: string[]; initialCapitalWan?: number },
+): Promise<StrategyOptimizeTaskAiCompare> {
+  const response = await requestJson<StrategyOptimizeTaskAiCompareApi>(
+    buildUrl(`/api/v1/cb-quant/strategy/optimize-tasks/${taskId}/analysis/ai-compare`),
+    {
+      method: "POST",
+      body: JSON.stringify({
+        combo_ids: payload.comboIds,
+        initial_capital_wan: payload.initialCapitalWan ?? 100,
+      }),
+    },
+    { timeoutMs: 120_000 },
+  );
+  return {
+    ok: response.ok,
+    enabled: response.enabled,
+    provider: response.provider,
+    model: response.model,
+    taskId: response.task_id,
+    comboIds: response.combo_ids,
+    contextMarkdown: response.context_markdown,
+    promptMarkdown: response.prompt_markdown,
+    analysisMarkdown: response.analysis_markdown,
+    executiveSummary: response.executive_summary,
+    winnerComboId: response.winner_combo_id,
+    winnerReason: response.winner_reason,
+    comboAStrengths: response.combo_a_strengths,
+    comboARisks: response.combo_a_risks,
+    comboBStrengths: response.combo_b_strengths,
+    comboBRisks: response.combo_b_risks,
+    whatToVerifyNext: response.what_to_verify_next,
+    message: response.message,
+    generatedAt: response.generated_at,
+    cached: response.cached,
   };
 }
 

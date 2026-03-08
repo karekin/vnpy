@@ -21,8 +21,11 @@ import json
 from math import ceil, comb, sqrt
 import os
 from pathlib import Path
+import re
 from threading import Event, Lock, Thread, current_thread
 from typing import Any, Iterable, TypeVar
+
+import requests
 
 from vnpy.web.adapters import CrawlerPhaseABacktestAdapter
 from vnpy.web.domain.cb_quant import cb_strategy_core
@@ -49,7 +52,9 @@ from vnpy.web.schemas import (
     StrategyBacktestMetricRow,
     StrategyBacktestRotationRow,
     StrategyOptimizeResultRow,
+    StrategyOptimizeTaskAiCompareResponse,
     StrategyOptimizeTaskAnalysisResponse,
+    StrategyOptimizeTaskAiInsightResponse,
     StrategyOptimizeTaskCreateRequest,
     StrategyOptimizeTaskCreateResponse,
     StrategyOptimizeTaskDetailResponse,
@@ -150,6 +155,8 @@ class CbQuantService:
         self._opt_task_seq = self._derive_opt_task_seq(self._optimize_tasks)
         self._mark_unfinished_optimize_tasks_as_failed_after_restart()
         self._optimize_analysis_cache: dict[tuple[str, str, float, str], StrategyOptimizeTaskAnalysisResponse] = {}
+        self._optimize_ai_cache: dict[tuple[str, str, float, str], StrategyOptimizeTaskAiInsightResponse] = {}
+        self._optimize_ai_compare_cache: dict[tuple[str, tuple[str, str], float, str], StrategyOptimizeTaskAiCompareResponse] = {}
 
     # ---------- strategy templates ----------
     def list_templates(
@@ -1051,6 +1058,561 @@ class CbQuantService:
         if len(self._optimize_analysis_cache) > 200:
             self._optimize_analysis_cache.clear()
         return response
+
+    def get_optimize_task_ai_insight(
+        self,
+        *,
+        task_id: str,
+        combo_id: str | None = None,
+        initial_capital_wan: float | None = None,
+    ) -> StrategyOptimizeTaskAiInsightResponse | None:
+        """调用 Kimi 对单个组合的回测结果做白盒解读。
+
+        白盒的含义不是“只返回一段结论”，而是把：
+        1. 喂给模型的事实上下文
+        2. 给模型的提示词
+        3. 模型最终输出
+        一并返回给前端，方便使用者核对大模型到底看到了什么。
+        """
+        task = self._get_optimize_task(task_id)
+        if not task:
+            return None
+        if initial_capital_wan is None:
+            initial_capital_wan = self._normalize_task_config(task.task_config).initial_capital_wan
+
+        detail = self.get_optimize_task_detail(task_id)
+        ranked_rows = detail.top_strategies if detail else []
+        selected_row = self._resolve_selected_optimize_row(ranked_rows, combo_id)
+
+        analysis = self.get_optimize_task_analysis(
+            task_id=task_id,
+            combo_id=combo_id or (selected_row.combo_id if selected_row else None),
+            initial_capital_wan=initial_capital_wan,
+        )
+        if not analysis:
+            return None
+
+        selected_combo_id = analysis.combo_id
+        if selected_row is None and selected_combo_id:
+            selected_row = self._resolve_selected_optimize_row(ranked_rows, selected_combo_id)
+
+        model = self._llm_model()
+        context_markdown = self._build_optimize_ai_context_markdown(
+            task=task,
+            selected_row=selected_row,
+            analysis=analysis,
+            initial_capital_wan=float(initial_capital_wan),
+            top_bonds=(detail.top_bonds if detail else [])[:10],
+        )
+        prompt_markdown = self._build_optimize_ai_prompt(context_markdown)
+        api_key = self._llm_api_key()
+        cache_key = (task_id, selected_combo_id, round(float(initial_capital_wan), 4), model)
+        cached = self._optimize_ai_cache.get(cache_key)
+        if cached:
+            return cached.model_copy(update={"cached": True})
+
+        if not api_key:
+            return StrategyOptimizeTaskAiInsightResponse(
+                ok=False,
+                enabled=False,
+                provider="kimi",
+                model=model,
+                task_id=task_id,
+                combo_id=selected_combo_id,
+                context_markdown=context_markdown,
+                prompt_markdown=prompt_markdown,
+                analysis_markdown="",
+                executive_summary="",
+                return_drivers=[],
+                risk_exposures=[],
+                parameter_interpretation=[],
+                next_steps=[],
+                message="未配置 MOONSHOT_API_KEY，当前仅返回白盒上下文和提示词预览。",
+                generated_at=_now_readable(),
+            )
+
+        try:
+            analysis_markdown = self._call_kimi(prompt_markdown)
+            parsed = self._parse_ai_json_payload(
+                analysis_markdown,
+                default={
+                    "executive_summary": "",
+                    "return_drivers": [],
+                    "risk_exposures": [],
+                    "parameter_interpretation": [],
+                    "next_steps": [],
+                },
+            )
+        except Exception as exc:
+            return StrategyOptimizeTaskAiInsightResponse(
+                ok=False,
+                enabled=True,
+                provider="kimi",
+                model=model,
+                task_id=task_id,
+                combo_id=selected_combo_id,
+                context_markdown=context_markdown,
+                prompt_markdown=prompt_markdown,
+                analysis_markdown="",
+                executive_summary="",
+                return_drivers=[],
+                risk_exposures=[],
+                parameter_interpretation=[],
+                next_steps=[],
+                message=f"Kimi 调用失败：{exc}",
+                generated_at=_now_readable(),
+            )
+
+        response = StrategyOptimizeTaskAiInsightResponse(
+            ok=True,
+            enabled=True,
+            provider="kimi",
+            model=model,
+            task_id=task_id,
+            combo_id=selected_combo_id,
+            context_markdown=context_markdown,
+            prompt_markdown=prompt_markdown,
+            analysis_markdown=analysis_markdown,
+            executive_summary=str(parsed.get("executive_summary", "")).strip(),
+            return_drivers=self._normalize_text_list(parsed.get("return_drivers")),
+            risk_exposures=self._normalize_text_list(parsed.get("risk_exposures")),
+            parameter_interpretation=self._normalize_text_list(parsed.get("parameter_interpretation")),
+            next_steps=self._normalize_text_list(parsed.get("next_steps")),
+            message="Kimi 白盒解读已生成。",
+            generated_at=_now_readable(),
+            cached=False,
+        )
+        self._optimize_ai_cache[cache_key] = response
+        if len(self._optimize_ai_cache) > 100:
+            self._optimize_ai_cache.clear()
+        return response
+
+    def compare_optimize_task_ai_insight(
+        self,
+        *,
+        task_id: str,
+        combo_ids: list[str],
+        initial_capital_wan: float | None = None,
+    ) -> StrategyOptimizeTaskAiCompareResponse | None:
+        task = self._get_optimize_task(task_id)
+        if not task:
+            return None
+        normalized_combo_ids = [str(item).strip() for item in combo_ids if str(item).strip()]
+        if len(normalized_combo_ids) != 2:
+            raise ValueError("combo_ids must contain exactly two combo ids")
+        if initial_capital_wan is None:
+            initial_capital_wan = self._normalize_task_config(task.task_config).initial_capital_wan
+
+        detail = self.get_optimize_task_detail(task_id)
+        ranked_rows = detail.top_strategies if detail else []
+        row_a = self._resolve_selected_optimize_row(ranked_rows, normalized_combo_ids[0])
+        row_b = self._resolve_selected_optimize_row(ranked_rows, normalized_combo_ids[1])
+        if row_a is None or row_b is None:
+            raise ValueError("selected combos are not available in current task leaderboard")
+
+        analysis_a = self.get_optimize_task_analysis(
+            task_id=task_id,
+            combo_id=row_a.combo_id,
+            initial_capital_wan=initial_capital_wan,
+        )
+        analysis_b = self.get_optimize_task_analysis(
+            task_id=task_id,
+            combo_id=row_b.combo_id,
+            initial_capital_wan=initial_capital_wan,
+        )
+        if not analysis_a or not analysis_b:
+            raise ValueError("unable to build analysis for selected combos")
+
+        model = self._llm_model()
+        combo_pair = tuple(sorted([row_a.combo_id, row_b.combo_id]))
+        context_markdown = self._build_optimize_ai_compare_context_markdown(
+            task=task,
+            row_a=row_a,
+            row_b=row_b,
+            analysis_a=analysis_a,
+            analysis_b=analysis_b,
+            initial_capital_wan=float(initial_capital_wan),
+        )
+        prompt_markdown = self._build_optimize_ai_compare_prompt(context_markdown, row_a.combo_id, row_b.combo_id)
+        cache_key = (task_id, combo_pair, round(float(initial_capital_wan), 4), model)
+        cached = self._optimize_ai_compare_cache.get(cache_key)
+        if cached:
+            return cached.model_copy(update={"cached": True})
+
+        if not self._llm_api_key():
+            return StrategyOptimizeTaskAiCompareResponse(
+                ok=False,
+                enabled=False,
+                provider="kimi",
+                model=model,
+                task_id=task_id,
+                combo_ids=[row_a.combo_id, row_b.combo_id],
+                context_markdown=context_markdown,
+                prompt_markdown=prompt_markdown,
+                analysis_markdown="",
+                executive_summary="",
+                winner_combo_id="",
+                winner_reason=[],
+                combo_a_strengths=[],
+                combo_a_risks=[],
+                combo_b_strengths=[],
+                combo_b_risks=[],
+                what_to_verify_next=[],
+                message="未配置 MOONSHOT_API_KEY，当前仅返回对比上下文和提示词预览。",
+                generated_at=_now_readable(),
+            )
+
+        try:
+            analysis_markdown = self._call_kimi(prompt_markdown)
+            parsed = self._parse_ai_json_payload(
+                analysis_markdown,
+                default={
+                    "executive_summary": "",
+                    "winner_combo_id": "",
+                    "winner_reason": [],
+                    "combo_a_strengths": [],
+                    "combo_a_risks": [],
+                    "combo_b_strengths": [],
+                    "combo_b_risks": [],
+                    "what_to_verify_next": [],
+                },
+            )
+        except Exception as exc:
+            return StrategyOptimizeTaskAiCompareResponse(
+                ok=False,
+                enabled=True,
+                provider="kimi",
+                model=model,
+                task_id=task_id,
+                combo_ids=[row_a.combo_id, row_b.combo_id],
+                context_markdown=context_markdown,
+                prompt_markdown=prompt_markdown,
+                analysis_markdown="",
+                executive_summary="",
+                winner_combo_id="",
+                winner_reason=[],
+                combo_a_strengths=[],
+                combo_a_risks=[],
+                combo_b_strengths=[],
+                combo_b_risks=[],
+                what_to_verify_next=[],
+                message=f"Kimi 对比调用失败：{exc}",
+                generated_at=_now_readable(),
+            )
+
+        response = StrategyOptimizeTaskAiCompareResponse(
+            ok=True,
+            enabled=True,
+            provider="kimi",
+            model=model,
+            task_id=task_id,
+            combo_ids=[row_a.combo_id, row_b.combo_id],
+            context_markdown=context_markdown,
+            prompt_markdown=prompt_markdown,
+            analysis_markdown=analysis_markdown,
+            executive_summary=str(parsed.get("executive_summary", "")).strip(),
+            winner_combo_id=str(parsed.get("winner_combo_id", "")).strip(),
+            winner_reason=self._normalize_text_list(parsed.get("winner_reason")),
+            combo_a_strengths=self._normalize_text_list(parsed.get("combo_a_strengths")),
+            combo_a_risks=self._normalize_text_list(parsed.get("combo_a_risks")),
+            combo_b_strengths=self._normalize_text_list(parsed.get("combo_b_strengths")),
+            combo_b_risks=self._normalize_text_list(parsed.get("combo_b_risks")),
+            what_to_verify_next=self._normalize_text_list(parsed.get("what_to_verify_next")),
+            message="Kimi 横向优劣分析已生成。",
+            generated_at=_now_readable(),
+            cached=False,
+        )
+        self._optimize_ai_compare_cache[cache_key] = response
+        if len(self._optimize_ai_compare_cache) > 50:
+            self._optimize_ai_compare_cache.clear()
+        return response
+
+    @staticmethod
+    def _resolve_selected_optimize_row(
+        ranked_rows: list[StrategyOptimizeResultRow],
+        combo_id: str | None,
+    ) -> StrategyOptimizeResultRow | None:
+        if combo_id:
+            row = next((item for item in ranked_rows if item.combo_id == combo_id), None)
+            if row:
+                return row
+        return ranked_rows[0] if ranked_rows else None
+
+    def _build_optimize_ai_context_markdown(
+        self,
+        *,
+        task: StrategyOptimizeTaskRow,
+        selected_row: StrategyOptimizeResultRow | None,
+        analysis: StrategyOptimizeTaskAnalysisResponse,
+        initial_capital_wan: float,
+        top_bonds: list[StrategyTopBondRow],
+    ) -> str:
+        metric = analysis.metric_rows[0] if analysis.metric_rows else None
+        latest_curve = analysis.curve[-1] if analysis.curve else None
+        yearly = self._format_distribution_rows(analysis.yearly_distribution, limit=6)
+        monthly = self._format_distribution_rows(analysis.monthly_distribution, limit=8)
+        rotations = analysis.rotations[-8:]
+        top_bond_lines = [
+            f"- #{row.rank} {row.bond_id} {row.bond_name}，现价 {row.price:.2f}，溢价率 {row.premium_rt:.2f}%，双低 {row.dblow:.2f}，评分 {row.score:.2f}"
+            for row in top_bonds
+        ]
+        rotation_lines = [
+            f"- {row.rebalance_date} 持仓 {row.holdings}，换手 {row.turnover_pct:.2f}%，阶段收益 {row.period_return_pct:.2f}%，累计 {row.cumulative_return_pct:.2f}%"
+            for row in rotations
+        ]
+        params_text = json.dumps(selected_row.params if selected_row else {}, ensure_ascii=False, indent=2, sort_keys=True)
+        summary_lines = [
+            f"- 任务ID：{task.task_id}",
+            f"- 模板：{task.template_name}（{task.template_id}）",
+            f"- 组合ID：{analysis.combo_id}",
+            f"- 回测窗口：{analysis.window}",
+            f"- 基准：{analysis.benchmark_name}",
+            f"- 初始资金：{initial_capital_wan:.2f} 万",
+            f"- 任务状态：{task.status}",
+            f"- 任务消息：{task.message or '--'}",
+        ]
+        metric_lines = [
+            f"- 总收益率：{metric.total_return_pct:.2f}%" if metric and metric.total_return_pct is not None else "- 总收益率：--",
+            f"- 年化收益率：{metric.annual_return_pct:.2f}%" if metric and metric.annual_return_pct is not None else "- 年化收益率：--",
+            f"- 最大回撤：{metric.max_drawdown_pct:.2f}%" if metric and metric.max_drawdown_pct is not None else "- 最大回撤：--",
+            f"- Sharpe：{metric.sharpe:.3f}" if metric and metric.sharpe is not None else "- Sharpe：--",
+            f"- Sortino：{metric.sortino:.3f}" if metric and metric.sortino is not None else "- Sortino：--",
+            f"- Calmar：{metric.calmar:.3f}" if metric and metric.calmar is not None else "- Calmar：--",
+            f"- 胜率：{metric.win_rate_pct:.2f}%" if metric and metric.win_rate_pct is not None else "- 胜率：--",
+            f"- 日均换手：{metric.avg_turnover_pct:.2f}%" if metric and metric.avg_turnover_pct is not None else "- 日均换手：--",
+            f"- 最大回撤持续天数：{metric.max_drawdown_duration_days:.0f}" if metric and metric.max_drawdown_duration_days is not None else "- 最大回撤持续天数：--",
+        ]
+        curve_lines = [
+            f"- 最新策略累计收益：{latest_curve.strategy_cum_return_pct:.2f}%" if latest_curve else "- 最新策略累计收益：--",
+            f"- 最新基准累计收益：{latest_curve.benchmark_cum_return_pct:.2f}%" if latest_curve else "- 最新基准累计收益：--",
+            f"- 最新相对超额：{latest_curve.relative_excess_pct:.2f}%" if latest_curve else "- 最新相对超额：--",
+            f"- 最新回撤：{latest_curve.drawdown_pct:.2f}%" if latest_curve else "- 最新回撤：--",
+        ]
+        return "\n".join(
+            [
+                "## 任务概况",
+                *summary_lines,
+                "",
+                "## 参数",
+                "```json",
+                params_text,
+                "```",
+                "",
+                "## 核心指标",
+                *metric_lines,
+                "",
+                "## 曲线摘要",
+                *curve_lines,
+                "",
+                "## 年度收益分布",
+                *(yearly or ["- --"]),
+                "",
+                "## 月度收益分布（最近）",
+                *(monthly or ["- --"]),
+                "",
+                "## 最近调仓记录",
+                *(rotation_lines or ["- --"]),
+                "",
+                "## 当前市场 Top 债",
+                *(top_bond_lines or ["- --"]),
+                "",
+                "## 后端提示",
+                f"- {analysis.message or '无'}",
+            ]
+        )
+
+    @staticmethod
+    def _build_optimize_ai_prompt(context_markdown: str) -> str:
+        return "\n".join(
+            [
+                "你是可转债量化研究助手。",
+                "",
+                "请严格只基于下面给出的回测事实做分析，不要编造未提供的数据。",
+                "请只输出一个 JSON 对象，不要输出 markdown 代码块，不要输出额外解释。",
+                "JSON schema:",
+                '{"executive_summary":"一句话总结","return_drivers":["..."],"risk_exposures":["..."],"parameter_interpretation":["..."],"next_steps":["..."]}',
+                "要求：",
+                "1. 每个数组 2-4 条。",
+                "2. 尽量引用具体指标数值。",
+                "3. 如果证据不足，就明确写“证据不足”。",
+                "",
+                "以下是白盒上下文：",
+                "",
+                context_markdown,
+            ]
+        )
+
+    def _build_optimize_ai_compare_context_markdown(
+        self,
+        *,
+        task: StrategyOptimizeTaskRow,
+        row_a: StrategyOptimizeResultRow,
+        row_b: StrategyOptimizeResultRow,
+        analysis_a: StrategyOptimizeTaskAnalysisResponse,
+        analysis_b: StrategyOptimizeTaskAnalysisResponse,
+        initial_capital_wan: float,
+    ) -> str:
+        return "\n\n".join(
+            [
+                f"## 任务\n- 任务ID：{task.task_id}\n- 模板：{task.template_name}（{task.template_id}）\n- 初始资金：{initial_capital_wan:.2f} 万\n- 窗口：{analysis_a.window}",
+                f"## 组合A：{row_a.combo_id}\n{self._build_optimize_ai_context_markdown(task=task, selected_row=row_a, analysis=analysis_a, initial_capital_wan=initial_capital_wan, top_bonds=[])}",
+                f"## 组合B：{row_b.combo_id}\n{self._build_optimize_ai_context_markdown(task=task, selected_row=row_b, analysis=analysis_b, initial_capital_wan=initial_capital_wan, top_bonds=[])}",
+            ]
+        )
+
+    @staticmethod
+    def _build_optimize_ai_compare_prompt(context_markdown: str, combo_a: str, combo_b: str) -> str:
+        return "\n".join(
+            [
+                "你是可转债量化研究助手。",
+                "",
+                "请严格只基于下面给出的两组回测事实做横向优劣分析，不要编造未提供的数据。",
+                "请只输出一个 JSON 对象，不要输出 markdown 代码块，不要输出额外解释。",
+                "JSON schema:",
+                '{"executive_summary":"一句话总结","winner_combo_id":"更优组合ID","winner_reason":["..."],"combo_a_strengths":["..."],"combo_a_risks":["..."],"combo_b_strengths":["..."],"combo_b_risks":["..."],"what_to_verify_next":["..."]}',
+                f"winner_combo_id 只能填写 {combo_a} 或 {combo_b}。",
+                "每个数组 2-4 条，尽量引用具体指标数值。",
+                "",
+                "以下是白盒上下文：",
+                "",
+                context_markdown,
+            ]
+        )
+
+    @staticmethod
+    def _format_distribution_rows(
+        rows: list[StrategyBacktestDistributionRow],
+        *,
+        limit: int,
+    ) -> list[str]:
+        if not rows:
+            return []
+        picked = rows[-limit:]
+        return [
+            f"- {row.period}：策略 {row.strategy_return_pct:.2f}%，基准 {row.benchmark_return_pct:.2f}%，超额 {row.excess_return_pct:.2f}%"
+            for row in picked
+        ]
+
+    @staticmethod
+    def _normalize_text_list(value: Any) -> list[str]:
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+        return []
+
+    @staticmethod
+    def _parse_ai_json_payload(raw_text: str, *, default: dict[str, Any]) -> dict[str, Any]:
+        text = str(raw_text or "").strip()
+        if not text:
+            return dict(default)
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text)
+            text = re.sub(r"\s*```$", "", text)
+            text = text.strip()
+        try:
+            data = json.loads(text)
+            if isinstance(data, dict):
+                return {**default, **data}
+        except Exception:
+            pass
+        match = re.search(r"\{[\s\S]*\}", text)
+        if match:
+            try:
+                data = json.loads(match.group(0))
+                if isinstance(data, dict):
+                    return {**default, **data}
+            except Exception:
+                pass
+        return dict(default)
+
+    def _call_kimi(self, prompt_markdown: str) -> str:
+        api_key = self._llm_api_key()
+        if not api_key:
+            raise RuntimeError("missing MOONSHOT_API_KEY")
+        base_url = self._llm_base_url()
+        payload = {
+            "model": self._llm_model(),
+            "temperature": 0.2,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "你是一名谨慎、可审计的可转债量化研究员，只能依据提供的事实分析。",
+                },
+                {
+                    "role": "user",
+                    "content": prompt_markdown,
+                },
+            ],
+        }
+        response = requests.post(
+            f"{base_url}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=(10, 120),
+        )
+        response.raise_for_status()
+        body = response.json()
+        choices = body.get("choices") or []
+        if not choices:
+            raise RuntimeError("empty choices from Kimi")
+        message = choices[0].get("message", {})
+        content = message.get("content", "")
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            chunks: list[str] = []
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    chunks.append(str(item.get("text", "")))
+            text = "\n".join([chunk for chunk in chunks if chunk.strip()]).strip()
+            if text:
+                return text
+        raise RuntimeError("empty content from Kimi")
+
+    @staticmethod
+    def _load_local_env_map() -> dict[str, str]:
+        project_root = Path(__file__).resolve().parents[3]
+        env_file = project_root / ".env.tushare.local"
+        if not env_file.exists():
+            return {}
+        result: dict[str, str] = {}
+        pattern = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)\s*$")
+        for raw in env_file.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            match = pattern.match(line)
+            if not match:
+                continue
+            key = match.group(1)
+            value = match.group(2).strip()
+            if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+                value = value[1:-1]
+            result[key] = value
+        return result
+
+    @classmethod
+    def _env_or_local(cls, name: str, default: str = "") -> str:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+        return cls._load_local_env_map().get(name, default).strip()
+
+    @classmethod
+    def _llm_api_key(cls) -> str:
+        return cls._env_or_local("MOONSHOT_API_KEY")
+
+    @classmethod
+    def _llm_base_url(cls) -> str:
+        return cls._env_or_local("MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1").rstrip("/")
+
+    @classmethod
+    def _llm_model(cls) -> str:
+        return cls._env_or_local("MOONSHOT_MODEL", "kimi-latest")
 
     def get_optimize_summary(
         self,

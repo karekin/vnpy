@@ -21,6 +21,10 @@ from vnpy.web.schemas import (
     StrategyOptimizeTaskCreateRequest,
     StrategyOptimizeTaskCreateResponse,
     StrategyOptimizeTaskAnalysisResponse,
+    StrategyOptimizeTaskAiInsightRequest,
+    StrategyOptimizeTaskAiInsightResponse,
+    StrategyOptimizeTaskAiCompareRequest,
+    StrategyOptimizeTaskAiCompareResponse,
     StrategyOptimizeTaskDetailResponse,
     StrategyOptimizeTaskListResponse,
     StrategyOptimizeSummaryResponse,
@@ -320,6 +324,36 @@ def get_optimize_task_analysis(
         task_id=task_id,
         combo_id=combo_id,
         initial_capital_wan=initial_capital_wan,
+    )
+    if not detail:
+        raise HTTPException(status_code=404, detail=f"optimize task not found: {task_id}")
+    return detail
+
+
+@router.post("/strategy/optimize-tasks/{task_id}/analysis/ai", response_model=StrategyOptimizeTaskAiInsightResponse)
+def get_optimize_task_ai_insight(
+    task_id: str,
+    request: StrategyOptimizeTaskAiInsightRequest,
+) -> StrategyOptimizeTaskAiInsightResponse:
+    detail = cb_quant_service.get_optimize_task_ai_insight(
+        task_id=task_id,
+        combo_id=request.combo_id,
+        initial_capital_wan=request.initial_capital_wan,
+    )
+    if not detail:
+        raise HTTPException(status_code=404, detail=f"optimize task not found: {task_id}")
+    return detail
+
+
+@router.post("/strategy/optimize-tasks/{task_id}/analysis/ai-compare", response_model=StrategyOptimizeTaskAiCompareResponse)
+def compare_optimize_task_ai_insight(
+    task_id: str,
+    request: StrategyOptimizeTaskAiCompareRequest,
+) -> StrategyOptimizeTaskAiCompareResponse:
+    detail = cb_quant_service.compare_optimize_task_ai_insight(
+        task_id=task_id,
+        combo_ids=request.combo_ids,
+        initial_capital_wan=request.initial_capital_wan,
     )
     if not detail:
         raise HTTPException(status_code=404, detail=f"optimize task not found: {task_id}")
