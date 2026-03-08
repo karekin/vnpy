@@ -860,10 +860,18 @@ class CbTushareService:
         """判断该债在指定交易日是否处于有效上市状态。"""
         list_date = str(_pick(basic, "list_date", default="")).strip()
         delist_date = str(_pick(basic, "delist_date", default="")).strip()
+        maturity_date = str(_pick(basic, "maturity_date", default="")).strip()
         remain_size = _safe_float(_pick(basic, "remain_size"), 0.0)
         if list_date:
             try:
                 if datetime.strptime(_to_ymd(list_date), "%Y-%m-%d").date() > trade_date:
+                    return False
+            except ValueError:
+                pass
+        if maturity_date:
+            try:
+                # Tushare 基础表偶尔缺失 delist_date，但已到期债也必须从当前市场里排除。
+                if datetime.strptime(_to_ymd(maturity_date), "%Y-%m-%d").date() <= trade_date:
                     return False
             except ValueError:
                 pass

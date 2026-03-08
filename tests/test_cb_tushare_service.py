@@ -334,6 +334,17 @@ class TestCbTusharePriceCleaning:
 
 
 class TestCbTushareMarketRows:
+    def test_is_listed_on_trade_date_should_exclude_matured_bond_without_delist_date(self) -> None:
+        assert CbTushareService._is_listed_on_trade_date(
+            basic={
+                "list_date": "20180904",
+                "maturity_date": "20240814",
+                "delist_date": "",
+                "remain_size": "359091200",
+            },
+            trade_date=date(2026, 3, 6),
+        ) is False
+
     def test_load_latest_market_rows_should_use_latest_trade_day_and_convert_units(
         self,
         isolated_service: CbTushareService,
