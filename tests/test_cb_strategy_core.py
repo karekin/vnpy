@@ -8,7 +8,7 @@ import pandas as pd
 from vnpy.web import app as web_app
 from vnpy.web.core import cb_backtest
 from vnpy.web.core.cb_backtest import cli as phase_a_cli
-from vnpy.web.core.cb_backtest import backtest as phase_a_backtest
+from vnpy.web.core.cb_backtest import portfolio_backtest as phase_a_backtest
 from vnpy.web.services.cb_backtest_service import CbBacktestService
 from vnpy.web.services.cb_history_service import CbHistoryService
 

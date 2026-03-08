@@ -962,12 +962,11 @@ class CbQuantService:
         task = self._get_optimize_task(task_id)
         if not task:
             return None
-        if initial_capital_wan is None:
-            initial_capital_wan = self._normalize_task_config(task.task_config).initial_capital_wan
         task_config = self._normalize_task_config(task.task_config)
-        benchmark_name = "转债等权"
-        if task_config.benchmark_name and task_config.benchmark_name != "转债等权":
-            benchmark_name = f"{task_config.benchmark_name}（暂按转债等权测算）"
+        if initial_capital_wan is None:
+            initial_capital_wan = task_config.initial_capital_wan
+        benchmark_name = self._analysis_benchmark_name(task_config)
+        window = self._analysis_window_for_task(task)
 
         # 这里故意要求“任务必须 finished”才返回正式分析，
         # 避免前端把中间结果误当成最终结论。
@@ -979,7 +978,7 @@ class CbQuantService:
                 template_name=task.template_name,
                 combo_id=combo_id or "--",
                 benchmark_name=benchmark_name,
-                window="full" if "full" in task.windows else (task.windows[0] if task.windows else "full"),
+                window=window,
                 metric_rows=[],
                 curve=[],
                 yearly_distribution=[],
@@ -998,13 +997,31 @@ class CbQuantService:
             selected_row = next((row for row in ranked_rows if row.combo_id == combo_id), None)
         if selected_row is None and ranked_rows:
             selected_row = ranked_rows[0]
-
-        selected_combo_id = combo_id or (selected_row.combo_id if selected_row else "CMB-000001")
+        snapshot = self._store.load_optimize_task_analysis_snapshot(task_id)
+        selected_combo_id = combo_id or (selected_row.combo_id if selected_row else str(snapshot.get("combo_id") or "CMB-000001"))
         state_marker = f"{task.status}:{task.evaluated_combinations}/{task.total_combinations}"
-        cache_key = (task_id, selected_combo_id, round(float(initial_capital_wan), 4), state_marker)
+        cache_key = self._optimize_analysis_cache_key(
+            task_id=task_id,
+            combo_id=selected_combo_id,
+            initial_capital_wan=initial_capital_wan,
+            state_marker=state_marker,
+        )
         cached = self._optimize_analysis_cache.get(cache_key)
         if cached:
             return cached
+
+        if snapshot and self._can_use_optimize_analysis_snapshot(
+            snapshot=snapshot,
+            combo_id=selected_combo_id,
+            initial_capital_wan=initial_capital_wan,
+        ):
+            try:
+                response = self._build_optimize_analysis_response_from_snapshot(snapshot)
+            except Exception:
+                response = None
+            if response is not None:
+                self._cache_optimize_analysis_response(cache_key=cache_key, response=response)
+                return response
 
         if selected_row is not None:
             setting = dict(selected_row.params)
@@ -1012,141 +1029,28 @@ class CbQuantService:
             setting = self._resolve_setting_for_combo(combo_id=selected_combo_id, template_name=task.template_name)
         setting = self._apply_task_config_to_setting(setting, task_config)
 
-        window = "full" if "full" in task.windows else (task.windows[0] if task.windows else "full")
         start_date = self._parse_iso_date(task.start_date)
         end_date = self._parse_iso_date(task.end_date)
 
         dataset = self._backtest_service.load_market_data()
-        sliced = self._backtest_service.slice_dataset(
+        sliced, message_parts = self._slice_analysis_dataset(
             dataset=dataset,
             window_name=window,
             start_date=start_date,
             end_date=end_date,
         )
-        message_parts: list[str] = []
-        if not sliced and (start_date or end_date):
-            sliced = self._backtest_service.slice_dataset(
-                dataset=dataset,
-                window_name=window,
-                start_date=None,
-                end_date=None,
-            )
-            if sliced:
-                message_parts.append(
-                    f"指定区间无可用快照，已回退到 {sliced[0][0]}~{sliced[-1][0]}。"
-                )
-        if sliced:
-            message_parts.append(f"实际分析区间：{sliced[0][0]}~{sliced[-1][0]}。")
-
-        if not sliced:
-            response = StrategyOptimizeTaskAnalysisResponse(
-                task_id=task.task_id,
-                template_id=task.template_id,
-                template_name=task.template_name,
-                combo_id=selected_combo_id,
-                benchmark_name=benchmark_name,
-                window=window,
-                metric_rows=[],
-                curve=[],
-                yearly_distribution=[],
-                monthly_distribution=[],
-                weekly_distribution=[],
-                rotations=[],
-                message="没有可用历史快照，请先同步历史快照后重试。",
-            )
-            self._optimize_analysis_cache[cache_key] = response
-            return response
-
-        strategy = self._simulate_detailed_strategy(
-            dataset=sliced,
-            setting=setting,
-            initial_capital_wan=initial_capital_wan,
-        )
-        benchmark = self._simulate_equal_weight_benchmark(
-            dataset=sliced,
-            initial_capital_wan=initial_capital_wan,
-        )
-
-        strategy_metrics = self._compute_backtest_metrics(
-            daily_returns=strategy["daily_returns"],
-            nav_series=strategy["nav_series"],
-            initial_capital_wan=initial_capital_wan,
-            turnover_pct=strategy["turnover_pct"],
-            trade_pnls_pct=strategy["trade_pnls_pct"],
-        )
-        benchmark_metrics = self._compute_backtest_metrics(
-            daily_returns=benchmark["daily_returns"],
-            nav_series=benchmark["nav_series"],
-            initial_capital_wan=initial_capital_wan,
-            turnover_pct=[0.0 for _ in benchmark["daily_returns"]],
-            trade_pnls_pct=[ret * 100.0 for ret in benchmark["daily_returns"][1:]],
-        )
-        metric_rows = self._build_metric_rows(
-            strategy_metrics=strategy_metrics,
-            benchmark_metrics=benchmark_metrics,
-        )
-
-        curve_rows: list[StrategyBacktestCurvePoint] = []
-        for index, trade_date in enumerate(strategy["dates"]):
-            strategy_cum = strategy["cum_return_pct"][index]
-            benchmark_cum = benchmark["cum_return_pct"][index]
-            drawdown = strategy["drawdown_pct"][index]
-            avg_drawdown = strategy["avg_drawdown_pct"][index]
-            curve_rows.append(
-                StrategyBacktestCurvePoint(
-                    date=trade_date,
-                    strategy_cum_return_pct=round(strategy_cum, 4),
-                    benchmark_cum_return_pct=round(benchmark_cum, 4),
-                    relative_excess_pct=round(strategy_cum - benchmark_cum, 4),
-                    absolute_excess_pct=round(strategy_cum, 4),
-                    drawdown_pct=round(drawdown, 4),
-                    avg_drawdown_pct=round(avg_drawdown, 4),
-                )
-            )
-
-        yearly_distribution = self._build_distribution_rows(
-            dates=strategy["dates"],
-            strategy_daily_returns=strategy["daily_returns"],
-            benchmark_daily_returns=benchmark["daily_returns"],
-            period="yearly",
-        )
-        monthly_distribution = self._build_distribution_rows(
-            dates=strategy["dates"],
-            strategy_daily_returns=strategy["daily_returns"],
-            benchmark_daily_returns=benchmark["daily_returns"],
-            period="monthly",
-        )
-        weekly_distribution = self._build_distribution_rows(
-            dates=strategy["dates"],
-            strategy_daily_returns=strategy["daily_returns"],
-            benchmark_daily_returns=benchmark["daily_returns"],
-            period="weekly",
-        )
-
-        if not ranked_rows:
-            message_parts.append("当前任务尚未生成榜单，分析结果基于当前参数直接重算。")
-        if strategy["effective_trade_count"] <= 0:
-            message_parts.append("未产生有效交易策略，请放宽阈值或调整参数范围。")
-        if task_config.benchmark_name and task_config.benchmark_name != "转债等权":
-            message_parts.append(f"已记录任务基准“{task_config.benchmark_name}”，当前分析暂按转债等权进行对比。")
-        response = StrategyOptimizeTaskAnalysisResponse(
-            task_id=task.task_id,
-            template_id=task.template_id,
-            template_name=task.template_name,
+        response = self._build_optimize_task_analysis_response(
+            task=task,
             combo_id=selected_combo_id,
-            benchmark_name=benchmark_name,
+            setting=setting,
+            task_config=task_config,
+            initial_capital_wan=initial_capital_wan,
             window=window,
-            metric_rows=metric_rows,
-            curve=curve_rows,
-            yearly_distribution=yearly_distribution,
-            monthly_distribution=monthly_distribution,
-            weekly_distribution=weekly_distribution,
-            rotations=strategy["rotations"],
-            message=" ".join(message_parts).strip(),
+            sliced=sliced,
+            message_parts=message_parts,
+            ranked_rows=ranked_rows,
         )
-        self._optimize_analysis_cache[cache_key] = response
-        if len(self._optimize_analysis_cache) > 200:
-            self._optimize_analysis_cache.clear()
+        self._cache_optimize_analysis_response(cache_key=cache_key, response=response)
         return response
 
     def get_optimize_task_ai_insight(
@@ -1427,6 +1331,292 @@ class CbQuantService:
             if row:
                 return row
         return ranked_rows[0] if ranked_rows else None
+
+    @staticmethod
+    def _analysis_window_for_task(task: StrategyOptimizeTaskRow) -> WindowName:
+        return "full" if "full" in task.windows else (task.windows[0] if task.windows else "full")
+
+    @staticmethod
+    def _analysis_benchmark_name(task_config: BacktestTaskConfig) -> str:
+        if task_config.benchmark_name and task_config.benchmark_name != "转债等权":
+            return f"{task_config.benchmark_name}（暂按转债等权测算）"
+        return "转债等权"
+
+    def _slice_analysis_dataset(
+        self,
+        *,
+        dataset: list[tuple[str, Any]],
+        window_name: WindowName,
+        start_date: date | None,
+        end_date: date | None,
+    ) -> tuple[list[tuple[str, Any]], list[str]]:
+        sliced = self._backtest_service.slice_dataset(
+            dataset=dataset,
+            window_name=window_name,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        message_parts: list[str] = []
+        if not sliced and (start_date or end_date):
+            sliced = self._backtest_service.slice_dataset(
+                dataset=dataset,
+                window_name=window_name,
+                start_date=None,
+                end_date=None,
+            )
+            if sliced:
+                message_parts.append(f"指定区间无可用快照，已回退到 {sliced[0][0]}~{sliced[-1][0]}。")
+        if sliced:
+            message_parts.append(f"实际分析区间：{sliced[0][0]}~{sliced[-1][0]}。")
+        return sliced, message_parts
+
+    @staticmethod
+    def _optimize_analysis_cache_key(
+        *,
+        task_id: str,
+        combo_id: str,
+        initial_capital_wan: float,
+        state_marker: str,
+    ) -> tuple[str, str, float, str]:
+        return (task_id, combo_id, round(float(initial_capital_wan), 4), state_marker)
+
+    def _cache_optimize_analysis_response(
+        self,
+        *,
+        cache_key: tuple[str, str, float, str],
+        response: StrategyOptimizeTaskAnalysisResponse,
+    ) -> None:
+        self._optimize_analysis_cache[cache_key] = response
+        if len(self._optimize_analysis_cache) > 200:
+            self._optimize_analysis_cache.clear()
+            self._optimize_analysis_cache[cache_key] = response
+
+    @staticmethod
+    def _can_use_optimize_analysis_snapshot(
+        *,
+        snapshot: dict[str, Any],
+        combo_id: str,
+        initial_capital_wan: float,
+    ) -> bool:
+        snapshot_combo_id = str(snapshot.get("combo_id") or "")
+        if snapshot_combo_id != combo_id:
+            return False
+        snapshot_initial = float(snapshot.get("initial_capital_wan") or 0.0)
+        return abs(snapshot_initial - float(initial_capital_wan)) <= 1e-9
+
+    @staticmethod
+    def _build_optimize_analysis_response_from_snapshot(
+        snapshot: dict[str, Any],
+    ) -> StrategyOptimizeTaskAnalysisResponse:
+        summary = snapshot.get("summary") or {}
+        detail = snapshot.get("detail") or {}
+        payload = {
+            "task_id": str(snapshot.get("task_id") or ""),
+            "template_id": str(snapshot.get("template_id") or ""),
+            "template_name": str(snapshot.get("template_name") or ""),
+            "combo_id": str(snapshot.get("combo_id") or ""),
+            "benchmark_name": str(snapshot.get("benchmark_name") or "转债等权"),
+            "window": str(snapshot.get("window_name") or "full"),
+            "metric_rows": summary.get("metric_rows") or [],
+            "curve": detail.get("curve") or [],
+            "yearly_distribution": detail.get("yearly_distribution") or [],
+            "monthly_distribution": detail.get("monthly_distribution") or [],
+            "weekly_distribution": detail.get("weekly_distribution") or [],
+            "rotations": detail.get("rotations") or [],
+            "message": str(summary.get("message") or ""),
+        }
+        return StrategyOptimizeTaskAnalysisResponse.model_validate(payload)
+
+    def _save_optimize_task_analysis_snapshot(
+        self,
+        *,
+        response: StrategyOptimizeTaskAnalysisResponse,
+        initial_capital_wan: float,
+    ) -> None:
+        used_range_start = response.curve[0].date if response.curve else None
+        used_range_end = response.curve[-1].date if response.curve else None
+        summary = {
+            "metric_rows": [row.model_dump() for row in response.metric_rows],
+            "message": response.message,
+        }
+        detail = {
+            "curve": [row.model_dump() for row in response.curve],
+            "yearly_distribution": [row.model_dump() for row in response.yearly_distribution],
+            "monthly_distribution": [row.model_dump() for row in response.monthly_distribution],
+            "weekly_distribution": [row.model_dump() for row in response.weekly_distribution],
+            "rotations": [row.model_dump() for row in response.rotations],
+        }
+        self._store.save_optimize_task_analysis_snapshot(
+            task_id=response.task_id,
+            combo_id=response.combo_id,
+            template_id=response.template_id,
+            template_name=response.template_name,
+            window_name=response.window,
+            benchmark_name=response.benchmark_name,
+            initial_capital_wan=initial_capital_wan,
+            used_range_start=used_range_start,
+            used_range_end=used_range_end,
+            summary=summary,
+            detail=detail,
+        )
+
+    def _build_optimize_task_analysis_response(
+        self,
+        *,
+        task: StrategyOptimizeTaskRow,
+        combo_id: str,
+        setting: dict[str, Any],
+        task_config: BacktestTaskConfig,
+        initial_capital_wan: float,
+        window: WindowName,
+        sliced: list[tuple[str, Any]],
+        message_parts: list[str],
+        ranked_rows: list[StrategyOptimizeResultRow],
+    ) -> StrategyOptimizeTaskAnalysisResponse:
+        benchmark_name = self._analysis_benchmark_name(task_config)
+        if not sliced:
+            return StrategyOptimizeTaskAnalysisResponse(
+                task_id=task.task_id,
+                template_id=task.template_id,
+                template_name=task.template_name,
+                combo_id=combo_id,
+                benchmark_name=benchmark_name,
+                window=window,
+                metric_rows=[],
+                curve=[],
+                yearly_distribution=[],
+                monthly_distribution=[],
+                weekly_distribution=[],
+                rotations=[],
+                message="没有可用历史快照，请先同步历史快照后重试。",
+            )
+
+        strategy = self._simulate_detailed_strategy(
+            dataset=sliced,
+            setting=setting,
+            initial_capital_wan=initial_capital_wan,
+        )
+        benchmark = self._simulate_equal_weight_benchmark(
+            dataset=sliced,
+            initial_capital_wan=initial_capital_wan,
+        )
+
+        strategy_metrics = self._compute_backtest_metrics(
+            daily_returns=strategy["daily_returns"],
+            nav_series=strategy["nav_series"],
+            initial_capital_wan=initial_capital_wan,
+            turnover_pct=strategy["turnover_pct"],
+            trade_pnls_pct=strategy["trade_pnls_pct"],
+        )
+        benchmark_metrics = self._compute_backtest_metrics(
+            daily_returns=benchmark["daily_returns"],
+            nav_series=benchmark["nav_series"],
+            initial_capital_wan=initial_capital_wan,
+            turnover_pct=[0.0 for _ in benchmark["daily_returns"]],
+            trade_pnls_pct=[ret * 100.0 for ret in benchmark["daily_returns"][1:]],
+        )
+        metric_rows = self._build_metric_rows(
+            strategy_metrics=strategy_metrics,
+            benchmark_metrics=benchmark_metrics,
+        )
+
+        curve_rows: list[StrategyBacktestCurvePoint] = []
+        for index, trade_date in enumerate(strategy["dates"]):
+            strategy_cum = strategy["cum_return_pct"][index]
+            benchmark_cum = benchmark["cum_return_pct"][index]
+            drawdown = strategy["drawdown_pct"][index]
+            avg_drawdown = strategy["avg_drawdown_pct"][index]
+            curve_rows.append(
+                StrategyBacktestCurvePoint(
+                    date=trade_date,
+                    strategy_cum_return_pct=round(strategy_cum, 4),
+                    benchmark_cum_return_pct=round(benchmark_cum, 4),
+                    relative_excess_pct=round(strategy_cum - benchmark_cum, 4),
+                    absolute_excess_pct=round(strategy_cum, 4),
+                    drawdown_pct=round(drawdown, 4),
+                    avg_drawdown_pct=round(avg_drawdown, 4),
+                )
+            )
+
+        yearly_distribution = self._build_distribution_rows(
+            dates=strategy["dates"],
+            strategy_daily_returns=strategy["daily_returns"],
+            benchmark_daily_returns=benchmark["daily_returns"],
+            period="yearly",
+        )
+        monthly_distribution = self._build_distribution_rows(
+            dates=strategy["dates"],
+            strategy_daily_returns=strategy["daily_returns"],
+            benchmark_daily_returns=benchmark["daily_returns"],
+            period="monthly",
+        )
+        weekly_distribution = self._build_distribution_rows(
+            dates=strategy["dates"],
+            strategy_daily_returns=strategy["daily_returns"],
+            benchmark_daily_returns=benchmark["daily_returns"],
+            period="weekly",
+        )
+
+        response_message_parts = list(message_parts)
+        if not ranked_rows:
+            response_message_parts.append("当前任务尚未生成榜单，分析结果基于当前参数直接重算。")
+        if strategy["effective_trade_count"] <= 0:
+            response_message_parts.append("未产生有效交易策略，请放宽阈值或调整参数范围。")
+        if task_config.benchmark_name and task_config.benchmark_name != "转债等权":
+            response_message_parts.append(
+                f"已记录任务基准“{task_config.benchmark_name}”，当前分析暂按转债等权进行对比。"
+            )
+        return StrategyOptimizeTaskAnalysisResponse(
+            task_id=task.task_id,
+            template_id=task.template_id,
+            template_name=task.template_name,
+            combo_id=combo_id,
+            benchmark_name=benchmark_name,
+            window=window,
+            metric_rows=metric_rows,
+            curve=curve_rows,
+            yearly_distribution=yearly_distribution,
+            monthly_distribution=monthly_distribution,
+            weekly_distribution=weekly_distribution,
+            rotations=strategy["rotations"],
+            message=" ".join(response_message_parts).strip(),
+        )
+
+    def _persist_optimize_task_best_analysis_snapshot(
+        self,
+        *,
+        task: StrategyOptimizeTaskRow,
+        best_row: StrategyOptimizeResultRow,
+        dataset: list[tuple[str, Any]],
+        task_config: BacktestTaskConfig,
+    ) -> StrategyOptimizeTaskAnalysisResponse:
+        initial_capital_wan = task_config.initial_capital_wan
+        window = self._analysis_window_for_task(task)
+        start_date = self._parse_iso_date(task.start_date)
+        end_date = self._parse_iso_date(task.end_date)
+        setting = self._apply_task_config_to_setting(dict(best_row.params), task_config)
+        sliced, message_parts = self._slice_analysis_dataset(
+            dataset=dataset,
+            window_name=window,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        response = self._build_optimize_task_analysis_response(
+            task=task,
+            combo_id=best_row.combo_id,
+            setting=setting,
+            task_config=task_config,
+            initial_capital_wan=initial_capital_wan,
+            window=window,
+            sliced=sliced,
+            message_parts=message_parts,
+            ranked_rows=[best_row],
+        )
+        self._save_optimize_task_analysis_snapshot(
+            response=response,
+            initial_capital_wan=initial_capital_wan,
+        )
+        return response
 
     def _build_optimize_ai_context_markdown(
         self,
@@ -2146,6 +2336,7 @@ class CbQuantService:
                 self._optimize_top_bonds[task_id] = []
                 self._store.replace_optimize_result_rows(task_id=task_id, rows=[])
                 self._store.replace_optimize_top_bond_rows(task_id=task_id, rows=[])
+                self._store.delete_optimize_task_analysis_snapshot(task_id)
                 self._update_optimize_task(
                     task_id,
                     status="finished",
@@ -2163,6 +2354,7 @@ class CbQuantService:
             top_bonds: list[StrategyTopBondRow] = []
             market_warning = ""
             strategy_warning = ""
+            analysis_warning = ""
             if ranked and abs(ranked[0].total_return_pct) < 1e-9 and ranked[0].turnover <= 1e-9:
                 strategy_warning = "；当前参数空间未产生有效交易，建议放宽筛选阈值或调整因子范围"
             if best_setting:
@@ -2174,6 +2366,15 @@ class CbQuantService:
                 except Exception as exc:
                     # Top 债生成失败不应让整个优化任务失败，所以这里只记录 warning。
                     market_warning = f"；实时Top20计算失败: {str(exc)[:80]}"
+                try:
+                    self._persist_optimize_task_best_analysis_snapshot(
+                        task=task,
+                        best_row=ranked[0],
+                        dataset=dataset,
+                        task_config=task_config,
+                    )
+                except Exception as exc:
+                    analysis_warning = f"；最佳策略分析预生成失败: {str(exc)[:80]}"
 
             # 排行榜结果和 Top 债都要同时写入内存态与 SQLite，
             # 这样前端刷新页面或服务重启后都能恢复。
@@ -2195,7 +2396,7 @@ class CbQuantService:
                 finished_at=_now_readable(),
                 message=(
                     f"优化完成，最佳策略 {ranked[0].combo_id if ranked else '--'}"
-                    f"{strategy_warning}{market_warning}"
+                    f"{strategy_warning}{market_warning}{analysis_warning}"
                     f"；主筛={evaluated_primary}/{total}, 复评={evaluated_secondary}"
                 ),
             )

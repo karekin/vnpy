@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from vnpy.web.core import cb_backtest
@@ -28,6 +29,10 @@ class CbBacktestService:
         self.data_dir: Path = data_dir or (project_root / "out" / "cb_quant")
         # 历史快照统一从 SQLite 文件中读取。
         self._history_store: CbHistoryStore = CbHistoryStore(self.data_dir / "_cb_quant" / "cb_snapshots.db")
+        # 历史数据按进程做缓存，避免同一个 worker 内重复全量反序列化 SQLite 快照。
+        self._market_data_lock: Lock = Lock()
+        self._market_data_cache: list[tuple[str, Any]] | None = None
+        self._market_data_cache_mtime: float | None = None
 
     def run_backtest(
         self,
@@ -84,6 +89,12 @@ class CbBacktestService:
     def load_market_data(self) -> list[tuple[str, Any]]:
         """读取市场快照，并在需要时调用核心模块做标准化处理。"""
 
+        db_path = self._history_store.db_path
+        cache_mtime = db_path.stat().st_mtime if db_path.exists() else None
+        with self._market_data_lock:
+            if self._market_data_cache is not None and self._market_data_cache_mtime == cache_mtime:
+                return self._market_data_cache
+
         # 从历史存储中读取原始数据集，返回格式通常为 [(交易日字符串, 数据框), ...]。
         dataset = self._history_store.load_market_dataset()
         if dataset:
@@ -99,8 +110,14 @@ class CbBacktestService:
                 else:
                     # 否则直接保留原始 frame，保证服务层兼容旧实现。
                     normalized.append((trade_date, frame))
+            with self._market_data_lock:
+                self._market_data_cache = normalized
+                self._market_data_cache_mtime = cache_mtime
             return normalized
         # 没有任何历史数据时，返回空列表而不是抛异常，交给上层统一处理。
+        with self._market_data_lock:
+            self._market_data_cache = []
+            self._market_data_cache_mtime = cache_mtime
         return []
 
     def default_setting(self) -> dict[str, Any]:

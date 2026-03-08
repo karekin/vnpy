@@ -375,6 +375,101 @@ class CbQuantStore:
                 )
             conn.commit()
 
+    def load_optimize_task_analysis_snapshot(self, task_id: str) -> dict[str, Any] | None:
+        """读取某个优化任务最佳策略的分析快照。"""
+        if not task_id:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT task_id, combo_id, template_id, template_name, window_name, benchmark_name, "
+                "initial_capital_wan, used_range_start, used_range_end, summary_json, detail_json, "
+                "updated_at "
+                "FROM cb_optimize_task_analysis_snapshot "
+                "WHERE task_id = ? LIMIT 1",
+                (task_id,),
+            ).fetchone()
+        if not row:
+            return None
+        try:
+            summary = json.loads(str(row[9]))
+        except Exception:
+            summary = {}
+        try:
+            detail = json.loads(str(row[10]))
+        except Exception:
+            detail = {}
+        return {
+            "task_id": str(row[0] or ""),
+            "combo_id": str(row[1] or ""),
+            "template_id": str(row[2] or ""),
+            "template_name": str(row[3] or ""),
+            "window_name": str(row[4] or "full"),
+            "benchmark_name": str(row[5] or ""),
+            "initial_capital_wan": float(row[6] or 0.0),
+            "used_range_start": str(row[7]) if row[7] else None,
+            "used_range_end": str(row[8]) if row[8] else None,
+            "summary": summary if isinstance(summary, dict) else {},
+            "detail": detail if isinstance(detail, dict) else {},
+            "updated_at": str(row[11] or ""),
+        }
+
+    def save_optimize_task_analysis_snapshot(
+        self,
+        *,
+        task_id: str,
+        combo_id: str,
+        template_id: str,
+        template_name: str,
+        window_name: str,
+        benchmark_name: str,
+        initial_capital_wan: float,
+        used_range_start: str | None,
+        used_range_end: str | None,
+        summary: dict[str, Any],
+        detail: dict[str, Any],
+    ) -> None:
+        """保存某个优化任务最佳策略的分析快照。"""
+        if not task_id or not combo_id:
+            return
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT INTO cb_optimize_task_analysis_snapshot ("
+                "task_id, combo_id, template_id, template_name, window_name, benchmark_name, "
+                "initial_capital_wan, used_range_start, used_range_end, summary_json, detail_json, updated_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(task_id) DO UPDATE SET "
+                "combo_id=excluded.combo_id, template_id=excluded.template_id, "
+                "template_name=excluded.template_name, window_name=excluded.window_name, "
+                "benchmark_name=excluded.benchmark_name, initial_capital_wan=excluded.initial_capital_wan, "
+                "used_range_start=excluded.used_range_start, used_range_end=excluded.used_range_end, "
+                "summary_json=excluded.summary_json, detail_json=excluded.detail_json, "
+                "updated_at=excluded.updated_at",
+                (
+                    task_id,
+                    combo_id,
+                    template_id,
+                    template_name,
+                    window_name,
+                    benchmark_name,
+                    float(initial_capital_wan),
+                    used_range_start,
+                    used_range_end,
+                    json.dumps(summary, ensure_ascii=False, separators=(",", ":")),
+                    json.dumps(detail, ensure_ascii=False, separators=(",", ":")),
+                    now,
+                ),
+            )
+            conn.commit()
+
+    def delete_optimize_task_analysis_snapshot(self, task_id: str) -> None:
+        """删除某个优化任务的分析快照。"""
+        if not task_id:
+            return
+        with self._lock, self._connect() as conn:
+            conn.execute("DELETE FROM cb_optimize_task_analysis_snapshot WHERE task_id = ?", (task_id,))
+            conn.commit()
+
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self._db_path, check_same_thread=False)
 
@@ -495,5 +590,22 @@ class CbQuantStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_cb_optimize_top_bond_task_rank "
                 "ON cb_optimize_top_bond (task_id, rank ASC)"
+            )
+
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS cb_optimize_task_analysis_snapshot ("
+                "task_id TEXT PRIMARY KEY, "
+                "combo_id TEXT NOT NULL, "
+                "template_id TEXT NOT NULL, "
+                "template_name TEXT NOT NULL, "
+                "window_name TEXT NOT NULL, "
+                "benchmark_name TEXT NOT NULL, "
+                "initial_capital_wan REAL NOT NULL, "
+                "used_range_start TEXT, "
+                "used_range_end TEXT, "
+                "summary_json TEXT NOT NULL, "
+                "detail_json TEXT NOT NULL, "
+                "updated_at TEXT NOT NULL"
+                ")"
             )
             conn.commit()

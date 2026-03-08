@@ -13,6 +13,7 @@ from vnpy.web.contracts.cb_quant import (
     CandidateRow,
     JobStatus,
     StrategyParamSpaceRow,
+    StrategyOptimizeResultRow,
     StrategyOptimizeTaskCreateRequest,
     StrategyTemplateConfigRequest,
     StrategyTemplateConfigResponse,
@@ -27,6 +28,7 @@ class _DummyStore:
         self.saved: list[dict[str, Any]] = []
         self.saved_optimize: list[dict[str, Any]] = []
         self.saved_templates: list[dict[str, Any]] = []
+        self.optimize_task_analysis_snapshot: dict[str, Any] | None = None
 
     def upsert_job(self, *, row: dict[str, Any], context: dict[str, Any]) -> None:
         self.saved.append({"row": row, "context": context})
@@ -39,6 +41,12 @@ class _DummyStore:
 
     def replace_templates_and_configs(self, *, templates: list[dict[str, Any]], configs: dict[str, dict[str, Any]]) -> None:
         self.saved_templates = templates
+
+    def load_optimize_task_analysis_snapshot(self, task_id: str) -> dict[str, Any] | None:
+        snapshot = self.optimize_task_analysis_snapshot
+        if snapshot and snapshot.get("task_id") == task_id:
+            return snapshot
+        return None
 
 
 class _DummyExecutor:
@@ -53,6 +61,10 @@ class _DummyBacktestService:
     @staticmethod
     def default_setting() -> dict[str, Any]:
         return {"price_benchmark": 110.0}
+
+    @staticmethod
+    def load_market_data() -> list[tuple[str, Any]]:
+        return []
 
 
 def _build_service() -> CbQuantService:
@@ -92,6 +104,9 @@ def _build_service() -> CbQuantService:
     service._optimize_tasks = []
     service._optimize_results = {}
     service._optimize_top_bonds = {}
+    service._optimize_analysis_cache = {}
+    service._optimize_ai_cache = {}
+    service._optimize_ai_compare_cache = {}
     service._backtest_service = _DummyBacktestService()
     service._store = _DummyStore()
     service._executor = _DummyExecutor()
@@ -460,3 +475,107 @@ class TestOptimizeTaskSubmit:
         assert payload is not None
         assert payload.task.status == "failed"
         assert "提交执行失败" in payload.message
+
+
+class TestOptimizeTaskAnalysisSnapshot:
+    def test_get_optimize_task_analysis_should_use_persisted_best_snapshot_without_recompute(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        service = _build_service()
+        task = StrategyOptimizeTaskRow(
+            task_id="OPT-20260308-0023",
+            template_id="TPL-001",
+            template_name="实盘模板",
+            status="finished",
+            progress=100,
+            total_combinations=32,
+            evaluated_combinations=32,
+            windows=["1y"],
+            start_date=None,
+            end_date=None,
+            eta="done",
+            message="优化完成",
+            created_at="2026-03-08 12:00",
+            started_at="2026-03-08 12:01",
+            finished_at="2026-03-08 12:10",
+        )
+        service._optimize_tasks = [task]
+        service._optimize_results = {
+            task.task_id: [
+                StrategyOptimizeResultRow(
+                    rank=1,
+                    task_id=task.task_id,
+                    template_id=task.template_id,
+                    template_name=task.template_name,
+                    combo_id="CMB-000040",
+                    robust_score=9.1,
+                    cagr=12.3,
+                    mdd=4.5,
+                    calmar=2.7,
+                    win_rate=58.0,
+                    turnover=32.0,
+                    recent_1y=10.0,
+                    total_return_pct=15.2,
+                    params={"price_benchmark": 110.0},
+                )
+            ]
+        }
+        service._store.optimize_task_analysis_snapshot = {
+            "task_id": task.task_id,
+            "combo_id": "CMB-000040",
+            "template_id": "TPL-001",
+            "template_name": "实盘模板",
+            "window_name": "1y",
+            "benchmark_name": "转债等权",
+            "initial_capital_wan": 100.0,
+            "used_range_start": "2025-01-01",
+            "used_range_end": "2025-12-31",
+            "summary": {
+                "metric_rows": [
+                    {
+                        "strategy_combo": "当前策略",
+                        "total_return_pct": 15.2,
+                        "cumulative_asset_wan": 115.2,
+                    }
+                ],
+                "message": "实际分析区间：2025-01-01~2025-12-31。",
+            },
+            "detail": {
+                "curve": [
+                    {
+                        "date": "2025-01-01",
+                        "strategy_cum_return_pct": 0.0,
+                        "benchmark_cum_return_pct": 0.0,
+                        "relative_excess_pct": 0.0,
+                        "absolute_excess_pct": 0.0,
+                        "drawdown_pct": 0.0,
+                        "avg_drawdown_pct": 0.0,
+                    }
+                ],
+                "yearly_distribution": [],
+                "monthly_distribution": [],
+                "weekly_distribution": [],
+                "rotations": [],
+            },
+            "updated_at": "2026-03-08 12:10:00",
+        }
+
+        monkeypatch.setattr(
+            service,
+            "_build_optimize_task_analysis_response",
+            lambda **_kwargs: (_ for _ in ()).throw(AssertionError("should not recompute when snapshot exists")),
+        )
+        monkeypatch.setattr(
+            service._backtest_service,
+            "load_market_data",
+            lambda: (_ for _ in ()).throw(AssertionError("should not reload market data when snapshot exists")),
+        )
+
+        response = service.get_optimize_task_analysis(task_id=task.task_id)
+
+        assert response is not None
+        assert response.combo_id == "CMB-000040"
+        assert response.window == "1y"
+        assert response.metric_rows[0].total_return_pct == 15.2
+        assert response.message == "实际分析区间：2025-01-01~2025-12-31。"
