@@ -147,6 +147,14 @@ export type BacktestQueueResult = {
   message: string;
 };
 
+export type BacktestJobBatchDeleteResult = {
+  ok: boolean;
+  affected: number;
+  missingIds: string[];
+  blockedIds: string[];
+  message: string;
+};
+
 export type HistoryDataSummary = {
   snapshotCount: number;
   dateStart: string | null;
@@ -1957,6 +1965,36 @@ export async function cancelBacktestJob(jobId: string): Promise<{ ok: boolean; m
       method: "POST",
     },
   );
+}
+
+export async function deleteBacktestJob(jobId: string): Promise<{ ok: boolean; message: string }> {
+  return requestJson<{ ok: boolean; message: string }>(
+    buildUrl(`/api/v1/cb-quant/backtest/jobs/${encodeURIComponent(jobId)}`),
+    {
+      method: "DELETE",
+    },
+  );
+}
+
+export async function batchDeleteBacktestJobs(jobIds: string[]): Promise<BacktestJobBatchDeleteResult> {
+  const payload = await requestJson<{
+    ok: boolean;
+    affected: number;
+    missing_ids?: string[];
+    blocked_ids?: string[];
+    message: string;
+  }>(buildUrl("/api/v1/cb-quant/backtest/jobs/batch/delete"), {
+    method: "POST",
+    body: JSON.stringify({ job_ids: jobIds }),
+  });
+
+  return {
+    ok: payload.ok,
+    affected: payload.affected,
+    missingIds: payload.missing_ids ?? [],
+    blockedIds: payload.blocked_ids ?? [],
+    message: payload.message,
+  };
 }
 
 export async function listBacktestLeaderboard(params?: {

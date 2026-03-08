@@ -10,6 +10,7 @@ import pytest
 from vnpy.web.services.cb_backtest_service import CbBacktestService
 from vnpy.web.contracts.cb_quant import (
     BacktestCreateJobsRequest,
+    BacktestLeaderboardRow,
     BacktestJobRow,
     CandidateRow,
     JobStatus,
@@ -30,6 +31,9 @@ class _DummyStore:
         self.saved: list[dict[str, Any]] = []
         self.saved_optimize: list[dict[str, Any]] = []
         self.saved_templates: list[dict[str, Any]] = []
+        self.replaced_leaderboard: list[dict[str, Any]] = []
+        self.deleted_job_ids: list[str] = []
+        self.deleted_optimize_task_ids: list[str] = []
         self.optimize_task_analysis_snapshot: dict[str, Any] | None = None
 
     def upsert_job(self, *, row: dict[str, Any], context: dict[str, Any]) -> None:
@@ -43,6 +47,15 @@ class _DummyStore:
 
     def replace_templates_and_configs(self, *, templates: list[dict[str, Any]], configs: dict[str, dict[str, Any]]) -> None:
         self.saved_templates = templates
+
+    def replace_leaderboard(self, rows: list[dict[str, Any]]) -> None:
+        self.replaced_leaderboard = rows
+
+    def delete_jobs(self, job_ids: list[str]) -> None:
+        self.deleted_job_ids.extend(job_ids)
+
+    def delete_optimize_task_bundle(self, task_id: str) -> None:
+        self.deleted_optimize_task_ids.append(task_id)
 
     def load_optimize_task_analysis_snapshot(self, task_id: str) -> dict[str, Any] | None:
         snapshot = self.optimize_task_analysis_snapshot
@@ -76,6 +89,8 @@ def _build_service() -> CbQuantService:
     service._jobs = []
     service._job_context = {}
     service._leaderboard = []
+    service._leaderboard_business_dates = {}
+    service._compare = []
     service._candidates = []
     service._templates = [
         StrategyTemplateRow(
@@ -610,6 +625,152 @@ class TestOptimizeRestartRecovery:
         statuses = {row.task_id: row.status for row in service._optimize_tasks}
         assert statuses["OPT-20260226-0001"] == "failed"
         assert statuses["OPT-20260226-0002"] == "finished"
+
+
+class TestBacktestJobDeletion:
+    def test_batch_delete_backtest_jobs_should_remove_terminal_job_and_skip_missing_or_running(self) -> None:
+        service = _build_service()
+        finished_job = _job(job_id="BT-REAL-001", combo_id="CMB-000001", template="实盘模板", status="finished")
+        running_job = _job(job_id="BT-REAL-002", combo_id="CMB-000002", template="实盘模板", status="running")
+        service._jobs = [finished_job, running_job]
+        service._job_context = {
+            "BT-REAL-001": {
+                "window_name": "1y",
+                "setting": {},
+                "start_date": None,
+                "end_date": None,
+                "cancel_requested": False,
+                "business_date": "2026-02-25",
+                "created_at": "2026-02-25 12:00",
+            }
+        }
+        service._leaderboard = [
+            BacktestLeaderboardRow(
+                rank=1,
+                strategy_id=finished_job.strategy_id,
+                combo_id=finished_job.combo_id,
+                rule_pack_id=finished_job.rule_pack_id,
+                template=finished_job.template,
+                cagr=0.3,
+                mdd=0.1,
+                calmar=3.0,
+                win_rate=55.0,
+                turnover=1.2,
+                recent_1y=0.3,
+                robust_score=90.0,
+                window="1y",
+            )
+        ]
+        service._leaderboard_business_dates = {
+            (finished_job.combo_id, finished_job.rule_pack_id, "1y"): "2026-02-25"
+        }
+        service._candidates = [
+            _candidate(combo_id="CMB-000001", template="实盘模板"),
+            _candidate(combo_id="CMB-000002", template="实盘模板"),
+        ]
+
+        affected, missing, blocked = service.batch_delete_backtest_jobs(
+            ["BT-REAL-001", "BT-REAL-002", "BT-MISSING-001"]
+        )
+
+        assert affected == 1
+        assert missing == ["BT-MISSING-001"]
+        assert blocked == ["BT-REAL-002"]
+        assert [row.job_id for row in service._jobs] == ["BT-REAL-002"]
+        assert service._leaderboard == []
+        assert service._store.deleted_job_ids == ["BT-REAL-001"]
+        assert service._store.replaced_leaderboard == []
+        candidate_status = {row.combo_id: (row.status, row.pass_rate) for row in service._candidates}
+        assert candidate_status["CMB-000001"] == ("pending_backtest", None)
+
+    def test_batch_delete_backtest_jobs_should_remove_optimize_task_bundle_and_caches(self) -> None:
+        service = _build_service()
+        task = StrategyOptimizeTaskRow(
+            task_id="OPT-20260308-0025",
+            template_id="TPL-001",
+            template_name="实盘模板",
+            status="finished",
+            progress=100,
+            total_combinations=32,
+            evaluated_combinations=32,
+            windows=["1y"],
+            start_date=None,
+            end_date=None,
+            eta="done",
+            message="优化完成",
+            created_at="2026-03-08 12:00",
+            started_at="2026-03-08 12:01",
+            finished_at="2026-03-08 12:10",
+        )
+        optimize_job = BacktestJobRow(
+            job_id=task.task_id,
+            strategy_id=task.template_id,
+            combo_id="CMB-000040",
+            rule_pack_id="OPT-TPL-001",
+            template=task.template_name,
+            window="1y",
+            status="finished",
+            progress=100,
+            business_date="2026-03-08",
+            created_at=task.created_at,
+            started_at=task.started_at or "",
+            eta="done",
+            worker="optimize",
+        )
+        service._jobs = [optimize_job]
+        service._job_context = {
+            task.task_id: {
+                "window_name": "1y",
+                "setting": {},
+                "start_date": None,
+                "end_date": None,
+                "cancel_requested": False,
+                "business_date": "2026-03-08",
+                "created_at": task.created_at,
+            }
+        }
+        service._optimize_tasks = [task]
+        service._optimize_results = {
+            task.task_id: [
+                StrategyOptimizeResultRow(
+                    rank=1,
+                    task_id=task.task_id,
+                    template_id=task.template_id,
+                    template_name=task.template_name,
+                    combo_id="CMB-000040",
+                    robust_score=100.0,
+                    cagr=0.33,
+                    mdd=0.05,
+                    calmar=6.6,
+                    win_rate=60.0,
+                    turnover=1.2,
+                    recent_1y=0.33,
+                    total_return_pct=33.67,
+                    params={"price_benchmark": 115.0},
+                )
+            ]
+        }
+        service._optimize_top_bonds = {task.task_id: []}
+        service._optimize_analysis_cache = {(task.task_id, "CMB-000040", 100.0, "v2:finished:32/32"): object()}
+        service._optimize_ai_cache = {(task.task_id, "CMB-000040", 100.0, "kimi"): object()}
+        service._optimize_ai_compare_cache = {
+            (task.task_id, ("CMB-000040", "CMB-000041"), 100.0, "kimi"): object()
+        }
+
+        affected, missing, blocked = service.batch_delete_backtest_jobs([task.task_id])
+
+        assert affected == 1
+        assert missing == []
+        assert blocked == []
+        assert service._jobs == []
+        assert service._optimize_tasks == []
+        assert service._optimize_results == {}
+        assert service._optimize_top_bonds == {}
+        assert service._optimize_analysis_cache == {}
+        assert service._optimize_ai_cache == {}
+        assert service._optimize_ai_compare_cache == {}
+        assert service._store.deleted_job_ids == [task.task_id]
+        assert service._store.deleted_optimize_task_ids == [task.task_id]
 
 
 class TestOptimizeTaskSubmit:

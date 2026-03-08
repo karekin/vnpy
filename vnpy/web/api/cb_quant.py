@@ -2,6 +2,8 @@ from fastapi import APIRouter, HTTPException, Query
 
 from vnpy.web.contracts.cb_quant import (
     BacktestCompareResponse,
+    BacktestJobBatchDeleteRequest,
+    BacktestJobBatchDeleteResponse,
     BacktestCreateJobsRequest,
     BacktestCreateJobsResponse,
     BacktestJobListResponse,
@@ -413,6 +415,34 @@ def cancel_backtest_job(job_id: str) -> OperationResponse:
     if not job:
         raise HTTPException(status_code=404, detail=f"backtest job not found: {job_id}")
     return OperationResponse(ok=True, message=f"job {job_id} -> {job.status}")
+
+
+@router.delete("/backtest/jobs/{job_id}", response_model=OperationResponse)
+def delete_backtest_job(job_id: str) -> OperationResponse:
+    affected, missing, blocked = cb_quant_service.batch_delete_backtest_jobs([job_id])
+    if missing:
+        raise HTTPException(status_code=404, detail=f"backtest job not found: {job_id}")
+    if blocked:
+        raise HTTPException(status_code=400, detail=f"backtest job is not deletable: {job_id}")
+    return OperationResponse(ok=True, message=f"已删除任务 {job_id} 及对应分析结果。")
+
+
+@router.post("/backtest/jobs/batch/delete", response_model=BacktestJobBatchDeleteResponse)
+def batch_delete_backtest_jobs(
+    request: BacktestJobBatchDeleteRequest,
+) -> BacktestJobBatchDeleteResponse:
+    affected, missing, blocked = cb_quant_service.batch_delete_backtest_jobs(request.job_ids)
+    return BacktestJobBatchDeleteResponse(
+        ok=True,
+        affected=affected,
+        missing_ids=missing,
+        blocked_ids=blocked,
+        message=(
+            f"已删除 {affected} 个任务及对应分析结果。"
+            f"{' 未找到 ' + str(len(missing)) + ' 个。' if missing else ''}"
+            f"{' 仍在运行/排队，未删除 ' + str(len(blocked)) + ' 个。' if blocked else ''}"
+        ),
+    )
 
 
 @router.get("/backtest/leaderboard", response_model=BacktestLeaderboardResponse)

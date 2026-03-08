@@ -2636,6 +2636,78 @@ class CbQuantService:
             self._refresh_compare_rows()
         return cancelled_job
 
+    def batch_delete_backtest_jobs(self, job_ids: list[str]) -> tuple[int, list[str], list[str]]:
+        normalized_job_ids: list[str] = []
+        seen: set[str] = set()
+        for job_id in job_ids:
+            value = str(job_id).strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            normalized_job_ids.append(value)
+        if not normalized_job_ids:
+            return 0, [], []
+
+        with self._lock:
+            job_map = {row.job_id: row for row in self._jobs}
+            optimize_task_ids = {row.task_id for row in self._optimize_tasks}
+
+        missing_ids: list[str] = []
+        blocked_ids: list[str] = []
+        deleted_job_ids: list[str] = []
+        deleted_combo_ids: set[str] = set()
+        deleted_optimize_task_ids: list[str] = []
+        leaderboard_keys: list[tuple[str, str, str]] = []
+
+        for job_id in normalized_job_ids:
+            row = job_map.get(job_id)
+            if row is None:
+                missing_ids.append(job_id)
+                continue
+            if row.status not in {"finished", "failed", "cancelled"}:
+                blocked_ids.append(job_id)
+                continue
+            deleted_job_ids.append(job_id)
+            deleted_combo_ids.add(row.combo_id)
+            if job_id in optimize_task_ids:
+                deleted_optimize_task_ids.append(job_id)
+                continue
+            context = self._job_context.get(job_id) or self._store.get_job_context(job_id) or {}
+            window_name = str(context.get("window_name") or "").strip()
+            if window_name not in {"full", "3y", "1y", "1w"}:
+                window_name = self._window_name_from_text(row.window)
+            if window_name in {"full", "3y", "1y", "1w"}:
+                leaderboard_keys.append((row.combo_id, row.rule_pack_id, window_name))
+
+        if not deleted_job_ids:
+            return 0, missing_ids, blocked_ids
+
+        deleted_job_id_set = set(deleted_job_ids)
+        deleted_optimize_task_id_set = set(deleted_optimize_task_ids)
+        with self._lock:
+            self._jobs = [row for row in self._jobs if row.job_id not in deleted_job_id_set]
+            for job_id in deleted_job_id_set:
+                self._job_context.pop(job_id, None)
+
+            if deleted_optimize_task_id_set:
+                self._optimize_tasks = [
+                    row for row in self._optimize_tasks if row.task_id not in deleted_optimize_task_id_set
+                ]
+                for task_id in deleted_optimize_task_id_set:
+                    self._optimize_results.pop(task_id, None)
+                    self._optimize_top_bonds.pop(task_id, None)
+
+        if leaderboard_keys:
+            self._delete_leaderboard_rows(leaderboard_keys)
+        self._store.delete_jobs(deleted_job_ids)
+        for task_id in deleted_optimize_task_ids:
+            self._store.delete_optimize_task_bundle(task_id)
+        self._purge_optimize_task_caches(deleted_optimize_task_id_set)
+        for combo_id in deleted_combo_ids:
+            self._refresh_candidate_status(combo_id)
+        self._refresh_compare_rows()
+        return len(deleted_job_ids), missing_ids, blocked_ids
+
     def _run_job(self, job_id: str) -> None:
         """单个回测作业的工作线程入口。"""
         context = self._job_context.get(job_id) or self._store.get_job_context(job_id)
@@ -4262,6 +4334,43 @@ class CbQuantService:
 
         self._store.replace_leaderboard(persisted_entries)
 
+    def _delete_leaderboard_rows(self, keys: list[tuple[str, str, str]]) -> None:
+        if not keys:
+            return
+        key_set = {key for key in keys if len(key) == 3}
+        if not key_set:
+            return
+
+        persisted_entries: list[dict[str, Any]] = []
+        with self._lock:
+            self._leaderboard = [
+                row
+                for row in self._leaderboard
+                if (row.combo_id, row.rule_pack_id, row.window) not in key_set
+            ]
+            for key in key_set:
+                self._leaderboard_business_dates.pop(key, None)
+
+            ordered = sorted(
+                self._leaderboard,
+                key=lambda item: (item.robust_score, item.cagr, -item.mdd),
+                reverse=True,
+            )
+            self._leaderboard = [
+                item.model_copy(update={"rank": idx + 1})
+                for idx, item in enumerate(ordered)
+            ]
+            for item in self._leaderboard:
+                key = (item.combo_id, item.rule_pack_id, item.window)
+                persisted_entries.append(
+                    {
+                        "business_date": self._leaderboard_business_dates.get(key, date.today().isoformat()),
+                        "row": item.model_dump(),
+                    }
+                )
+
+        self._store.replace_leaderboard(persisted_entries)
+
     def _refresh_compare_rows(self) -> None:
         with self._lock:
             top = self._leaderboard[:3]
@@ -4331,6 +4440,15 @@ class CbQuantService:
         with self._lock:
             combo_jobs = [row for row in self._jobs if row.combo_id == combo_id]
             if not combo_jobs:
+                self._candidates = [
+                    row.model_copy(
+                        update={
+                            "status": "pending_backtest" if row.combo_id == combo_id else row.status,
+                            "pass_rate": None if row.combo_id == combo_id else row.pass_rate,
+                        }
+                    )
+                    for row in self._candidates
+                ]
                 return
 
             total = len(combo_jobs)
@@ -4369,6 +4487,26 @@ class CbQuantService:
                 )
                 for row in self._candidates
             ]
+
+    def _purge_optimize_task_caches(self, task_ids: set[str]) -> None:
+        if not task_ids:
+            return
+        with self._lock:
+            self._optimize_analysis_cache = {
+                key: value
+                for key, value in self._optimize_analysis_cache.items()
+                if key[0] not in task_ids
+            }
+            self._optimize_ai_cache = {
+                key: value
+                for key, value in self._optimize_ai_cache.items()
+                if key[0] not in task_ids
+            }
+            self._optimize_ai_compare_cache = {
+                key: value
+                for key, value in self._optimize_ai_compare_cache.items()
+                if key[0] not in task_ids
+            }
 
     def _rebuild_candidate_settings(self) -> None:
         settings: dict[str, dict[str, Any]] = {}
@@ -4632,6 +4770,19 @@ class CbQuantService:
         if window_name == "1w":
             return "近1周"
         return "近1年"
+
+    @staticmethod
+    def _window_name_from_text(value: str) -> str:
+        text = str(value or "").strip().lower()
+        if text in {"full", "全周期"}:
+            return "full"
+        if text in {"3y", "近3年"}:
+            return "3y"
+        if text in {"1w", "近1周"}:
+            return "1w"
+        if text in {"1y", "近1年"}:
+            return "1y"
+        return text
 
     def _load_templates_and_configs(
         self,

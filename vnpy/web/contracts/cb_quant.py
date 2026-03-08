@@ -118,6 +118,18 @@ class BacktestCreateJobsResponse(BaseModel):
     message: str
 
 
+class BacktestJobBatchDeleteRequest(BaseModel):
+    job_ids: list[str] = Field(min_length=1)
+
+
+class BacktestJobBatchDeleteResponse(BaseModel):
+    ok: bool = True
+    affected: int = 0
+    missing_ids: list[str] = Field(default_factory=list)
+    blocked_ids: list[str] = Field(default_factory=list)
+    message: str = "ok"
+
+
 class BacktestStatsResponse(BaseModel):
     running_jobs: int
     queued_jobs: int

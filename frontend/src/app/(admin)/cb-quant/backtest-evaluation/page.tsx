@@ -1,8 +1,10 @@
 "use client";
 
 import {
+  batchDeleteBacktestJobs,
   cancelBacktestJob,
   createStrategyOptimizeTask,
+  deleteBacktestJob,
   getHistoryDataSummary,
   listBacktestJobs,
   getTushareHistorySummary,
@@ -55,6 +57,10 @@ function backtestJobTone(status: BacktestJob["status"]) {
   if (status === "finished") return "green" as const;
   if (status === "cancelled") return "slate" as const;
   return "red" as const;
+}
+
+function isBacktestJobDeletable(status: BacktestJob["status"]) {
+  return status === "finished" || status === "failed" || status === "cancelled";
 }
 
 function toPercent(value: number): string {
@@ -142,6 +148,8 @@ export default function CbQuantBacktestEvaluationPage() {
   const [backtestBusinessDateFrom, setBacktestBusinessDateFrom] = useState<string>("");
   const [backtestBusinessDateTo, setBacktestBusinessDateTo] = useState<string>("");
   const [cancellingBacktestJobId, setCancellingBacktestJobId] = useState<string>("");
+  const [selectedBacktestJobIds, setSelectedBacktestJobIds] = useState<string[]>([]);
+  const [deletingBacktestJobIds, setDeletingBacktestJobIds] = useState<string[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string>("");
   const [resultMode, setResultMode] = useState<"global" | "task">("global");
   const [detail, setDetail] = useState<StrategyOptimizeTaskDetail | null>(null);
@@ -176,6 +184,16 @@ export default function CbQuantBacktestEvaluationPage() {
   const hasActiveTasks = useMemo(
     () => tasks.some((row) => row.status === "queued" || row.status === "running"),
     [tasks],
+  );
+  const deletableBacktestJobIds = useMemo(
+    () => backtestJobs.filter((row) => isBacktestJobDeletable(row.status)).map((row) => row.jobId),
+    [backtestJobs],
+  );
+  const allDeletableBacktestJobsSelected = useMemo(
+    () =>
+      deletableBacktestJobIds.length > 0
+      && deletableBacktestJobIds.every((jobId) => selectedBacktestJobIds.includes(jobId)),
+    [deletableBacktestJobIds, selectedBacktestJobIds],
   );
 
   const activeWindows = useMemo(
@@ -437,10 +455,14 @@ export default function CbQuantBacktestEvaluationPage() {
         pageSize: 10,
       });
       setBacktestJobs(response.items);
+      setSelectedBacktestJobIds((prev) =>
+        prev.filter((jobId) => response.items.some((row) => row.jobId === jobId && isBacktestJobDeletable(row.status))),
+      );
       setBacktestJobsTotal(response.total);
       setBacktestJobsTotalPages(getTotalPages(response.total, 10));
     } catch (err) {
       setBacktestJobs([]);
+      setSelectedBacktestJobIds([]);
       setBacktestJobsTotal(0);
       setBacktestJobsTotalPages(1);
       setError(err instanceof Error ? err.message : "回测任务列表加载失败");
@@ -454,6 +476,19 @@ export default function CbQuantBacktestEvaluationPage() {
     backtestJobStatusFilter,
     backtestJobsPage,
   ]);
+
+  const handleBacktestJobsDeleted = useCallback((jobIds: string[]) => {
+    const deletedSet = new Set(jobIds);
+    setSelectedBacktestJobIds((prev) => prev.filter((jobId) => !deletedSet.has(jobId)));
+    setCompareSelections((prev) => prev.filter((item) => !deletedSet.has(item.taskId)));
+    if (jobIds.includes(selectedTaskId)) {
+      setSelectedTaskId("");
+      setDetail(null);
+      setAnalysis(null);
+      setAnalysisError("");
+      setResultMode("global");
+    }
+  }, [selectedTaskId]);
 
   const loadDetail = useCallback(async () => {
     if (!selectedTaskId) {
@@ -744,6 +779,48 @@ export default function CbQuantBacktestEvaluationPage() {
       setError(err instanceof Error ? err.message : "取消回测任务失败");
     } finally {
       setCancellingBacktestJobId("");
+    }
+  };
+
+  const handleDeleteBacktestJob = async (jobId: string) => {
+    if (!window.confirm(`确认删除任务 ${jobId} 及对应分析结果？`)) {
+      return;
+    }
+    setDeletingBacktestJobIds([jobId]);
+    setError("");
+    try {
+      const payload = await deleteBacktestJob(jobId);
+      handleBacktestJobsDeleted([jobId]);
+      setHint(payload.message);
+      await Promise.all([loadBacktestJobs(), loadTasks(), loadSummary()]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "删除回测任务失败");
+    } finally {
+      setDeletingBacktestJobIds([]);
+    }
+  };
+
+  const handleBatchDeleteBacktestJobs = async () => {
+    if (!selectedBacktestJobIds.length) {
+      return;
+    }
+    if (!window.confirm(`确认批量删除 ${selectedBacktestJobIds.length} 个任务及对应分析结果？`)) {
+      return;
+    }
+    setDeletingBacktestJobIds(selectedBacktestJobIds);
+    setError("");
+    try {
+      const payload = await batchDeleteBacktestJobs(selectedBacktestJobIds);
+      const affectedIds = selectedBacktestJobIds.filter(
+        (jobId) => !payload.missingIds.includes(jobId) && !payload.blockedIds.includes(jobId),
+      );
+      handleBacktestJobsDeleted(affectedIds);
+      setHint(payload.message);
+      await Promise.all([loadBacktestJobs(), loadTasks(), loadSummary()]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "批量删除回测任务失败");
+    } finally {
+      setDeletingBacktestJobIds([]);
     }
   };
 
@@ -1157,6 +1234,14 @@ export default function CbQuantBacktestEvaluationPage() {
               <div className="flex items-end gap-2">
                 <button
                   type="button"
+                  onClick={() => void handleBatchDeleteBacktestJobs()}
+                  disabled={!selectedBacktestJobIds.length || deletingBacktestJobIds.length > 0}
+                  className="h-10 rounded-lg border border-red-500 px-3 text-xs font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-400 dark:text-red-300"
+                >
+                  {deletingBacktestJobIds.length > 0 ? "删除中..." : `批量删除已选${selectedBacktestJobIds.length ? ` (${selectedBacktestJobIds.length})` : ""}`}
+                </button>
+                <button
+                  type="button"
                   onClick={() => {
                     setBacktestBusinessDate("");
                     setBacktestBusinessDateFrom("");
@@ -1179,18 +1264,65 @@ export default function CbQuantBacktestEvaluationPage() {
             </div>
 
             <ScrollableDataTable
-              headers={["任务ID", "组合", "规则包", "窗口", "状态", "进度", "业务日期", "ETA", "Worker", "创建时间", "操作"]}
-              minTableWidthClass="min-w-[1380px]"
-              colSpan={11}
+              headers={[
+                <input
+                  key="select-all"
+                  type="checkbox"
+                  checked={allDeletableBacktestJobsSelected}
+                  onChange={(event) => {
+                    if (event.target.checked) {
+                      setSelectedBacktestJobIds(deletableBacktestJobIds);
+                      return;
+                    }
+                    setSelectedBacktestJobIds([]);
+                  }}
+                  disabled={!deletableBacktestJobIds.length}
+                  aria-label="全选可删除任务"
+                />,
+                "任务ID",
+                "组合",
+                "规则包",
+                "窗口",
+                "状态",
+                "进度",
+                "业务日期",
+                "ETA",
+                "Worker",
+                "创建时间",
+                "操作",
+              ]}
+              minTableWidthClass="min-w-[1440px]"
+              colSpan={12}
               isEmpty={!loadingBacktestJobs && backtestJobs.length === 0}
               emptyText="暂无回测执行任务"
             >
               {backtestJobs.map((row) => {
                 const isOptimizeHistoryJob = row.jobId.startsWith("OPT-");
                 const cancellable = !isOptimizeHistoryJob && (row.status === "queued" || row.status === "running");
+                const deletable = isBacktestJobDeletable(row.status);
                 const canViewResult = isOptimizeHistoryJob && row.status === "finished";
+                const deleting = deletingBacktestJobIds.includes(row.jobId);
                 return (
                   <TableRow key={row.jobId} className="border-b border-gray-100 dark:border-gray-800">
+                    <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">
+                      <input
+                        type="checkbox"
+                        checked={selectedBacktestJobIds.includes(row.jobId)}
+                        onChange={(event) => {
+                          if (!deletable) {
+                            return;
+                          }
+                          setSelectedBacktestJobIds((prev) => {
+                            if (event.target.checked) {
+                              return prev.includes(row.jobId) ? prev : [...prev, row.jobId];
+                            }
+                            return prev.filter((jobId) => jobId !== row.jobId);
+                          });
+                        }}
+                        disabled={!deletable || deletingBacktestJobIds.length > 0}
+                        aria-label={`选择任务 ${row.jobId}`}
+                      />
+                    </TableCell>
                     <TableCell className="px-4 py-3 text-sm font-semibold text-gray-900 dark:text-white">{row.jobId}</TableCell>
                     <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.comboId}</TableCell>
                     <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.rulePackId}</TableCell>
@@ -1204,28 +1336,42 @@ export default function CbQuantBacktestEvaluationPage() {
                     <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.worker}</TableCell>
                     <TableCell className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{row.createdAt ?? "--"}</TableCell>
                     <TableCell className="px-4 py-3">
-                      {canViewResult ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedTaskId(row.jobId);
-                            setResultMode("task");
-                            void loadTaskDetailById(row.jobId);
-                          }}
-                          className="rounded-lg border border-brand-500 px-3 py-1.5 text-xs font-medium text-brand-600 hover:bg-brand-50 dark:border-brand-400 dark:text-brand-300"
-                        >
-                          查看结果
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => void handleCancelBacktestJob(row.jobId)}
-                          disabled={!cancellable || cancellingBacktestJobId === row.jobId}
-                          className="rounded-lg border border-red-500 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-400 dark:text-red-300"
-                        >
-                          {cancellingBacktestJobId === row.jobId ? "取消中..." : "取消"}
-                        </button>
-                      )}
+                      <div className="flex flex-wrap gap-2">
+                        {canViewResult ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedTaskId(row.jobId);
+                              setResultMode("task");
+                              void loadTaskDetailById(row.jobId);
+                            }}
+                            className="rounded-lg border border-brand-500 px-3 py-1.5 text-xs font-medium text-brand-600 hover:bg-brand-50 dark:border-brand-400 dark:text-brand-300"
+                          >
+                            查看结果
+                          </button>
+                        ) : null}
+                        {deletable ? (
+                          <button
+                            type="button"
+                            onClick={() => void handleDeleteBacktestJob(row.jobId)}
+                            disabled={deleting}
+                            className="rounded-lg border border-red-500 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-400 dark:text-red-300"
+                          >
+                            {deleting ? "删除中..." : "删除"}
+                          </button>
+                        ) : cancellable ? (
+                          <button
+                            type="button"
+                            onClick={() => void handleCancelBacktestJob(row.jobId)}
+                            disabled={cancellingBacktestJobId === row.jobId || deletingBacktestJobIds.length > 0}
+                            className="rounded-lg border border-red-500 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-400 dark:text-red-300"
+                          >
+                            {cancellingBacktestJobId === row.jobId ? "取消中..." : "取消"}
+                          </button>
+                        ) : (
+                          <span className="px-1 py-1.5 text-xs text-gray-400 dark:text-gray-500">--</span>
+                        )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 );

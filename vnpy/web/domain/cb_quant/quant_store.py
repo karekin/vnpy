@@ -204,6 +204,17 @@ class CbQuantStore:
             )
             conn.commit()
 
+    def delete_jobs(self, job_ids: list[str]) -> None:
+        normalized = [str(job_id).strip() for job_id in job_ids if str(job_id).strip()]
+        if not normalized:
+            return
+        with self._lock, self._connect() as conn:
+            conn.executemany(
+                "DELETE FROM cb_backtest_job WHERE job_id = ?",
+                [(job_id,) for job_id in normalized],
+            )
+            conn.commit()
+
     def replace_leaderboard(self, rows: list[dict[str, Any]]) -> None:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with self._lock, self._connect() as conn:
@@ -467,6 +478,17 @@ class CbQuantStore:
         if not task_id:
             return
         with self._lock, self._connect() as conn:
+            conn.execute("DELETE FROM cb_optimize_task_analysis_snapshot WHERE task_id = ?", (task_id,))
+            conn.commit()
+
+    def delete_optimize_task_bundle(self, task_id: str) -> None:
+        """删除优化任务及其全部派生结果。"""
+        if not task_id:
+            return
+        with self._lock, self._connect() as conn:
+            conn.execute("DELETE FROM cb_optimize_task WHERE task_id = ?", (task_id,))
+            conn.execute("DELETE FROM cb_optimize_result WHERE task_id = ?", (task_id,))
+            conn.execute("DELETE FROM cb_optimize_top_bond WHERE task_id = ?", (task_id,))
             conn.execute("DELETE FROM cb_optimize_task_analysis_snapshot WHERE task_id = ?", (task_id,))
             conn.commit()
 
