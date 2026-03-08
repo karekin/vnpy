@@ -16,7 +16,6 @@ export type BacktestQueuePayload = {
   startDate: string;
   endDate: string;
   capitalWan: number;
-  feePermille: number;
   benchmark: string;
 };
 
@@ -162,7 +161,6 @@ export default function BacktestConfigPanel({ candidates, onQueueBacktest }: Bac
   });
   const [endDate, setEndDate] = useState<string>(() => toDateInputValue(new Date()));
   const [capitalWan, setCapitalWan] = useState<number>(100);
-  const [feePermille, setFeePermille] = useState<number>(1);
   const [slippageBp, setSlippageBp] = useState<number>(8);
   const [benchmark, setBenchmark] = useState<string>("沪深300");
   const [workers, setWorkers] = useState<number>(4);
@@ -235,7 +233,6 @@ export default function BacktestConfigPanel({ candidates, onQueueBacktest }: Bac
         startDate,
         endDate,
         capitalWan,
-        feePermille,
         benchmark,
       });
       setQueueHint(message);
@@ -387,17 +384,6 @@ export default function BacktestConfigPanel({ candidates, onQueueBacktest }: Bac
                   min={1}
                   value={capitalWan}
                   onChange={(event) => setCapitalWan(Number(event.target.value))}
-                  className={inputClassName}
-                />
-              </div>
-              <div>
-                <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">手续费(单边, ‰)</label>
-                <input
-                  type="number"
-                  min={0}
-                  step="0.1"
-                  value={feePermille}
-                  onChange={(event) => setFeePermille(Number(event.target.value))}
                   className={inputClassName}
                 />
               </div>

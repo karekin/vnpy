@@ -132,7 +132,6 @@ export type BacktestQueueRequest = {
   startDate: string;
   endDate: string;
   capitalWan: number;
-  feePermille: number;
   benchmark: string;
   estStrategies?: number;
 };
@@ -1718,7 +1717,6 @@ export async function queueBacktestJobs(payload: BacktestQueueRequest): Promise<
       start_date: payload.startDate,
       end_date: payload.endDate,
       capital_wan: payload.capitalWan,
-      fee_permille: payload.feePermille,
       benchmark: payload.benchmark,
       est_strategies: payload.estStrategies,
     }),

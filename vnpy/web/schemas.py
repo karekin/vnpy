@@ -114,7 +114,6 @@ class BacktestCreateJobsRequest(BaseModel):
     start_date: date | None = None
     end_date: date | None = None
     capital_wan: float | None = Field(default=100, gt=0)
-    fee_permille: float | None = Field(default=1, ge=0)
     benchmark: str | None = "沪深300"
     est_strategies: int | None = Field(default=None, ge=1)
 

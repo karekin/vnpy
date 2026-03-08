@@ -108,10 +108,10 @@ class CbHistoryService:
         return self._store.latest_sync_log()
 
     def bootstrap_from_crawler_snapshots(self) -> int:
-        """保留兼容方法名，但不再从 Excel 导入历史数据。
+        """保留兼容方法名，但不再从任何旧离线快照导入历史数据。
 
         历史数据主路径已经统一到 `cb_snapshots.db` / `CbTushareService`。
-        若数据库为空，这里不再尝试从旧的 Excel 快照补数。
+        若数据库为空，这里不再尝试从旧离线文件补数。
         """
         summary = self._store.get_summary()
         if summary.snapshot_count > 0:
