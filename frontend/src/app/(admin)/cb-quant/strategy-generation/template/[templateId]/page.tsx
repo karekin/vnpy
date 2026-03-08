@@ -33,6 +33,14 @@ type FactorOption = {
   categoryName: string;
   supportLevel: "strong" | "disabled";
   templateSelectable: boolean;
+  strategyKind: "plain" | "score" | "strategy_parameter" | "runtime_parameter";
+  settingKey: string | null;
+  usageHint: string;
+  paramValueType: "number" | "enum" | null;
+  paramMinValue: number | null;
+  paramMaxValue: number | null;
+  paramStep: number | null;
+  paramEnumValues: string[];
 };
 
 const pageSizeOptions = [10, 20, 50];
@@ -42,8 +50,8 @@ function statusTone(status: StrategyTemplateStatus) {
   return "slate" as const;
 }
 
-function defaultParamRow(factorKey: string, expressionType?: number): StrategyParamSpaceRow {
-  if (factorKey === "rating" || expressionType === 2) {
+function defaultParamRow(factorKey: string, option?: FactorOption): StrategyParamSpaceRow {
+  if (option?.paramValueType === "enum" || factorKey === "rating" || option?.expressionType === 2) {
     return {
       factorKey,
       valueType: "enum",
@@ -51,61 +59,25 @@ function defaultParamRow(factorKey: string, expressionType?: number): StrategyPa
       minValue: null,
       maxValue: null,
       step: null,
-      enumValues: factorKey === "rating" ? ["AA", "AA+", "AAA"] : [],
+      enumValues: option?.paramEnumValues?.length ? option.paramEnumValues : factorKey === "rating" ? ["AA", "AA+", "AAA"] : [],
     };
   }
-
-  const defaults: Record<string, [number, number, number]> = {
-    dblow: [100, 180, 5],
-    conv_prem: [0, 40, 2],
-    bond_prem: [0, 30, 2],
-    theory_bias: [0, 20, 2],
-    theory_value: [80, 160, 5],
-    option_value: [5, 40, 2],
-    pure_value: [70, 130, 5],
-    conv_value: [80, 160, 5],
-    conv_price: [5, 30, 1],
-    close: [90, 180, 5],
-    open: [90, 180, 5],
-    high: [90, 180, 5],
-    low: [90, 180, 5],
-    pre_close: [90, 180, 5],
-    pct_chg: [0, 10, 1],
-    vol: [100, 100000, 5000],
-    amount: [1000, 50000, 1000],
-    turnover: [0.2, 8, 0.2],
-    cap_mv_rate: [1, 80, 1],
-    ytm: [0, 8, 0.5],
-    theory_conv_prem: [0, 30, 2],
-    mod_conv_prem: [0, 40, 2],
-    left_years: [0.5, 6, 0.5],
-    remain_size: [1, 80, 1],
-    issue_size: [1, 120, 2],
-    remain_cap: [1, 120, 2],
-    list_days: [30, 1500, 30],
-    limit: [-1, 1, 1],
-    price_max: [105, 150, 1],
-    premium_max: [5, 35, 0.5],
-    price_benchmark: [106, 124, 2],
-    premium_benchmark: [16, 34, 2],
-    stock_weight: [0.2, 0.35, 0.05],
-    premium_weight: [0.15, 0.35, 0.05],
-    volatility_benchmark: [20, 35, 5],
-    max_candidate_price: [130, 200, 10],
-    candidate_count: [5, 15, 5],
-    outstanding_amount_weight: [0.1, 0.2, 0.05],
-    max_hold_count: [5, 10, 5],
-  };
-  const [minValue, maxValue, step] = defaults[factorKey] ?? [0, 10, 1];
   return {
     factorKey,
     valueType: "number",
     enabled: true,
-    minValue,
-    maxValue,
-    step,
+    minValue: option?.paramMinValue ?? 0,
+    maxValue: option?.paramMaxValue ?? 10,
+    step: option?.paramStep ?? 1,
     enumValues: [],
   };
+}
+
+function strategyKindLabel(kind: FactorOption["strategyKind"]): string {
+  if (kind === "score") return "评分因子";
+  if (kind === "strategy_parameter") return "策略参数";
+  if (kind === "runtime_parameter") return "运行参数";
+  return "普通字段";
 }
 
 function parseNumberOrNull(value: string): number | null {
@@ -222,6 +194,14 @@ export default function StrategyDetailPage() {
         categoryName: category.categoryName,
         supportLevel: factor.supportLevel,
         templateSelectable: factor.templateSelectable,
+        strategyKind: factor.strategyKind,
+        settingKey: factor.settingKey,
+        usageHint: factor.usageHint,
+        paramValueType: factor.paramValueType,
+        paramMinValue: factor.paramMinValue,
+        paramMaxValue: factor.paramMaxValue,
+        paramStep: factor.paramStep,
+        paramEnumValues: factor.paramEnumValues,
       })),
     );
   }, [factorCatalog]);
@@ -238,7 +218,7 @@ export default function StrategyDetailPage() {
       const next = { ...prev };
       for (const factorKey of selectedFactorKeys) {
         if (next[factorKey]) continue;
-        next[factorKey] = defaultParamRow(factorKey, factorMap[factorKey]?.expressionType);
+        next[factorKey] = defaultParamRow(factorKey, factorMap[factorKey]);
         changed = true;
       }
       return changed ? next : prev;
@@ -256,7 +236,7 @@ export default function StrategyDetailPage() {
   const parameterRows = useMemo<EditableParamRow[]>(() => {
     return selectedFactorKeys.map((factorKey) => {
       const meta = factorMap[factorKey];
-      const row = parameterSpaceMap[factorKey] ?? defaultParamRow(factorKey, meta?.expressionType);
+      const row = parameterSpaceMap[factorKey] ?? defaultParamRow(factorKey, meta);
       return {
         ...row,
         factorName: meta?.factorName ?? factorKey,
@@ -276,7 +256,7 @@ export default function StrategyDetailPage() {
   const normalizedParameterSpace = useMemo<StrategyParamSpaceRow[]>(
     () =>
       selectedFactorKeys.map((factorKey) => {
-        const row = parameterSpaceMap[factorKey] ?? defaultParamRow(factorKey, factorMap[factorKey]?.expressionType);
+        const row = parameterSpaceMap[factorKey] ?? defaultParamRow(factorKey, factorMap[factorKey]);
         return {
           factorKey,
           valueType: row.valueType,
@@ -307,7 +287,7 @@ export default function StrategyDetailPage() {
 
   const updateParamRow = (factorKey: string, patch: Partial<StrategyParamSpaceRow>): void => {
     setParameterSpaceMap((prev) => {
-      const current = prev[factorKey] ?? defaultParamRow(factorKey, factorMap[factorKey]?.expressionType);
+      const current = prev[factorKey] ?? defaultParamRow(factorKey, factorMap[factorKey]);
       return {
         ...prev,
         [factorKey]: {
@@ -374,7 +354,7 @@ export default function StrategyDetailPage() {
   return (
     <CbQuantPageShell
       title={`策略详情 · ${strategy.id}`}
-      subtitle="配置因子与参数空间，回测评估页将按真实组合规模执行全量搜索。"
+      subtitle="模板页只管理注册后的策略键。评分因子进入动态打分，参数类键直接映射到策略/运行配置。"
     >
       <div className="space-y-6">
         <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
@@ -477,6 +457,10 @@ export default function StrategyDetailPage() {
             />
             <p className="text-sm text-gray-500 dark:text-gray-400">已选择 {selectedFactorKeys.length} 个因子</p>
           </div>
+          <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-600 dark:border-gray-700 dark:bg-gray-900/60 dark:text-gray-300">
+            模板可选项以统一 registry 为准。
+            评分因子会进入动态打分；策略参数和运行参数会直接写入配置，但当前页面只允许新增“模板可选”的键。
+          </div>
           <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
             {filteredFactors.map((factor) => {
               const checked = selectedFactorKeys.includes(factor.factorKey);
@@ -495,7 +479,13 @@ export default function StrategyDetailPage() {
                   <span className="min-w-0">
                     <span className="block truncate text-sm font-medium text-gray-900 dark:text-white">{factor.factorName}</span>
                     <span className="block truncate text-xs text-gray-500 dark:text-gray-400">
-                      {factor.factorKey} · {factor.categoryName} · {disabled ? "暂未强支持" : "强支持"}
+                      {factor.factorKey} · {factor.categoryName} · {strategyKindLabel(factor.strategyKind)}
+                    </span>
+                    {factor.usageHint ? (
+                      <span className="mt-1 block text-xs text-gray-500 dark:text-gray-400">{factor.usageHint}</span>
+                    ) : null}
+                    <span className="mt-1 block text-xs text-gray-500 dark:text-gray-400">
+                      {disabled ? "当前不可新增到模板搜索空间" : "可加入模板搜索空间"}
                     </span>
                   </span>
                   <input type="checkbox" checked={checked} disabled={disabled} onChange={() => toggleFactor(factor.factorKey)} />
@@ -525,6 +515,9 @@ export default function StrategyDetailPage() {
             </div>
           </div>
           <div className="p-4">
+            <p className="mb-3 text-sm text-gray-500 dark:text-gray-400">
+              参数空间默认值直接来自后端 registry，不再由前端维护独立默认表。
+            </p>
             <ScrollableDataTable
               headers={["参数键", "参数名", "分类", "值类型", "启用", "最小值", "最大值", "步长", "枚举值"]}
               minTableWidthClass="min-w-[1300px]"

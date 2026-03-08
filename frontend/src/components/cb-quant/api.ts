@@ -410,6 +410,14 @@ export type FactorCatalogFactor = {
   viewUnit: string;
   supportLevel: "strong" | "disabled";
   templateSelectable: boolean;
+  strategyKind: "plain" | "score" | "strategy_parameter" | "runtime_parameter";
+  settingKey: string | null;
+  usageHint: string;
+  paramValueType: "number" | "enum" | null;
+  paramMinValue: number | null;
+  paramMaxValue: number | null;
+  paramStep: number | null;
+  paramEnumValues: string[];
 };
 
 export type FactorCatalogCategory = {
@@ -545,6 +553,14 @@ type FactorCatalogFactorApi = {
   view_unit: string;
   support_level: "strong" | "disabled";
   template_selectable: boolean;
+  strategy_kind: "plain" | "score" | "strategy_parameter" | "runtime_parameter";
+  setting_key: string | null;
+  usage_hint: string;
+  param_value_type: "number" | "enum" | null;
+  param_min_value: number | null;
+  param_max_value: number | null;
+  param_step: number | null;
+  param_enum_values: string[];
 };
 
 type FactorCatalogCategoryApi = {
@@ -977,6 +993,14 @@ function mapFactorCatalogFactor(row: FactorCatalogFactorApi): FactorCatalogFacto
     viewUnit: row.view_unit,
     supportLevel: row.support_level,
     templateSelectable: row.template_selectable,
+    strategyKind: row.strategy_kind,
+    settingKey: row.setting_key,
+    usageHint: row.usage_hint,
+    paramValueType: row.param_value_type,
+    paramMinValue: row.param_min_value,
+    paramMaxValue: row.param_max_value,
+    paramStep: row.param_step,
+    paramEnumValues: row.param_enum_values,
   };
 }
 

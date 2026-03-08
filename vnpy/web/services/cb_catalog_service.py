@@ -13,6 +13,10 @@ from __future__ import annotations
 from vnpy.web.domain.cb_quant.enums import FactorCategory, FunctionCategory
 from vnpy.web.domain.cb_quant.factor_support import factor_support_level, is_template_selectable_factor
 from vnpy.web.domain.cb_quant.registry import FACTOR_REGISTRY, FUNCTION_REGISTRY
+from vnpy.web.domain.cb_quant.strategy_factor_registry import (
+    build_strategy_factor_usage_hint,
+    get_strategy_factor_definition,
+)
 from vnpy.web.contracts.cb_quant import (
     FactorCatalogCategory,
     FactorCatalogResponse,
@@ -72,6 +76,7 @@ class CbCatalogService:
         for factor_category in categories:
             rows: list[FactorCatalogRow] = []
             for factor in FACTOR_REGISTRY.get(factor_category, ()):
+                strategy_definition = get_strategy_factor_definition(factor.factor_key)
                 if enabled_only and not factor.enabled:
                     continue
                 if needle:
@@ -95,6 +100,14 @@ class CbCatalogService:
                         view_unit=factor.view_unit,
                         support_level=factor_support_level(factor.factor_key).value,
                         template_selectable=is_template_selectable_factor(factor.factor_key),
+                        strategy_kind=strategy_definition.kind.value if strategy_definition else "plain",
+                        setting_key=strategy_definition.setting_key if strategy_definition else None,
+                        usage_hint=build_strategy_factor_usage_hint(strategy_definition) if strategy_definition else "",
+                        param_value_type=strategy_definition.value_type if strategy_definition else None,
+                        param_min_value=strategy_definition.min_value if strategy_definition else None,
+                        param_max_value=strategy_definition.max_value if strategy_definition else None,
+                        param_step=strategy_definition.step if strategy_definition else None,
+                        param_enum_values=list(strategy_definition.enum_values) if strategy_definition else [],
                     )
                 )
 

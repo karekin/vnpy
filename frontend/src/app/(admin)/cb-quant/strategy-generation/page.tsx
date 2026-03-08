@@ -144,7 +144,7 @@ export default function CbQuantStrategyGenerationPage() {
     setRunningActionId("GLOBAL_EXPAND");
     try {
       const ok = window.confirm(
-        "将直接基于强支持因子库生成全部双因子策略，不再创建原模板，继续执行吗？",
+        "将直接基于模板可选的评分因子生成全部双因子策略，不再创建原模板，继续执行吗？",
       );
       if (!ok) {
         return;
@@ -266,13 +266,13 @@ export default function CbQuantStrategyGenerationPage() {
   return (
     <CbQuantPageShell
       title="策略生成行动页"
-      subtitle="维护策略参数并批量生成双因子组合。"
+      subtitle="维护模板键与参数空间，并基于模板可选评分因子批量生成组合。"
     >
       <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
         <div className="flex flex-col gap-3 border-b border-gray-200 px-5 py-4 dark:border-gray-800 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <h3 className="text-lg font-semibold text-gray-800 dark:text-white/90">策略库</h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400">先配置参数空间，再批量生成双因子组合。</p>
+            <p className="text-sm text-gray-500 dark:text-gray-400">先配置模板键和参数空间，再批量生成双因子组合。</p>
           </div>
           <div className="flex flex-nowrap items-center gap-2 overflow-x-auto pb-1">
             <div className="relative">

@@ -29,6 +29,10 @@ import requests
 
 from vnpy.web.core import cb_backtest
 from vnpy.web.domain.cb_quant.factor_support import STRONG_SUPPORTED_FACTOR_KEYS, is_template_selectable_factor
+from vnpy.web.domain.cb_quant.strategy_factor_registry import (
+    StrategyFactorKind,
+    require_strategy_factor_definition,
+)
 from vnpy.web.domain.cb_quant.quant_store import CbQuantStore
 from vnpy.web.services.cb_backtest_service import CbBacktestService
 from vnpy.web.services.cb_market_service import CbMarketService
@@ -110,12 +114,6 @@ def _now_compact() -> str:
 
 
 class CbQuantService:
-    _LEGACY_FACTOR_KEY_ALIASES: dict[str, str] = {
-        "price_bemchmark": "price_benchmark",
-        "premium_bemchmark": "premium_benchmark",
-        "stock_stdevry_bemchmark": "volatility_benchmark",
-    }
-
     """CB Quant 主服务。
 
     可以把它理解成一个“内存态 + SQLite 持久化”的任务编排器：
@@ -3087,59 +3085,22 @@ class CbQuantService:
 
     def _build_setting_from_factor_values(self, values: dict[str, Any]) -> dict[str, Any]:
         setting = self._backtest_service.default_setting()
-        setting["selected_factor_keys"] = list(values.keys())
-        setting["factor_values"] = dict(values)
-        for factor_key, value in values.items():
-            if isinstance(value, (int, float, str, bool)) or value is None:
-                setting[factor_key] = value
-        direct_map: dict[str, str] = {
-            "price_benchmark": "price_benchmark",
-            "premium_benchmark": "premium_benchmark",
-            "stock_weight": "stock_weight",
-            "premium_weight": "premium_weight",
-            "volatility_benchmark": "volatility_benchmark",
-            "max_candidate_price": "max_candidate_price",
-            "candidate_count": "candidate_count",
-            "outstanding_amount_weight": "outstanding_amount_weight",
-            "max_hold_count": "max_hold_count",
-        }
-        for factor_key, setting_key in direct_map.items():
-            if factor_key in values:
-                setting[setting_key] = values[factor_key]
+        selected_factor_keys: list[str] = []
+        dynamic_factor_values: dict[str, Any] = {}
 
-        if "premium_max" in values and "premium_benchmark" not in values:
-            setting["premium_benchmark"] = self._to_float(values["premium_max"], 25.0)
-        if "conv_prem" in values and "premium_benchmark" not in values:
-            setting["premium_benchmark"] = self._to_float(values["conv_prem"], 25.0)
-        if "price_max" in values:
-            setting["max_candidate_price"] = self._to_float(values["price_max"], setting.get("max_candidate_price", 130.0))
-        if "max_price" in values:
-            setting["max_candidate_price"] = self._to_float(values["max_price"], setting.get("max_candidate_price", 130.0))
-        if "remain_size" in values and "outstanding_amount_weight" not in values:
-            remain_size = self._to_float(values["remain_size"], 12.0)
-            setting["outstanding_amount_weight"] = max(0.05, min(0.50, remain_size / 100.0))
-        if "remain_ratio" in values and "outstanding_amount_weight" not in values:
-            setting["outstanding_amount_weight"] = max(0.05, min(0.50, self._to_float(values["remain_ratio"], 0.15)))
-        if "turnover" in values and "volatility_benchmark" not in values:
-            turnover = self._to_float(values["turnover"], 2.0)
-            setting["volatility_benchmark"] = max(10.0, min(60.0, turnover * 4.0 + 12.0))
-        if "head_count" in values and "candidate_count" not in values:
-            setting["candidate_count"] = max(1, int(round(self._to_float(values["head_count"], 10.0))))
-        if "max_hold_num" in values and "max_hold_count" not in values:
-            setting["max_hold_count"] = max(1, int(round(self._to_float(values["max_hold_num"], 12.0))))
-        if "stock_ratio" in values and "stock_weight" not in values:
-            setting["stock_weight"] = self._to_float(values["stock_ratio"], 0.3)
-        if "premium_ratio" in values and "premium_weight" not in values:
-            setting["premium_weight"] = self._to_float(values["premium_ratio"], 0.3)
-        if "rating" in values:
-            rating = str(values["rating"]).upper()
-            if rating == "AAA":
-                setting["premium_weight"] = 0.2
-                setting["max_candidate_price"] = min(130.0, self._to_float(setting.get("max_candidate_price"), 130.0))
-            elif rating == "AA+":
-                setting["premium_weight"] = 0.25
-            else:
-                setting["premium_weight"] = 0.3
+        for raw_factor_key, value in values.items():
+            definition = require_strategy_factor_definition(raw_factor_key)
+            factor_key = definition.factor_key
+            selected_factor_keys.append(factor_key)
+
+            if definition.kind == StrategyFactorKind.SCORE:
+                dynamic_factor_values[factor_key] = value
+                continue
+            if definition.setting_key is not None:
+                setting[definition.setting_key] = value
+
+        setting["selected_factor_keys"] = selected_factor_keys
+        setting["factor_values"] = dynamic_factor_values
 
         setting["candidate_count"] = max(1, int(round(self._to_float(setting.get("candidate_count"), 10.0))))
         setting["max_hold_count"] = max(1, int(round(self._to_float(setting.get("max_hold_count"), 12.0))))
@@ -4282,10 +4243,12 @@ class CbQuantService:
         keyed: dict[str, StrategyParamSpaceRow] = {}
         for row in parameter_space:
             normalized_key = self._normalize_factor_key_name(row.factor_key)
+            require_strategy_factor_definition(normalized_key)
             keyed[normalized_key] = row.model_copy(update={"factor_key": normalized_key})
         normalized: list[StrategyParamSpaceRow] = []
 
         for factor_key in normalized_factor_keys:
+            require_strategy_factor_definition(factor_key)
             row = keyed.get(factor_key)
             if row is None:
                 raise RuntimeError(f"missing parameter space row: {factor_key}")
@@ -4324,65 +4287,26 @@ class CbQuantService:
         return normalized
 
     def _default_param_space_row(self, factor_key: str) -> StrategyParamSpaceRow:
-        numeric_defaults: dict[str, tuple[float, float, float]] = {
-            "dblow": (100, 180, 5),
-            "conv_prem": (0, 40, 2),
-            "bond_prem": (0, 30, 2),
-            "theory_bias": (0, 20, 2),
-            "theory_value": (80, 160, 5),
-            "option_value": (5, 40, 2),
-            "pure_value": (70, 130, 5),
-            "conv_value": (80, 160, 5),
-            "conv_price": (5, 30, 1),
-            "close": (90, 180, 5),
-            "open": (90, 180, 5),
-            "high": (90, 180, 5),
-            "low": (90, 180, 5),
-            "pre_close": (90, 180, 5),
-            "pct_chg": (0, 10, 1),
-            "vol": (100, 100000, 5000),
-            "amount": (1000, 50000, 1000),
-            "turnover": (0.2, 8.0, 0.2),
-            "cap_mv_rate": (1, 80, 1),
-            "ytm": (0, 8, 0.5),
-            "theory_conv_prem": (0, 30, 2),
-            "mod_conv_prem": (0, 40, 2),
-            "left_years": (0.5, 6, 0.5),
-            "remain_size": (1, 80, 1),
-            "issue_size": (1, 120, 2),
-            "remain_cap": (1, 120, 2),
-            "list_days": (30, 1500, 30),
-            "limit": (-1, 1, 1),
-            "price_max": (105, 150, 1),
-            "premium_max": (5, 35, 0.5),
-            "price_benchmark": (106, 124, 2),
-            "premium_benchmark": (16, 34, 2),
-            "stock_weight": (0.20, 0.35, 0.05),
-            "premium_weight": (0.15, 0.35, 0.05),
-            "volatility_benchmark": (20, 35, 5),
-            "max_candidate_price": (130, 200, 10),
-            "candidate_count": (5, 15, 5),
-            "outstanding_amount_weight": (0.10, 0.20, 0.05),
-            "max_hold_count": (5, 10, 5),
-        }
-        enum_defaults: dict[str, list[str]] = {
-            "rating": ["AA", "AA+", "AAA"],
-        }
-        if factor_key in enum_defaults:
+        definition = require_strategy_factor_definition(factor_key)
+        if definition.value_type == "enum":
+            values = list(definition.enum_values)
+            if not values:
+                raise RuntimeError(f"empty enum parameter defaults: {factor_key}")
             return StrategyParamSpaceRow(
-                factor_key=factor_key,
+                factor_key=definition.factor_key,
                 value_type="enum",
                 enabled=True,
-                enum_values=enum_defaults[factor_key],
+                enum_values=values,
             )
-        min_value, max_value, step = numeric_defaults.get(factor_key, (0, 10, 1))
+        if definition.min_value is None or definition.max_value is None or definition.step is None:
+            raise RuntimeError(f"missing numeric parameter defaults: {factor_key}")
         return StrategyParamSpaceRow(
-            factor_key=factor_key,
+            factor_key=definition.factor_key,
             value_type="number",
             enabled=True,
-            min_value=min_value,
-            max_value=max_value,
-            step=step,
+            min_value=definition.min_value,
+            max_value=definition.max_value,
+            step=definition.step,
         )
 
     def _calculate_combo_size(
@@ -4496,7 +4420,7 @@ class CbQuantService:
 
     @classmethod
     def _normalize_factor_key_name(cls, factor_key: str) -> str:
-        return cls._LEGACY_FACTOR_KEY_ALIASES.get(str(factor_key), str(factor_key))
+        return str(factor_key).strip()
 
     def _normalize_template_config(
         self,

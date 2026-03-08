@@ -14,6 +14,10 @@ from typing import Any
 import pandas as pd
 
 from vnpy.web.core.cb_backtest.settings import StrategyParameters
+from vnpy.web.domain.cb_quant.strategy_factor_registry import (
+    StrategyScoreMode,
+    get_strategy_factor_definition,
+)
 from vnpy.web.domain.cb_quant.snapshot_schema import PutStatus
 
 
@@ -40,60 +44,77 @@ def _score_rating(series: pd.Series, expected: Any) -> pd.Series:
     return (1 - (want - values)).clip(lower=0.2, upper=1.5).round(2)
 
 
+def _build_dynamic_factor_inputs(*, df: pd.DataFrame, listing_days: pd.Series) -> dict[str, pd.Series]:
+    pct_divisor = 1 + df["bond_pct_change"].fillna(0.0) / 100.0
+    pre_close = df["pre_close_price"].where(df["pre_close_price"] > 0, df["close_price"] / pct_divisor.replace(0, 1.0))
+    theory_value = df["pure_bond_value"] + df["option_value"]
+    theory_bias = ((df["close_price"] - theory_value) / theory_value.replace(0, 1.0) * 100.0).fillna(0.0)
+    conv_value = (df["underlying_close_price"] / df["conversion_price"].replace(0, 1.0) * 100.0).fillna(0.0)
+    bond_prem = ((df["close_price"] / df["pure_bond_value"].replace(0, 1.0)) - 1.0) * 100.0
+    left_years = df["days_to_maturity"] / 365.0
+    remain_cap = df["outstanding_amount_yi"] * df["close_price"] / 100.0
+    turnover_metric = df["turnover_rate_pct"].where(df["turnover_rate_pct"] > 0, df["turnover_amount_wan"])
+
+    return {
+        "dblow": df["close_price"] + df["conversion_premium_pct"],
+        "conv_prem": df["conversion_premium_pct"],
+        "bond_prem": bond_prem,
+        "theory_bias": theory_bias,
+        "theory_value": theory_value,
+        "option_value": df["option_value"],
+        "pure_value": df["pure_bond_value"],
+        "conv_value": conv_value,
+        "conv_price": df["conversion_price"],
+        "close": df["close_price"],
+        "open": df["open_price"],
+        "high": df["high_price"],
+        "low": df["low_price"],
+        "pre_close": pre_close,
+        "pct_chg": df["bond_pct_change"],
+        "vol": df["volume_hand"],
+        "amount": df["turnover_amount_wan"],
+        "turnover": turnover_metric,
+        "cap_mv_rate": df["outstanding_to_market_cap_ratio"] * 100.0,
+        "ytm": df["ytm_to_maturity_pct"],
+        "theory_conv_prem": theory_bias,
+        "mod_conv_prem": df["conversion_premium_pct"],
+        "left_years": left_years,
+        "remain_size": df["outstanding_amount_yi"],
+        "issue_size": df["issue_size_yi"],
+        "remain_cap": remain_cap,
+        "list_days": listing_days,
+        "limit": df["limit_status"].abs(),
+        "rating": df["rating"],
+    }
+
+
 def _build_dynamic_factor_scores(
     *,
     df: pd.DataFrame,
     factor_values: dict[str, Any],
     listing_days: pd.Series,
 ) -> dict[str, pd.Series]:
-    pct_divisor = 1 + df["bond_pct_change"].fillna(0.0) / 100.0
-    pre_close = df["pre_close_price"].where(df["pre_close_price"] > 0, df["close_price"] / pct_divisor.replace(0, 1.0))
-    theory_value = df["pure_bond_value"] + df["option_value"]
-    theory_bias = ((df["close_price"] - theory_value) / theory_value.replace(0, 1.0) * 100.0).fillna(0.0)
-    dblow = df["close_price"] + df["conversion_premium_pct"]
-    conv_value = (df["underlying_close_price"] / df["conversion_price"].replace(0, 1.0) * 100.0).fillna(0.0)
-    bond_prem = ((df["close_price"] / df["pure_bond_value"].replace(0, 1.0)) - 1.0) * 100.0
-    left_years = df["days_to_maturity"] / 365.0
-    remain_cap = df["outstanding_amount_yi"] * df["close_price"] / 100.0
-    cap_mv_rate = df["outstanding_to_market_cap_ratio"] * 100.0
-    turnover_metric = df["turnover_rate_pct"].where(df["turnover_rate_pct"] > 0, df["turnover_amount_wan"])
-    limit_metric = df["limit_status"].abs()
+    input_map = _build_dynamic_factor_inputs(df=df, listing_days=listing_days)
+    score_map: dict[str, pd.Series] = {}
 
-    series_map: dict[str, pd.Series] = {
-        "dblow": _score_lower_better(dblow, float(factor_values.get("dblow", 0.0))),
-        "conv_prem": _score_lower_better(df["conversion_premium_pct"], float(factor_values.get("conv_prem", 0.0))),
-        "bond_prem": _score_lower_better(bond_prem, float(factor_values.get("bond_prem", 0.0))),
-        "theory_bias": _score_abs_lower_better(theory_bias, float(factor_values.get("theory_bias", 0.0))),
-        "theory_value": _score_higher_better(theory_value, float(factor_values.get("theory_value", 1.0))),
-        "option_value": _score_higher_better(df["option_value"], float(factor_values.get("option_value", 1.0))),
-        "pure_value": _score_higher_better(df["pure_bond_value"], float(factor_values.get("pure_value", 1.0))),
-        "conv_value": _score_higher_better(conv_value, float(factor_values.get("conv_value", 1.0))),
-        "conv_price": _score_lower_better(df["conversion_price"], float(factor_values.get("conv_price", 1.0))),
-        "close": _score_lower_better(df["close_price"], float(factor_values.get("close", 1.0))),
-        "open": _score_lower_better(df["open_price"], float(factor_values.get("open", 1.0))),
-        "high": _score_lower_better(df["high_price"], float(factor_values.get("high", 1.0))),
-        "low": _score_lower_better(df["low_price"], float(factor_values.get("low", 1.0))),
-        "pre_close": _score_lower_better(pre_close, float(factor_values.get("pre_close", 1.0))),
-        "pct_chg": _score_abs_lower_better(df["bond_pct_change"], float(factor_values.get("pct_chg", 0.0))),
-        "vol": _score_higher_better(df["volume_hand"], float(factor_values.get("vol", 1.0))),
-        "amount": _score_higher_better(df["turnover_amount_wan"], float(factor_values.get("amount", 1.0))),
-        "turnover": _score_higher_better(turnover_metric, float(factor_values.get("turnover", 1.0))),
-        "cap_mv_rate": _score_lower_better(cap_mv_rate, float(factor_values.get("cap_mv_rate", 1.0))),
-        "ytm": _score_higher_better(df["ytm_to_maturity_pct"], float(factor_values.get("ytm", 1.0))),
-        "theory_conv_prem": _score_abs_lower_better(theory_bias, float(factor_values.get("theory_conv_prem", 0.0))),
-        "mod_conv_prem": _score_lower_better(df["conversion_premium_pct"], float(factor_values.get("mod_conv_prem", 1.0))),
-        "left_years": _score_higher_better(left_years, float(factor_values.get("left_years", 1.0))),
-        "remain_size": _score_lower_better(df["outstanding_amount_yi"], float(factor_values.get("remain_size", 1.0))),
-        "issue_size": _score_lower_better(df["issue_size_yi"], float(factor_values.get("issue_size", 1.0))),
-        "remain_cap": _score_lower_better(remain_cap, float(factor_values.get("remain_cap", 1.0))),
-        "list_days": _score_higher_better(listing_days, float(factor_values.get("list_days", 1.0))),
-        "limit": _score_abs_lower_better(limit_metric, float(factor_values.get("limit", 0.0))),
-    }
+    for factor_key, expected in factor_values.items():
+        definition = get_strategy_factor_definition(factor_key)
+        if definition is None or definition.score_mode is None:
+            continue
+        series = input_map.get(factor_key)
+        if series is None:
+            continue
 
-    if "rating" in factor_values:
-        series_map["rating"] = _score_rating(df["rating"], factor_values.get("rating"))
+        if definition.score_mode == StrategyScoreMode.LOWER_BETTER:
+            score_map[factor_key] = _score_lower_better(series, float(expected))
+        elif definition.score_mode == StrategyScoreMode.HIGHER_BETTER:
+            score_map[factor_key] = _score_higher_better(series, float(expected))
+        elif definition.score_mode == StrategyScoreMode.ABS_LOWER_BETTER:
+            score_map[factor_key] = _score_abs_lower_better(series, float(expected))
+        elif definition.score_mode == StrategyScoreMode.RATING:
+            score_map[factor_key] = _score_rating(series, expected)
 
-    return {key: value for key, value in series_map.items() if key in factor_values}
+    return score_map
 
 
 def filter_multiple_factors(

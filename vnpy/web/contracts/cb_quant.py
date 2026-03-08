@@ -609,6 +609,14 @@ class FactorCatalogRow(BaseModel):
     view_unit: str = ""
     support_level: str = "disabled"
     template_selectable: bool = False
+    strategy_kind: str = "plain"
+    setting_key: str | None = None
+    usage_hint: str = ""
+    param_value_type: str | None = None
+    param_min_value: float | None = None
+    param_max_value: float | None = None
+    param_step: float | None = None
+    param_enum_values: list[str] = Field(default_factory=list)
 
 
 class FactorCatalogCategory(BaseModel):
