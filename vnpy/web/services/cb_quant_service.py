@@ -25,6 +25,7 @@ from threading import Event, Lock, Thread, current_thread
 from typing import Any, Iterable, TypeVar
 
 from vnpy.web.adapters import CrawlerPhaseABacktestAdapter
+from vnpy.web.domain.cb_quant import phase_a_core
 from vnpy.web.domain.cb_quant.quant_store import CbQuantStore
 from vnpy.web.services.cb_market_service import CbMarketService
 from vnpy.web.schemas import (
@@ -693,7 +694,7 @@ class CbQuantService:
         - 历史数据在哪查：
           `_run_optimize_task` 里通过 `self._adapter.load_market_data()` 读取，
           adapter 优先从 `CbHistoryStore.load_market_dataset()` 的本地快照库读取，
-          读不到时才回退到 crawler 脚本的 `load_market_data(...)`
+          读不到时返回空数据集，由上层决定是否提示同步
         - 配置在哪读：
           这里的 `config = self._template_configs.get(template.id)` 读取模板配置，
           里面包含 factor_keys 和 parameter_space，决定参数组合总数；
@@ -955,9 +956,7 @@ class CbQuantService:
             self._optimize_analysis_cache[cache_key] = response
             return response
 
-        module = self._adapter._load_module()
         strategy = self._simulate_detailed_strategy(
-            module=module,
             dataset=sliced,
             setting=setting,
             initial_capital_wan=initial_capital_wan,
@@ -1187,11 +1186,8 @@ class CbQuantService:
             message="任务已出队，正在初始化引擎与加载数据",
         )
 
-        # 加载 crawler 侧的 phase_a 脚本模块；这是策略逻辑、候选池生成逻辑的真正来源。
-        module = self._adapter._load_module()
-
-        # 读取历史快照数据集。adapter 会优先从 cb_snapshots.db 读取标准化日快照，
-        # 如果本地快照库没有数据，才会回退到 crawler 脚本自己的历史数据加载逻辑。
+        # 读取历史快照数据集。adapter 会优先从 cb_snapshots.db 读取标准化日快照；
+        # 如果本地快照库没有数据，就返回空数据集，由当前任务统一走“无数据失败”分支。
         dataset = self._adapter.load_market_data()
         total = max(1, task.total_combinations)
 
@@ -1218,7 +1214,7 @@ class CbQuantService:
             )
             return
 
-        # 到这里说明：模块已加载、历史快照已读取、窗口切片已准备完毕。
+        # 到这里说明：phase_a_core 已直接引用、历史快照已读取、窗口切片已准备完毕。
         self._update_optimize_task(
             task_id,
             status="running",
@@ -1260,7 +1256,6 @@ class CbQuantService:
                 # 阶段1只在一个较短窗口上跑抽样组合，目标是尽快得到“值得复评”的 shortlist。
                 # 这里保留 stage2_shortlist_limit 条最佳结果，避免把明显较差的组合带入完整回测。
                 for row in self._iter_combo_results_parallel(
-                    module=module,
                     task_id=task_id,
                     template_id=task.template_id,
                     template_name=task.template_name,
@@ -1335,7 +1330,6 @@ class CbQuantService:
                         for row in shortlist
                     )
                     for row in self._iter_combo_results_parallel(
-                        module=module,
                         task_id=task_id,
                         template_id=task.template_id,
                         template_name=task.template_name,
@@ -1399,7 +1393,6 @@ class CbQuantService:
                 # - workers>1 时会并行提交多个 `_evaluate_combo(...)`
                 # 无论底层是否并行，这里拿到的都是“一个组合评估完成后的结果行”。
                 for row in self._iter_combo_results_parallel(
-                    module=module,
                     task_id=task_id,
                     template_id=task.template_id,
                     template_name=task.template_name,
@@ -2105,7 +2098,6 @@ class CbQuantService:
     def _iter_combo_results_parallel(
         self,
         *,
-        module: Any,
         task_id: str,
         template_id: str,
         template_name: str,
@@ -2136,7 +2128,6 @@ class CbQuantService:
                 # 每取出一个组合，就直接调用 `_evaluate_combo(...)` 得到结果。
                 # yield 返回后，调用方可以立刻更新进度和临时排行榜。
                 yield self._evaluate_combo(
-                    module=module,
                     task_id=task_id,
                     template_id=template_id,
                     template_name=template_name,
@@ -2170,7 +2161,6 @@ class CbQuantService:
                 # 真正耗时的逻辑仍然在 `_evaluate_combo(...)` 里。
                 future = pool.submit(
                     self._evaluate_combo,
-                    module=module,
                     task_id=task_id,
                     template_id=template_id,
                     template_name=template_name,
@@ -2215,7 +2205,6 @@ class CbQuantService:
     def _build_candidate_code_map(
         self,
         *,
-        module: Any,
         dataset: list[tuple[str, Any]],
         cfg: dict[str, Any],
         head_count: int,
@@ -2227,7 +2216,7 @@ class CbQuantService:
         candidate_code_map: dict[str, list[str]] = {}
         for trade_date, frame in dataset:
             try:
-                candidate = module.build_candidates(frame, trade_date, cfg, head_count)
+                candidate = phase_a_core.build_candidates(frame, trade_date, cfg, head_count)
             except Exception:
                 candidate = None
             if candidate is None or getattr(candidate, "empty", True):
@@ -2257,7 +2246,7 @@ class CbQuantService:
         委托给 `phase_a_core.run_backtest_from_candidates(...)`，把持仓轮动、调仓频率、
         强赎、止盈止损、`until_win` 等规则统一到同一套核心实现上。
         """
-        return self._adapter._load_module().run_backtest_from_candidates(
+        return phase_a_core.run_backtest_from_candidates(
             dataset=dataset,
             candidate_code_map=candidate_code_map,
             setting=setting,
@@ -2266,7 +2255,6 @@ class CbQuantService:
     def _evaluate_combo(
         self,
         *,
-        module: Any,
         task_id: str,
         template_id: str,
         template_name: str,
@@ -2302,9 +2290,9 @@ class CbQuantService:
         max_hold_num = max(1, int(round(self._to_float(setting.get("max_hold_num"), 12.0))))
         until_win = bool(setting.get("until_win", False))
 
-        # 把通用 setting 转成 crawler 脚本真正用于筛债的 cfg。
+        # 把通用 setting 转成 phase_a_core 真正用于筛债的 cfg。
         # 后面 `build_candidates(...)` 会直接使用这个 cfg。
-        cfg = module.build_strategy_config(setting)
+        cfg = phase_a_core.build_strategy_config(setting)
         base_dataset: list[tuple[str, Any]] = []
         if window_dataset_map is not None:
             # 当调用方已经提前准备好多个窗口切片时，这里优先挑“长度最大”的一份数据集，
@@ -2318,7 +2306,6 @@ class CbQuantService:
             base_dataset = dataset
         # 候选池基于“可用范围最大的一份数据集”预计算一次，避免多窗口重复生成。
         candidate_code_map = self._build_candidate_code_map(
-            module=module,
             dataset=base_dataset,
             cfg=cfg,
             head_count=head_count,
@@ -2581,7 +2568,6 @@ class CbQuantService:
     def _simulate_detailed_strategy(
         self,
         *,
-        module: Any,
         dataset: list[tuple[str, Any]],
         setting: dict[str, Any],
         initial_capital_wan: float,
@@ -2594,7 +2580,7 @@ class CbQuantService:
         - 每日换手
         - 每次轮动后的持仓快照
         """
-        cfg = module.build_strategy_config(setting)
+        cfg = phase_a_core.build_strategy_config(setting)
         head_count = max(1, int(round(self._to_float(setting.get("head_count"), 10.0))))
         max_hold_num = max(1, int(round(self._to_float(setting.get("max_hold_num"), 12.0))))
         until_win = bool(setting.get("until_win", False))
@@ -2622,7 +2608,7 @@ class CbQuantService:
         last_rebalance_index = 0
 
         for index, (trade_date, df_all) in enumerate(dataset):
-            candidate = module.build_candidates(df_all, trade_date, cfg, head_count)
+            candidate = phase_a_core.build_candidates(df_all, trade_date, cfg, head_count)
             if candidate is None:
                 candidate = df_all.iloc[0:0]
             if candidate is None or candidate.empty:
