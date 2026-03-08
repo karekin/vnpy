@@ -52,6 +52,10 @@ def normalize_market_frame(frame: pd.DataFrame) -> pd.DataFrame:
 
     for key, default in {
         "close_price": SNAPSHOT_FIELD_DEFAULTS["close_price"],
+        "open_price": SNAPSHOT_FIELD_DEFAULTS["open_price"],
+        "high_price": SNAPSHOT_FIELD_DEFAULTS["high_price"],
+        "low_price": SNAPSHOT_FIELD_DEFAULTS["low_price"],
+        "pre_close_price": SNAPSHOT_FIELD_DEFAULTS["pre_close_price"],
         "bond_pct_change": SNAPSHOT_FIELD_DEFAULTS["bond_pct_change"],
         "conversion_premium_pct": SNAPSHOT_FIELD_DEFAULTS["conversion_premium_pct"],
         "conversion_price": SNAPSHOT_FIELD_DEFAULTS["conversion_price"],
@@ -70,7 +74,11 @@ def normalize_market_frame(frame: pd.DataFrame) -> pd.DataFrame:
         "ytm_to_maturity_pct": SNAPSHOT_FIELD_DEFAULTS["ytm_to_maturity_pct"],
         "ytm_to_maturity_after_tax_pct": SNAPSHOT_FIELD_DEFAULTS["ytm_to_maturity_after_tax_pct"],
         "ytm_to_put_pct": SNAPSHOT_FIELD_DEFAULTS["ytm_to_put_pct"],
+        "volume_hand": SNAPSHOT_FIELD_DEFAULTS["volume_hand"],
         "turnover_amount_wan": SNAPSHOT_FIELD_DEFAULTS["turnover_amount_wan"],
+        "turnover_rate_pct": SNAPSHOT_FIELD_DEFAULTS["turnover_rate_pct"],
+        "issue_size_yi": SNAPSHOT_FIELD_DEFAULTS["issue_size_yi"],
+        "limit_status": SNAPSHOT_FIELD_DEFAULTS["limit_status"],
     }.items():
         _ensure_float_column(df, key, float(default))
 

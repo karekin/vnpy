@@ -12,7 +12,9 @@ from vnpy.web.schemas import (
     BacktestJobRow,
     CandidateRow,
     JobStatus,
+    StrategyParamSpaceRow,
     StrategyOptimizeTaskCreateRequest,
+    StrategyTemplateConfigRequest,
     StrategyTemplateConfigResponse,
     StrategyOptimizeTaskRow,
     StrategyTemplateRow,
@@ -24,6 +26,7 @@ class _DummyStore:
     def __init__(self) -> None:
         self.saved: list[dict[str, Any]] = []
         self.saved_optimize: list[dict[str, Any]] = []
+        self.saved_templates: list[dict[str, Any]] = []
 
     def upsert_job(self, *, row: dict[str, Any], context: dict[str, Any]) -> None:
         self.saved.append({"row": row, "context": context})
@@ -33,6 +36,9 @@ class _DummyStore:
 
     def get_job_context(self, job_id: str) -> dict[str, Any] | None:
         return None
+
+    def replace_templates_and_configs(self, *, templates: list[dict[str, Any]], configs: dict[str, dict[str, Any]]) -> None:
+        self.saved_templates = templates
 
 
 class _DummyExecutor:
@@ -81,6 +87,7 @@ def _build_service() -> CbQuantService:
             updated_at="2026-02-25 12:00",
         )
     }
+    service._template_seq = 1
     service._opt_task_seq = 0
     service._optimize_tasks = []
     service._optimize_results = {}
@@ -235,6 +242,111 @@ class TestOptimizeSamplingHelpers:
         assert service._should_enable_stage1_screening(total=600, windows=["full", "3y", "1y"]) is True
         assert service._should_enable_stage1_screening(total=400, windows=["full", "3y", "1y"]) is False
         assert service._should_enable_stage1_screening(total=600, windows=["full"]) is False
+
+    def test_normalize_template_config_should_preserve_dblow_and_normalize_legacy_typo(self) -> None:
+        service = _build_service()
+
+        normalized = service._normalize_template_config(
+            StrategyTemplateConfigResponse(
+                template_id="TPL-001",
+                factor_keys=["dblow", "stock_stdevry_bemchmark"],
+                expression_draft="",
+                parameter_space=[
+                    StrategyParamSpaceRow(
+                        factor_key="dblow",
+                        value_type="number",
+                        enabled=True,
+                        min_value=100.0,
+                        max_value=180.0,
+                        step=5.0,
+                        enum_values=[],
+                    ),
+                    StrategyParamSpaceRow(
+                        factor_key="stock_stdevry_bemchmark",
+                        value_type="number",
+                        enabled=True,
+                        min_value=20.0,
+                        max_value=35.0,
+                        step=5.0,
+                        enum_values=[],
+                    ),
+                ],
+                combo_size=0,
+                updated_at="2026-03-08 12:00",
+            )
+        )
+
+        assert normalized.factor_keys == ["dblow", "volatility_benchmark"]
+        assert [row.factor_key for row in normalized.parameter_space] == ["dblow", "volatility_benchmark"]
+        assert normalized.parameter_space[0].min_value == 100.0
+        assert normalized.parameter_space[0].max_value == 180.0
+
+    def test_build_setting_from_factor_values_should_preserve_selected_raw_factors(self) -> None:
+        service = _build_service()
+        setting = service._build_setting_from_factor_values(
+            {
+                "dblow": 130.0,
+                "option_value": 12.5,
+                "theory_bias": 3.0,
+                "pre_close": 118.0,
+            }
+        )
+
+        assert setting["selected_factor_keys"] == ["dblow", "option_value", "theory_bias", "pre_close"]
+        assert setting["factor_values"]["dblow"] == 130.0
+        assert setting["option_value"] == 12.5
+
+    def test_expand_template_factor_combos_should_skip_non_strong_supported_factors(self) -> None:
+        service = _build_service()
+        service._template_configs["TPL-001"] = StrategyTemplateConfigResponse(
+            template_id="TPL-001",
+            factor_keys=["dblow", "bias_5", "open"],
+            expression_draft="",
+            parameter_space=[
+                StrategyParamSpaceRow(
+                    factor_key="dblow",
+                    value_type="number",
+                    enabled=True,
+                    min_value=100.0,
+                    max_value=110.0,
+                    step=10.0,
+                    enum_values=[],
+                ),
+                StrategyParamSpaceRow(
+                    factor_key="bias_5",
+                    value_type="number",
+                    enabled=True,
+                    min_value=1.0,
+                    max_value=2.0,
+                    step=1.0,
+                    enum_values=[],
+                ),
+                StrategyParamSpaceRow(
+                    factor_key="open",
+                    value_type="number",
+                    enabled=True,
+                    min_value=100.0,
+                    max_value=110.0,
+                    step=10.0,
+                    enum_values=[],
+                ),
+            ],
+            combo_size=0,
+            updated_at="2026-03-08 12:00",
+        )
+
+        payload = service.expand_template_factor_combos(
+            "TPL-001",
+            type("Req", (), {"min_factor_count": 1, "max_factor_count": 2, "max_strategies": None})(),
+        )
+
+        assert payload is not None
+        assert payload.created_count == 3
+        assert "暂未强支持因子" in payload.message
+        created_factor_sets = [cfg.factor_keys for key, cfg in service._template_configs.items() if key != "TPL-001"]
+        assert ["dblow"] in created_factor_sets
+        assert ["open"] in created_factor_sets
+        assert ["dblow", "open"] in created_factor_sets
 
 
 class TestWindowHelpers:

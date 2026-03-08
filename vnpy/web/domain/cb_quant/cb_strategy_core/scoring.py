@@ -9,11 +9,91 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 import pandas as pd
 
 from vnpy.web.domain.cb_quant.cb_strategy_core.settings import StrategyParameters
 from vnpy.web.domain.cb_quant.snapshot_schema import PutStatus
+
+
+def _score_lower_better(series: pd.Series, benchmark: float) -> pd.Series:
+    base = max(abs(float(benchmark)), 1e-6)
+    return (1 - (series - benchmark) / base).clip(lower=0.2, upper=1.8).round(2)
+
+
+def _score_higher_better(series: pd.Series, benchmark: float) -> pd.Series:
+    base = max(abs(float(benchmark)), 1e-6)
+    return (1 - (benchmark - series) / base).clip(lower=0.2, upper=1.8).round(2)
+
+
+def _score_abs_lower_better(series: pd.Series, benchmark: float = 0.0) -> pd.Series:
+    distance = (series - benchmark).abs()
+    base = max(abs(float(benchmark)), 10.0)
+    return (1 - distance / base).clip(lower=0.2, upper=1.8).round(2)
+
+
+def _score_rating(series: pd.Series, expected: Any) -> pd.Series:
+    order = {"AA": 1.0, "AA+": 1.1, "AAA": 1.2}
+    want = order.get(str(expected).upper(), 1.0)
+    values = series.astype(str).str.upper().map(order).fillna(0.8)
+    return (1 - (want - values)).clip(lower=0.2, upper=1.5).round(2)
+
+
+def _build_dynamic_factor_scores(
+    *,
+    df: pd.DataFrame,
+    factor_values: dict[str, Any],
+    listing_days: pd.Series,
+) -> dict[str, pd.Series]:
+    pct_divisor = 1 + df["bond_pct_change"].fillna(0.0) / 100.0
+    pre_close = df["pre_close_price"].where(df["pre_close_price"] > 0, df["close_price"] / pct_divisor.replace(0, 1.0))
+    theory_value = df["pure_bond_value"] + df["option_value"]
+    theory_bias = ((df["close_price"] - theory_value) / theory_value.replace(0, 1.0) * 100.0).fillna(0.0)
+    dblow = df["close_price"] + df["conversion_premium_pct"]
+    conv_value = (df["underlying_close_price"] / df["conversion_price"].replace(0, 1.0) * 100.0).fillna(0.0)
+    bond_prem = ((df["close_price"] / df["pure_bond_value"].replace(0, 1.0)) - 1.0) * 100.0
+    left_years = df["days_to_maturity"] / 365.0
+    remain_cap = df["outstanding_amount_yi"] * df["close_price"] / 100.0
+    cap_mv_rate = df["outstanding_to_market_cap_ratio"] * 100.0
+    turnover_metric = df["turnover_rate_pct"].where(df["turnover_rate_pct"] > 0, df["turnover_amount_wan"])
+    limit_metric = df["limit_status"].abs()
+
+    series_map: dict[str, pd.Series] = {
+        "dblow": _score_lower_better(dblow, float(factor_values.get("dblow", 0.0))),
+        "conv_prem": _score_lower_better(df["conversion_premium_pct"], float(factor_values.get("conv_prem", 0.0))),
+        "bond_prem": _score_lower_better(bond_prem, float(factor_values.get("bond_prem", 0.0))),
+        "theory_bias": _score_abs_lower_better(theory_bias, float(factor_values.get("theory_bias", 0.0))),
+        "theory_value": _score_higher_better(theory_value, float(factor_values.get("theory_value", 1.0))),
+        "option_value": _score_higher_better(df["option_value"], float(factor_values.get("option_value", 1.0))),
+        "pure_value": _score_higher_better(df["pure_bond_value"], float(factor_values.get("pure_value", 1.0))),
+        "conv_value": _score_higher_better(conv_value, float(factor_values.get("conv_value", 1.0))),
+        "conv_price": _score_lower_better(df["conversion_price"], float(factor_values.get("conv_price", 1.0))),
+        "close": _score_lower_better(df["close_price"], float(factor_values.get("close", 1.0))),
+        "open": _score_lower_better(df["open_price"], float(factor_values.get("open", 1.0))),
+        "high": _score_lower_better(df["high_price"], float(factor_values.get("high", 1.0))),
+        "low": _score_lower_better(df["low_price"], float(factor_values.get("low", 1.0))),
+        "pre_close": _score_lower_better(pre_close, float(factor_values.get("pre_close", 1.0))),
+        "pct_chg": _score_abs_lower_better(df["bond_pct_change"], float(factor_values.get("pct_chg", 0.0))),
+        "vol": _score_higher_better(df["volume_hand"], float(factor_values.get("vol", 1.0))),
+        "amount": _score_higher_better(df["turnover_amount_wan"], float(factor_values.get("amount", 1.0))),
+        "turnover": _score_higher_better(turnover_metric, float(factor_values.get("turnover", 1.0))),
+        "cap_mv_rate": _score_lower_better(cap_mv_rate, float(factor_values.get("cap_mv_rate", 1.0))),
+        "ytm": _score_higher_better(df["ytm_to_maturity_pct"], float(factor_values.get("ytm", 1.0))),
+        "theory_conv_prem": _score_abs_lower_better(theory_bias, float(factor_values.get("theory_conv_prem", 0.0))),
+        "mod_conv_prem": _score_lower_better(df["conversion_premium_pct"], float(factor_values.get("mod_conv_prem", 1.0))),
+        "left_years": _score_higher_better(left_years, float(factor_values.get("left_years", 1.0))),
+        "remain_size": _score_lower_better(df["outstanding_amount_yi"], float(factor_values.get("remain_size", 1.0))),
+        "issue_size": _score_lower_better(df["issue_size_yi"], float(factor_values.get("issue_size", 1.0))),
+        "remain_cap": _score_lower_better(remain_cap, float(factor_values.get("remain_cap", 1.0))),
+        "list_days": _score_higher_better(listing_days, float(factor_values.get("list_days", 1.0))),
+        "limit": _score_abs_lower_better(limit_metric, float(factor_values.get("limit", 0.0))),
+    }
+
+    if "rating" in factor_values:
+        series_map["rating"] = _score_rating(df["rating"], factor_values.get("rating"))
+
+    return {key: value for key, value in series_map.items() if key in factor_values}
 
 
 def filter_multiple_factors(
@@ -178,6 +258,20 @@ def filter_multiple_factors(
     # 用于后续排序与最终候选过滤，是策略挑选标的的核心分数。
     weight_score = bond_score + stock_score
 
+    # 如果模板显式选择了原始市场因子，则在基准多因子分之上叠加一层“动态因子分”。
+    # 这样因子库里选中的因子会真实进入排序，而不是只在模板界面里存在。
+    factor_values = dict(params.factor_values or {})
+    dynamic_scores = _build_dynamic_factor_scores(
+        df=df_filter,
+        factor_values=factor_values,
+        listing_days=days_elapsed,
+    )
+    if dynamic_scores:
+        dynamic_factor_score = sum(dynamic_scores.values()) / len(dynamic_scores)
+        weight_score = ((weight_score + dynamic_factor_score) / 2.0).round(2)
+    else:
+        dynamic_factor_score = pd.Series(0.0, index=df_filter.index)
+
     # 复制一份过滤后的数据，避免对原始 DataFrame 产生链式赋值副作用。
     df_filter = df_filter.copy()
     # 将各个中间得分写回结果表，便于后续排查、展示和回测分析。
@@ -188,6 +282,9 @@ def filter_multiple_factors(
     df_filter["market_cap_score"] = market_cap_score
     df_filter["bond_score"] = bond_score
     df_filter["stock_score"] = stock_score
+    df_filter["dynamic_factor_score"] = dynamic_factor_score
+    for factor_key, score_series in dynamic_scores.items():
+        df_filter[f"{factor_key}_score"] = score_series
     df_filter["weight_score"] = weight_score
 
     # 最终候选过滤条件：

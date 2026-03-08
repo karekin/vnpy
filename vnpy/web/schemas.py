@@ -611,6 +611,8 @@ class FactorCatalogRow(BaseModel):
     view_color: bool = False
     view_ratio: float = 1
     view_unit: str = ""
+    support_level: str = "disabled"
+    template_selectable: bool = False
 
 
 class FactorCatalogCategory(BaseModel):

@@ -949,6 +949,14 @@ class CbTushareService:
             premium_rate = _safe_float(_pick(cb_row, "bond_prem", "premium_rt", "premium_rate"), 0.0)
             pure_bond_value = _safe_float(_pick(cb_row, "bond_value", "pure_bond_value"), 0.0)
             bond_pure_value_ratio = price / pure_bond_value if pure_bond_value > 0 else 1.0
+            open_price = _safe_float(_pick(cb_row, "open"), 0.0)
+            high_price = _safe_float(_pick(cb_row, "high"), 0.0)
+            low_price = _safe_float(_pick(cb_row, "low"), 0.0)
+            pre_close_snapshot = pre_close_price if pre_close_price > 0 else 0.0
+            volume_hand = _safe_float(_pick(cb_row, "vol"), 0.0)
+            turnover_rate_pct = _safe_float(_pick(cb_row, "turnover_rate", "turnover_rt"), 0.0)
+            bond_pct_change = _safe_float(_pick(cb_row, "pct_chg"), 0.0)
+            limit_status = 1 if bond_pct_change >= 19.5 else -1 if bond_pct_change <= -19.5 else 0
 
             market_cap = _safe_float(_pick(stock_basic, "total_mv", "circ_mv"), 0.0)
             if market_cap > 0:
@@ -975,12 +983,17 @@ class CbTushareService:
                 "underlying_stock_name": str(_pick(stock_daily, "name", default="")),
                 "stock_ts_code": stock_ts_code,
                 "close_price": round(price, 4),
+                "open_price": round(open_price, 4),
+                "high_price": round(high_price, 4),
+                "low_price": round(low_price, 4),
+                "pre_close_price": round(pre_close_snapshot, 4),
                 "price_fill_source": price_fill_source,
                 "conversion_premium_pct": round(premium_rate, 4),
                 "bond_pure_value_ratio": round(bond_pure_value_ratio, 4),
                 "underlying_pb": round(stock_pb, 4),
                 "underlying_volatility": round(stock_stdevry, 4),
                 "outstanding_amount_yi": round(remain_amount, 4),
+                "issue_size_yi": round(issue_size, 4),
                 "underlying_market_cap_yi": round(market_cap, 4),
                 "listing_date": issue_date,
                 "put_status": "active" if return_distance == "回售内" else "not_reached",
@@ -994,6 +1007,10 @@ class CbTushareService:
                 "pure_bond_value": round(pure_bond_value, 4),
                 "underlying_close_price": round(_safe_float(_pick(stock_daily, "close"), 0.0), 4),
                 "underlying_pct_change": round(stock_pct_chg, 4),
+                "bond_pct_change": round(bond_pct_change, 4),
+                "volume_hand": round(volume_hand, 4),
+                "turnover_rate_pct": round(turnover_rate_pct, 4),
+                "limit_status": limit_status,
                 "data_source": "tushare.pro",
             }
             factor_rows.append(factor_row)

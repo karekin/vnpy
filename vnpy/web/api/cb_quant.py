@@ -51,11 +51,13 @@ def list_factor_catalog(
     category: str = Query(default="all"),
     keyword: str = Query(default=""),
     enabled_only: bool = Query(default=False),
+    template_only: bool = Query(default=False),
 ) -> FactorCatalogResponse:
     return cb_catalog_service.list_factors(
         category=category,
         keyword=keyword,
         enabled_only=enabled_only,
+        template_only=template_only,
     )
 
 

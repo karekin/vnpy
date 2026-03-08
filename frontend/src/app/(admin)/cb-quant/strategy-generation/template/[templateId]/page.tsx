@@ -31,6 +31,8 @@ type FactorOption = {
   expressionType: number;
   categoryKey: string;
   categoryName: string;
+  supportLevel: "strong" | "disabled";
+  templateSelectable: boolean;
 };
 
 const pageSizeOptions = [10, 20, 50];
@@ -56,8 +58,32 @@ function defaultParamRow(factorKey: string, expressionType?: number): StrategyPa
   const defaults: Record<string, [number, number, number]> = {
     dblow: [100, 180, 5],
     conv_prem: [0, 40, 2],
+    bond_prem: [0, 30, 2],
+    theory_bias: [0, 20, 2],
+    theory_value: [80, 160, 5],
+    option_value: [5, 40, 2],
+    pure_value: [70, 130, 5],
+    conv_value: [80, 160, 5],
+    conv_price: [5, 30, 1],
+    close: [90, 180, 5],
+    open: [90, 180, 5],
+    high: [90, 180, 5],
+    low: [90, 180, 5],
+    pre_close: [90, 180, 5],
+    pct_chg: [0, 10, 1],
+    vol: [100, 100000, 5000],
+    amount: [1000, 50000, 1000],
     turnover: [0.2, 8, 0.2],
+    cap_mv_rate: [1, 80, 1],
+    ytm: [0, 8, 0.5],
+    theory_conv_prem: [0, 30, 2],
+    mod_conv_prem: [0, 40, 2],
+    left_years: [0.5, 6, 0.5],
     remain_size: [1, 80, 1],
+    issue_size: [1, 120, 2],
+    remain_cap: [1, 120, 2],
+    list_days: [30, 1500, 30],
+    limit: [-1, 1, 1],
     price_max: [105, 150, 1],
     premium_max: [5, 35, 0.5],
     price_benchmark: [106, 124, 2],
@@ -194,6 +220,8 @@ export default function StrategyDetailPage() {
         expressionType: factor.expressionType,
         categoryKey: category.categoryKey,
         categoryName: category.categoryName,
+        supportLevel: factor.supportLevel,
+        templateSelectable: factor.templateSelectable,
       })),
     );
   }, [factorCatalog]);
@@ -265,6 +293,10 @@ export default function StrategyDetailPage() {
   const estimatedCombos = useMemo(() => comboCount(normalizedParameterSpace), [normalizedParameterSpace]);
 
   const toggleFactor = (factorKey: string): void => {
+    const meta = factorMap[factorKey];
+    if (meta && !meta.templateSelectable) {
+      return;
+    }
     setSelectedFactorKeys((prev) => {
       if (prev.includes(factorKey)) {
         return prev.filter((item) => item !== factorKey);
@@ -448,20 +480,25 @@ export default function StrategyDetailPage() {
           <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
             {filteredFactors.map((factor) => {
               const checked = selectedFactorKeys.includes(factor.factorKey);
+              const disabled = !factor.templateSelectable;
               return (
                 <label
                   key={`${factor.categoryKey}-${factor.factorKey}`}
-                  className={`flex cursor-pointer items-center justify-between rounded-lg border px-3 py-2 ${
+                  className={`flex items-center justify-between rounded-lg border px-3 py-2 ${
                     checked
                       ? "border-brand-300 bg-brand-50 dark:border-brand-500/50 dark:bg-brand-500/10"
-                      : "border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900"
+                      : disabled
+                        ? "border-gray-200 bg-gray-50 opacity-60 dark:border-gray-700 dark:bg-gray-900/60"
+                        : "border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900"
                   }`}
                 >
                   <span className="min-w-0">
                     <span className="block truncate text-sm font-medium text-gray-900 dark:text-white">{factor.factorName}</span>
-                    <span className="block truncate text-xs text-gray-500 dark:text-gray-400">{factor.factorKey} · {factor.categoryName}</span>
+                    <span className="block truncate text-xs text-gray-500 dark:text-gray-400">
+                      {factor.factorKey} · {factor.categoryName} · {disabled ? "暂未强支持" : "强支持"}
+                    </span>
                   </span>
-                  <input type="checkbox" checked={checked} onChange={() => toggleFactor(factor.factorKey)} />
+                  <input type="checkbox" checked={checked} disabled={disabled} onChange={() => toggleFactor(factor.factorKey)} />
                 </label>
               );
             })}

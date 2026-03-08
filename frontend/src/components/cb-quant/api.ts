@@ -408,6 +408,8 @@ export type FactorCatalogFactor = {
   viewColor: boolean;
   viewRatio: number;
   viewUnit: string;
+  supportLevel: "strong" | "disabled";
+  templateSelectable: boolean;
 };
 
 export type FactorCatalogCategory = {
@@ -541,6 +543,8 @@ type FactorCatalogFactorApi = {
   view_color: boolean;
   view_ratio: number;
   view_unit: string;
+  support_level: "strong" | "disabled";
+  template_selectable: boolean;
 };
 
 type FactorCatalogCategoryApi = {
@@ -971,6 +975,8 @@ function mapFactorCatalogFactor(row: FactorCatalogFactorApi): FactorCatalogFacto
     viewColor: row.view_color,
     viewRatio: row.view_ratio,
     viewUnit: row.view_unit,
+    supportLevel: row.support_level,
+    templateSelectable: row.template_selectable,
   };
 }
 
@@ -1289,6 +1295,7 @@ export async function listFactorCatalog(params?: {
   category?: string;
   keyword?: string;
   enabledOnly?: boolean;
+  templateOnly?: boolean;
 }): Promise<{ items: FactorCatalogCategory[]; totalCategories: number; totalFactors: number }> {
   const payload = await requestJson<{
     items: FactorCatalogCategoryApi[];
@@ -1299,6 +1306,7 @@ export async function listFactorCatalog(params?: {
       category: params?.category ?? "all",
       keyword: params?.keyword ?? "",
       enabled_only: params?.enabledOnly ?? false,
+      template_only: params?.templateOnly ?? false,
     }),
   );
 

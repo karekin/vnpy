@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 from vnpy.web.domain.cb_quant.enums import FactorCategory, FunctionCategory
+from vnpy.web.domain.cb_quant.factor_support import factor_support_level, is_template_selectable_factor
 from vnpy.web.domain.cb_quant.registry import FACTOR_REGISTRY, FUNCTION_REGISTRY
 from vnpy.web.schemas import (
     FactorCatalogCategory,
@@ -53,6 +54,7 @@ class CbCatalogService:
         category: str = "all",
         keyword: str = "",
         enabled_only: bool = False,
+        template_only: bool = False,
     ) -> FactorCatalogResponse:
         """按分类和关键字返回因子目录。
 
@@ -91,6 +93,8 @@ class CbCatalogService:
                         view_color=factor.view_color,
                         view_ratio=factor.view_ratio,
                         view_unit=factor.view_unit,
+                        support_level=factor_support_level(factor.factor_key).value,
+                        template_selectable=is_template_selectable_factor(factor.factor_key),
                     )
                 )
 

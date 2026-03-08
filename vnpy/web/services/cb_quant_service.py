@@ -29,6 +29,7 @@ import requests
 
 from vnpy.web.adapters import CrawlerPhaseABacktestAdapter
 from vnpy.web.domain.cb_quant import cb_strategy_core
+from vnpy.web.domain.cb_quant.factor_support import is_template_selectable_factor
 from vnpy.web.domain.cb_quant.quant_store import CbQuantStore
 from vnpy.web.services.cb_market_service import CbMarketService
 from vnpy.web.schemas import (
@@ -109,6 +110,8 @@ def _now_compact() -> str:
 
 class CbQuantService:
     _LEGACY_FACTOR_KEY_ALIASES: dict[str, str] = {
+        "price_bemchmark": "price_benchmark",
+        "premium_bemchmark": "premium_benchmark",
         "stock_stdevry_bemchmark": "volatility_benchmark",
     }
 
@@ -334,7 +337,14 @@ class CbQuantService:
             template_id=template_id,
             updated_at=template.updated_at,
         )
-        factor_keys = list(dict.fromkeys(config.factor_keys))
+        factor_keys = [
+            key for key in dict.fromkeys(config.factor_keys)
+            if is_template_selectable_factor(key)
+        ]
+        skipped_keys = [
+            key for key in dict.fromkeys(config.factor_keys)
+            if not is_template_selectable_factor(key)
+        ]
         factor_count = len(factor_keys)
         if factor_count == 0:
             return StrategyExpandFactorCombosResponse(
@@ -345,7 +355,7 @@ class CbQuantService:
                 total_subsets=0,
                 created_count=0,
                 truncated=False,
-                message="策略没有可展开的因子，请先配置参数空间。",
+                message="策略没有可展开的强支持因子，请先配置基础因子参数空间。",
             )
 
         request_min = max(1, request.min_factor_count)
@@ -438,6 +448,8 @@ class CbQuantService:
             f"已从策略 {template.name} 展开 {created_count} 个因子组合策略"
             f"（{min_count}~{max_count} 因子，理论共 {total_subsets} 个）。"
         )
+        if skipped_keys:
+            message += f" 已自动跳过 {len(skipped_keys)} 个暂未强支持因子。"
         if truncated:
             message += " 已达到本次生成上限。"
 
@@ -3030,6 +3042,11 @@ class CbQuantService:
 
     def _build_setting_from_factor_values(self, values: dict[str, Any]) -> dict[str, Any]:
         setting = self._adapter.default_setting()
+        setting["selected_factor_keys"] = list(values.keys())
+        setting["factor_values"] = dict(values)
+        for factor_key, value in values.items():
+            if isinstance(value, (int, float, str, bool)) or value is None:
+                setting[factor_key] = value
         direct_map: dict[str, str] = {
             "price_benchmark": "price_benchmark",
             "premium_benchmark": "premium_benchmark",
@@ -3051,16 +3068,24 @@ class CbQuantService:
             setting["premium_benchmark"] = self._to_float(values["conv_prem"], 25.0)
         if "price_max" in values:
             setting["max_candidate_price"] = self._to_float(values["price_max"], setting.get("max_candidate_price", 130.0))
+        if "max_price" in values:
+            setting["max_candidate_price"] = self._to_float(values["max_price"], setting.get("max_candidate_price", 130.0))
         if "remain_size" in values and "outstanding_amount_weight" not in values:
             remain_size = self._to_float(values["remain_size"], 12.0)
             setting["outstanding_amount_weight"] = max(0.05, min(0.50, remain_size / 100.0))
+        if "remain_ratio" in values and "outstanding_amount_weight" not in values:
+            setting["outstanding_amount_weight"] = max(0.05, min(0.50, self._to_float(values["remain_ratio"], 0.15)))
         if "turnover" in values and "volatility_benchmark" not in values:
             turnover = self._to_float(values["turnover"], 2.0)
             setting["volatility_benchmark"] = max(10.0, min(60.0, turnover * 4.0 + 12.0))
-        if "dblow" in values and "price_benchmark" not in values:
-            dblow = self._to_float(values["dblow"], 140.0)
-            premium = self._to_float(setting.get("premium_benchmark"), 25.0)
-            setting["price_benchmark"] = max(90.0, min(180.0, dblow - premium))
+        if "head_count" in values and "candidate_count" not in values:
+            setting["candidate_count"] = max(1, int(round(self._to_float(values["head_count"], 10.0))))
+        if "max_hold_num" in values and "max_hold_count" not in values:
+            setting["max_hold_count"] = max(1, int(round(self._to_float(values["max_hold_num"], 12.0))))
+        if "stock_ratio" in values and "stock_weight" not in values:
+            setting["stock_weight"] = self._to_float(values["stock_ratio"], 0.3)
+        if "premium_ratio" in values and "premium_weight" not in values:
+            setting["premium_weight"] = self._to_float(values["premium_ratio"], 0.3)
         if "rating" in values:
             rating = str(values["rating"]).upper()
             if rating == "AAA":

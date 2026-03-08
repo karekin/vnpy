@@ -28,6 +28,10 @@ class SnapshotField(StrEnum):
     UNDERLYING_STOCK_CODE = "underlying_stock_code"
     UNDERLYING_STOCK_NAME = "underlying_stock_name"
     CLOSE_PRICE = "close_price"
+    OPEN_PRICE = "open_price"
+    HIGH_PRICE = "high_price"
+    LOW_PRICE = "low_price"
+    PRE_CLOSE_PRICE = "pre_close_price"
     BOND_PCT_CHANGE = "bond_pct_change"
     CONVERSION_PREMIUM_PCT = "conversion_premium_pct"
     CONVERSION_PRICE = "conversion_price"
@@ -55,7 +59,11 @@ class SnapshotField(StrEnum):
     YTM_TO_PUT_PCT = "ytm_to_put_pct"
     MARKET = "market"
     RATING = "rating"
+    VOLUME_HAND = "volume_hand"
     TURNOVER_AMOUNT_WAN = "turnover_amount_wan"
+    TURNOVER_RATE_PCT = "turnover_rate_pct"
+    ISSUE_SIZE_YI = "issue_size_yi"
+    LIMIT_STATUS = "limit_status"
     DATA_SOURCE = "data_source"
 
 
@@ -197,6 +205,10 @@ class SnapshotRow(BaseModel):
     underlying_stock_code: str = Field(default="", json_schema_extra={"label": "正股代码"})
     underlying_stock_name: str = Field(default="", json_schema_extra={"label": "正股名称"})
     close_price: float = Field(default=0.0, json_schema_extra={"label": "转债收盘价", "unit": "元"})
+    open_price: float = Field(default=0.0, json_schema_extra={"label": "转债开盘价", "unit": "元"})
+    high_price: float = Field(default=0.0, json_schema_extra={"label": "转债最高价", "unit": "元"})
+    low_price: float = Field(default=0.0, json_schema_extra={"label": "转债最低价", "unit": "元"})
+    pre_close_price: float = Field(default=0.0, json_schema_extra={"label": "转债前收盘价", "unit": "元"})
     bond_pct_change: float = Field(default=0.0, json_schema_extra={"label": "转债涨跌幅", "unit": "%"})
     conversion_premium_pct: float = Field(default=0.0, json_schema_extra={"label": "转股溢价率", "unit": "%"})
     conversion_price: float = Field(default=0.0, json_schema_extra={"label": "转股价", "unit": "元"})
@@ -224,7 +236,11 @@ class SnapshotRow(BaseModel):
     ytm_to_put_pct: float = Field(default=0.0, json_schema_extra={"label": "回售收益率", "unit": "%"})
     market: str = Field(default="", json_schema_extra={"label": "市场"})
     rating: str = Field(default="", json_schema_extra={"label": "评级"})
+    volume_hand: float = Field(default=0.0, json_schema_extra={"label": "成交量", "unit": "手"})
     turnover_amount_wan: float = Field(default=0.0, json_schema_extra={"label": "成交额", "unit": "万"})
+    turnover_rate_pct: float = Field(default=0.0, json_schema_extra={"label": "换手率", "unit": "%"})
+    issue_size_yi: float = Field(default=0.0, json_schema_extra={"label": "发行规模", "unit": "亿"})
+    limit_status: int = Field(default=0, json_schema_extra={"label": "涨跌停标记"})
     data_source: str = Field(default="", json_schema_extra={"label": "数据来源"})
 
 
@@ -249,6 +265,10 @@ def normalize_snapshot_row(row: dict[str, Any]) -> dict[str, Any]:
         underlying_stock_code=_to_code6(_pick(data, "underlying_stock_code", "stock_id", "stock_code", "stock_ts_code")),
         underlying_stock_name=str(_pick(data, "underlying_stock_name", "stock_name", default="")).strip(),
         close_price=_to_float(_pick(data, "close_price", "price"), 0.0),
+        open_price=_to_float(_pick(data, "open_price", "open"), 0.0),
+        high_price=_to_float(_pick(data, "high_price", "high"), 0.0),
+        low_price=_to_float(_pick(data, "low_price", "low"), 0.0),
+        pre_close_price=_to_float(_pick(data, "pre_close_price", "pre_close", "preclose"), 0.0),
         bond_pct_change=_to_float(_pick(data, "bond_pct_change", "cb_percent", "increase_rt"), 0.0),
         conversion_premium_pct=_to_float(_pick(data, "conversion_premium_pct", "premium_rate", "premium_rt", "bond_prem"), 0.0),
         conversion_price=_to_float(_pick(data, "conversion_price", "convert_price"), 0.0),
@@ -276,12 +296,29 @@ def normalize_snapshot_row(row: dict[str, Any]) -> dict[str, Any]:
         ytm_to_put_pct=_to_float(_pick(data, "ytm_to_put_pct", "rate_return", "put_ytm"), 0.0),
         market=str(_pick(data, "market", default="")).strip(),
         rating=str(_pick(data, "rating", default="")).strip(),
+        volume_hand=_to_float(_pick(data, "volume_hand", "vol"), 0.0),
         turnover_amount_wan=_to_float(_pick(data, "turnover_amount_wan", "amount_wan"), 0.0),
+        turnover_rate_pct=_to_float(_pick(data, "turnover_rate_pct", "turnover_rt"), 0.0),
+        issue_size_yi=_to_yi_amount(_pick(data, "issue_size_yi", "issue_scale_yi", "issue_size"), 0.0),
+        limit_status=_to_int(_pick(data, "limit_status", "limit"), 0),
         data_source=str(_pick(data, "data_source", "source", default="")).strip(),
     )
     dumped = normalized.model_dump()
+    if dumped["pre_close_price"] <= 0:
+        pct = float(dumped["bond_pct_change"])
+        divisor = 1.0 + pct / 100.0
+        if abs(divisor) > 1e-6:
+            dumped["pre_close_price"] = round(float(dumped["close_price"]) / divisor, 4)
+    if dumped["issue_size_yi"] <= 0 and dumped["outstanding_amount_yi"] > 0:
+        dumped["issue_size_yi"] = float(dumped["outstanding_amount_yi"])
     if dumped["bond_pure_value_ratio"] <= 0:
         pure_bond_value = float(dumped["pure_bond_value"])
         close_price = float(dumped["close_price"])
         dumped["bond_pure_value_ratio"] = round(close_price / pure_bond_value, 4) if pure_bond_value > 0 else 1.0
+    if dumped["limit_status"] == 0:
+        pct = float(dumped["bond_pct_change"])
+        if pct >= 19.5:
+            dumped["limit_status"] = 1
+        elif pct <= -19.5:
+            dumped["limit_status"] = -1
     return dumped

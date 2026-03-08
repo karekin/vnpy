@@ -43,6 +43,8 @@ class StrategyParameters(BaseModel):
     volatility_score_max: float = Field(default=1.5, ge=0)
     max_candidate_price: float = Field(default=130.0, gt=0)
     exclude_redeem_days_below: int | None = Field(default=None, ge=0)
+    selected_factor_keys: list[str] = Field(default_factory=list)
+    factor_values: dict[str, Any] = Field(default_factory=dict)
 
 
 class BacktestRuntimeConfig(BaseModel):
@@ -72,6 +74,11 @@ def build_strategy_parameters(values: dict[str, Any] | StrategyParameters | None
         params = values.model_copy(deep=True)
     else:
         params = StrategyParameters.model_validate(values or {})
+        if isinstance(values, dict):
+            selected_factor_keys = values.get("selected_factor_keys") or []
+            factor_values = values.get("factor_values") or {}
+            params.selected_factor_keys = [str(item) for item in selected_factor_keys]
+            params.factor_values = {str(key): value for key, value in factor_values.items()}
     params.bond_weight = round(max(0.0, 1.0 - float(params.stock_weight)), 2)
     params.price_benchmark = max(0.01, float(params.price_benchmark))
     params.premium_benchmark = max(0.01, float(params.premium_benchmark))

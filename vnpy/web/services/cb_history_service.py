@@ -221,6 +221,7 @@ class CbHistoryService:
         pure_bond_value = _safe_float(item.get("pure_bond_value"), 0.0)
         stock_price = _safe_float(item.get("stock_price"), 0.0)
         redeem_trigger_price = _safe_float(item.get("redeem_trigger_price"), 0.0)
+        turnover_rate_pct = _safe_float(item.get("turnover_rt"), 0.0)
         remain_years = item.get("remain_years")
         try:
             remain_years_f = float(remain_years) if remain_years is not None else None
@@ -261,6 +262,10 @@ class CbHistoryService:
             "bond_code": _to_code6(item.get("bond_id")),
             "bond_name": str(item.get("bond_name") or ""),
             "close_price": round(price, 3),
+            "open_price": 0.0,
+            "high_price": 0.0,
+            "low_price": 0.0,
+            "pre_close_price": 0.0,
             "bond_pct_change": _safe_float(item.get("increase_rt"), 0.0),
             "conversion_premium_pct": _safe_float(item.get("premium_rt"), 0.0),
             "conversion_price": _safe_float(item.get("convert_price"), 0.0),
@@ -290,7 +295,11 @@ class CbHistoryService:
             "ytm_to_put_pct": _safe_float(item.get("put_ytm"), 0.0),
             "market": market,
             "rating": str(item.get("rating") or ""),
+            "volume_hand": 0.0,
             "turnover_amount_wan": _safe_float(item.get("amount_wan"), 0.0),
+            "turnover_rate_pct": turnover_rate_pct,
+            "issue_size_yi": _safe_float(item.get("issue_scale_yi"), 0.0),
+            "limit_status": 1 if _safe_float(item.get("increase_rt"), 0.0) >= 19.5 else -1 if _safe_float(item.get("increase_rt"), 0.0) <= -19.5 else 0,
             "data_source": str(item.get("source") or ""),
         }
 
