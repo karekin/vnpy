@@ -155,6 +155,7 @@ export default function CbQuantBacktestEvaluationPage() {
   const [error, setError] = useState<string>("");
   const [hint, setHint] = useState<string>("");
   const pollingRef = useRef<boolean>(false);
+  const analysisLoadingKeyRef = useRef<string>("");
 
   const enabledStrategies = useMemo(() => strategies.filter((row) => row.status === "active"), [strategies]);
   const strategyById = useMemo(() => new Map(strategies.map((row) => [row.id, row])), [strategies]);
@@ -162,6 +163,10 @@ export default function CbQuantBacktestEvaluationPage() {
   const totalCombinations = useMemo(
     () => enabledStrategies.reduce((sum, row) => sum + row.comboSize, 0),
     [enabledStrategies],
+  );
+  const hasActiveTasks = useMemo(
+    () => tasks.some((row) => row.status === "queued" || row.status === "running"),
+    [tasks],
   );
 
   const activeWindows = useMemo(
@@ -473,6 +478,12 @@ export default function CbQuantBacktestEvaluationPage() {
       setAnalysis(null);
       return;
     }
+    const requestKey = `${taskId}:${comboId ?? ""}:${initialCapitalWan}`;
+    // 同一时刻只允许一个相同分析请求在飞，避免轮询和副作用叠加。
+    if (analysisLoadingKeyRef.current === requestKey) {
+      return;
+    }
+    analysisLoadingKeyRef.current = requestKey;
     setAnalysisLoading(true);
     setAnalysisError("");
     try {
@@ -485,6 +496,9 @@ export default function CbQuantBacktestEvaluationPage() {
       setAnalysis(null);
       setAnalysisError(err instanceof Error ? err.message : "分析数据加载失败");
     } finally {
+      if (analysisLoadingKeyRef.current === requestKey) {
+        analysisLoadingKeyRef.current = "";
+      }
       setAnalysisLoading(false);
     }
   }, []);
@@ -548,7 +562,6 @@ export default function CbQuantBacktestEvaluationPage() {
       taskFinished
       && analysis?.taskId === taskId
       && (comboId ? analysis?.comboId === comboId : true)
-      && analysis.metricRows.length > 0
     ) {
       return;
     }
@@ -567,6 +580,10 @@ export default function CbQuantBacktestEvaluationPage() {
   ]);
 
   useEffect(() => {
+    // 只有仍有排队/运行中的任务时才继续轮询；任务全部完成后停止请求风暴。
+    if (!hasActiveTasks && !creating) {
+      return undefined;
+    }
     const timer = window.setInterval(() => {
       if (pollingRef.current) {
         return;
@@ -582,7 +599,7 @@ export default function CbQuantBacktestEvaluationPage() {
       });
     }, 3000);
     return () => window.clearInterval(timer);
-  }, [loadBacktestJobs, loadTasks, loadDetail, loadSummary, showingGlobal]);
+  }, [creating, hasActiveTasks, loadBacktestJobs, loadTasks, loadDetail, loadSummary, showingGlobal]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
