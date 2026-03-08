@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from enum import Enum
+import re
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -110,6 +111,82 @@ def _to_bool(value: Any, default: bool) -> bool:
     return default
 
 
+def _pick(data: dict[str, Any], *keys: str, default: Any = None) -> Any:
+    for key in keys:
+        if key in data and data[key] is not None:
+            return data[key]
+    return default
+
+
+def _to_code6(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if "." in text:
+        text = text.split(".", 1)[0]
+    digits = "".join(ch for ch in text if ch.isdigit())
+    return digits.zfill(6) if digits else text
+
+
+def _to_yi_amount(value: Any, default: float = 0.0) -> float:
+    amount = _to_float(value, default)
+    if abs(amount) >= 10_000:
+        return amount / 100_000_000.0
+    return amount
+
+
+def _to_put_status(value: Any) -> PutStatus:
+    text = str(value or "").strip()
+    if not text:
+        return PutStatus.NOT_REACHED
+    if text in {PutStatus.NOT_APPLICABLE.value, "无权"}:
+        return PutStatus.NOT_APPLICABLE
+    if text in {PutStatus.ACTIVE.value, "回售内"}:
+        return PutStatus.ACTIVE
+    if text in {PutStatus.NOT_REACHED.value, "未到", "已到"}:
+        return PutStatus.NOT_REACHED
+    try:
+        return PutStatus(text)
+    except Exception:
+        return PutStatus.NOT_REACHED
+
+
+def _to_days_to_maturity(data: dict[str, Any]) -> int:
+    direct = _pick(data, "days_to_maturity")
+    if direct not in (None, "", "None"):
+        return max(0, _to_int(direct, 0))
+
+    remain_years = _pick(data, "remain_years")
+    if remain_years not in (None, "", "None"):
+        years = _to_float(remain_years, 0.0)
+        if years > 0:
+            return max(0, int(round(years * 365.0)))
+
+    text = str(_pick(data, "date_remain_distance", default="")).strip()
+    if not text:
+        return 0
+    day_match = re.search(r"(-?\d+)\s*天", text)
+    if day_match:
+        return max(0, int(day_match.group(1)))
+    year_match = re.search(r"(-?\d+(?:\.\d+)?)\s*年", text)
+    if year_match:
+        return max(0, int(round(float(year_match.group(1)) * 365.0)))
+    return 0
+
+
+def _to_is_listed(data: dict[str, Any], *, prev_day: bool = False) -> bool:
+    standard_key = "was_listed_prev_day" if prev_day else "is_listed"
+    legacy_key = "last_is_unlist" if prev_day else "is_unlist"
+    if standard_key in data:
+        return _to_bool(data.get(standard_key), True)
+    legacy = str(data.get(legacy_key) or "").strip().upper()
+    if legacy in {"Y", "TRUE", "T", "YES", "1"}:
+        return False
+    if legacy in {"N", "FALSE", "F", "NO", "0"}:
+        return True
+    return True
+
+
 class SnapshotRow(BaseModel):
     """回测快照的标准字段模型。"""
 
@@ -167,40 +244,40 @@ def normalize_snapshot_row(row: dict[str, Any]) -> dict[str, Any]:
     """把任意来源的快照行收口到标准字段集合。"""
     data = dict(row)
     normalized = SnapshotRow(
-        bond_code=str(data.get("bond_code") or "").strip(),
-        bond_name=str(data.get("bond_name") or "").strip(),
-        underlying_stock_code=str(data.get("underlying_stock_code") or "").strip(),
-        underlying_stock_name=str(data.get("underlying_stock_name") or "").strip(),
-        close_price=_to_float(data.get("close_price"), 0.0),
-        bond_pct_change=_to_float(data.get("bond_pct_change"), 0.0),
-        conversion_premium_pct=_to_float(data.get("conversion_premium_pct"), 0.0),
-        conversion_price=_to_float(data.get("conversion_price"), 0.0),
-        pure_bond_value=_to_float(data.get("pure_bond_value"), 0.0),
-        option_value=_to_float(data.get("option_value"), 0.0),
-        bond_pure_value_ratio=_to_float(data.get("bond_pure_value_ratio"), 1.0),
-        underlying_volatility=_to_float(data.get("underlying_volatility"), 30.0),
-        underlying_close_price=_to_float(data.get("underlying_close_price"), 0.0),
-        underlying_pct_change=_to_float(data.get("underlying_pct_change"), 0.0),
-        underlying_pb=_to_float(data.get("underlying_pb"), 1.5),
-        underlying_market_cap_yi=_to_float(data.get("underlying_market_cap_yi"), 0.0),
-        outstanding_amount_yi=_to_float(data.get("outstanding_amount_yi"), 10.0),
-        outstanding_to_market_cap_ratio=_to_float(data.get("outstanding_to_market_cap_ratio"), 0.0),
-        listing_date=str(data.get("listing_date") or SNAPSHOT_FIELD_DEFAULTS["listing_date"])[:10],
-        put_status=PutStatus(str(data.get("put_status") or PutStatus.NOT_REACHED)),
-        days_to_maturity=max(0, _to_int(data.get("days_to_maturity"), 0)),
-        days_to_conversion_start=max(0, _to_int(data.get("days_to_conversion_start"), 0)),
-        is_listed=_to_bool(data.get("is_listed"), True),
-        was_listed_prev_day=_to_bool(data.get("was_listed_prev_day"), True),
-        is_redeem_triggered=_to_bool(data.get("is_redeem_triggered"), False),
-        redeem_status=str(data.get("redeem_status") or "").strip(),
-        days_to_redeem=_to_optional_int(data.get("days_to_redeem")),
-        ytm_to_maturity_pct=_to_float(data.get("ytm_to_maturity_pct"), 0.0),
-        ytm_to_maturity_after_tax_pct=_to_float(data.get("ytm_to_maturity_after_tax_pct"), 0.0),
-        ytm_to_put_pct=_to_float(data.get("ytm_to_put_pct"), 0.0),
-        market=str(data.get("market") or "").strip(),
-        rating=str(data.get("rating") or "").strip(),
-        turnover_amount_wan=_to_float(data.get("turnover_amount_wan"), 0.0),
-        data_source=str(data.get("data_source") or "").strip(),
+        bond_code=_to_code6(_pick(data, "bond_code", "cb_code")),
+        bond_name=str(_pick(data, "bond_name", "cb_name", default="")).strip(),
+        underlying_stock_code=_to_code6(_pick(data, "underlying_stock_code", "stock_id", "stock_code", "stock_ts_code")),
+        underlying_stock_name=str(_pick(data, "underlying_stock_name", "stock_name", default="")).strip(),
+        close_price=_to_float(_pick(data, "close_price", "price"), 0.0),
+        bond_pct_change=_to_float(_pick(data, "bond_pct_change", "cb_percent", "increase_rt"), 0.0),
+        conversion_premium_pct=_to_float(_pick(data, "conversion_premium_pct", "premium_rate", "premium_rt", "bond_prem"), 0.0),
+        conversion_price=_to_float(_pick(data, "conversion_price", "convert_price"), 0.0),
+        pure_bond_value=_to_float(_pick(data, "pure_bond_value", "new_style", "bond_value", "pure_value"), 0.0),
+        option_value=_to_float(_pick(data, "option_value", "old_style"), 0.0),
+        bond_pure_value_ratio=_to_float(_pick(data, "bond_pure_value_ratio", "cb_to_pb"), 1.0),
+        underlying_volatility=_to_float(_pick(data, "underlying_volatility", "stock_stdevry", "stock_volatility"), 30.0),
+        underlying_close_price=_to_float(_pick(data, "underlying_close_price", "stock_price"), 0.0),
+        underlying_pct_change=_to_float(_pick(data, "underlying_pct_change", "stock_percent", "stock_increase_rt"), 0.0),
+        underlying_pb=_to_float(_pick(data, "underlying_pb", "pb"), 1.5),
+        underlying_market_cap_yi=_to_yi_amount(_pick(data, "underlying_market_cap_yi", "market_cap"), 0.0),
+        outstanding_amount_yi=_to_yi_amount(_pick(data, "outstanding_amount_yi", "remain_amount"), 10.0),
+        outstanding_to_market_cap_ratio=_to_float(_pick(data, "outstanding_to_market_cap_ratio", "float_mv_ratio"), 0.0),
+        listing_date=str(_pick(data, "listing_date", "issue_date", default=SNAPSHOT_FIELD_DEFAULTS["listing_date"]))[:10],
+        put_status=_to_put_status(_pick(data, "put_status", "date_return_distance")),
+        days_to_maturity=_to_days_to_maturity(data),
+        days_to_conversion_start=max(0, _to_int(_pick(data, "days_to_conversion_start"), 0)),
+        is_listed=_to_is_listed(data, prev_day=False),
+        was_listed_prev_day=_to_is_listed(data, prev_day=True),
+        is_redeem_triggered=_to_bool(_pick(data, "is_redeem_triggered", "is_ransom_flag"), False),
+        redeem_status=str(_pick(data, "redeem_status", "ransom_flag_remark", default="")).strip(),
+        days_to_redeem=_to_optional_int(_pick(data, "days_to_redeem", "redeem_remain_days")),
+        ytm_to_maturity_pct=_to_float(_pick(data, "ytm_to_maturity_pct", "rate_expire", "expiry_ytm_pre_tax"), 0.0),
+        ytm_to_maturity_after_tax_pct=_to_float(_pick(data, "ytm_to_maturity_after_tax_pct", "rate_expire_aftertax"), 0.0),
+        ytm_to_put_pct=_to_float(_pick(data, "ytm_to_put_pct", "rate_return", "put_ytm"), 0.0),
+        market=str(_pick(data, "market", default="")).strip(),
+        rating=str(_pick(data, "rating", default="")).strip(),
+        turnover_amount_wan=_to_float(_pick(data, "turnover_amount_wan", "amount_wan"), 0.0),
+        data_source=str(_pick(data, "data_source", "source", default="")).strip(),
     )
     dumped = normalized.model_dump()
     if dumped["bond_pure_value_ratio"] <= 0:

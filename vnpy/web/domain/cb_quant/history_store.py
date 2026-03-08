@@ -97,7 +97,7 @@ class CbHistoryStore:
                     "SELECT payload_json FROM cb_daily_snapshot WHERE trade_date = ? ORDER BY bond_id",
                     (trade_date,),
                 )
-                raw_rows = [json.loads(str(item[0])) for item in cursor.fetchall()]
+                raw_rows = [normalize_snapshot_row(json.loads(str(item[0]))) for item in cursor.fetchall()]
                 if not raw_rows:
                     continue
                 frame = pd.DataFrame(raw_rows)
