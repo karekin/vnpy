@@ -107,6 +107,93 @@ def test_cb_backtest_core_should_share_same_backtest_core_for_candidates(monkeyp
     assert optimize_stats["win_rate_pct"] == cli_stats["win_rate_pct"]
 
 
+def test_normalize_market_frame_should_mark_tradeable_proxy() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "bond_code": "110001",
+                "bond_name": "CB-A",
+                "close_price": 101.0,
+                "volume_hand": 12.0,
+                "turnover_amount_wan": 0.0,
+            },
+            {
+                "bond_code": "110002",
+                "bond_name": "CB-B",
+                "close_price": 102.0,
+                "volume_hand": 0.0,
+                "turnover_amount_wan": 0.0,
+            },
+        ]
+    )
+
+    normalized = cb_backtest.normalize_market_frame(frame)
+
+    assert bool(normalized.loc["110001", "is_tradeable"]) is True
+    assert bool(normalized.loc["110002", "is_tradeable"]) is False
+
+
+def test_build_candidates_should_exclude_non_tradeable_bonds() -> None:
+    setting = {
+        "candidate_count": 5,
+        "max_hold_count": 2,
+    }
+    frame = pd.DataFrame(
+        [
+            {
+                "bond_code": "110001",
+                "bond_name": "CB-A",
+                "close_price": 101.0,
+                "pre_close_price": 100.0,
+                "bond_pct_change": 1.0,
+                "conversion_premium_pct": 10.0,
+                "bond_pure_value_ratio": 1.2,
+                "underlying_pb": 1.2,
+                "listing_date": "2024-01-01",
+                "outstanding_amount_yi": 10.0,
+                "underlying_market_cap_yi": 100.0,
+                "underlying_volatility": 30.0,
+                "days_to_maturity": 300,
+                "is_listed": True,
+                "is_redeem_triggered": False,
+                "put_status": "not_reached",
+                "volume_hand": 100.0,
+                "turnover_amount_wan": 1000.0,
+            },
+            {
+                "bond_code": "110002",
+                "bond_name": "CB-B",
+                "close_price": 99.0,
+                "pre_close_price": 99.0,
+                "bond_pct_change": 0.0,
+                "conversion_premium_pct": 8.0,
+                "bond_pure_value_ratio": 1.1,
+                "underlying_pb": 1.1,
+                "listing_date": "2024-01-01",
+                "outstanding_amount_yi": 8.0,
+                "underlying_market_cap_yi": 80.0,
+                "underlying_volatility": 35.0,
+                "days_to_maturity": 320,
+                "is_listed": True,
+                "is_redeem_triggered": False,
+                "put_status": "not_reached",
+                "volume_hand": 0.0,
+                "turnover_amount_wan": 0.0,
+            },
+        ]
+    )
+    normalized = cb_backtest.normalize_market_frame(frame)
+
+    candidates = phase_a_backtest.build_candidates(
+        normalized,
+        "2024-02-01",
+        cb_backtest.build_strategy_parameters(setting),
+        5,
+    )
+
+    assert candidates["bond_code"].tolist() == ["110001"]
+
+
 def test_history_bootstrap_should_use_cb_backtest_core_loader(monkeypatch, tmp_path: Path) -> None:
     service = object.__new__(CbHistoryService)
     backtest_service = CbBacktestService(data_dir=tmp_path)

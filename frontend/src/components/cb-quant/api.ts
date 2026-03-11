@@ -219,6 +219,7 @@ export type TushareSyncResult = {
 };
 
 export type StrategyOptimizeTaskStatus = "queued" | "running" | "finished" | "failed";
+export type StrategyOptimizeBatchStatus = "queued" | "running" | "finished" | "failed";
 
 export type BacktestTaskConfig = {
   initialCapitalWan: number;
@@ -234,6 +235,7 @@ export type BacktestTaskConfig = {
 
 export type StrategyOptimizeTask = {
   taskId: string;
+  batchId: string | null;
   templateId: string;
   templateName: string;
   status: StrategyOptimizeTaskStatus;
@@ -248,7 +250,46 @@ export type StrategyOptimizeTask = {
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
+  shardCount: number;
+  queuedShards: number;
+  runningShards: number;
+  finishedShards: number;
+  failedShards: number;
   taskConfig: BacktestTaskConfig;
+};
+
+export type StrategyOptimizeBatch = {
+  batchId: string;
+  status: StrategyOptimizeBatchStatus;
+  taskCount: number;
+  queuedTasks: number;
+  runningTasks: number;
+  finishedTasks: number;
+  failedTasks: number;
+  totalCombinations: number;
+  evaluatedCombinations: number;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  message: string;
+};
+
+export type StrategyOptimizeShard = {
+  shardId: string;
+  taskId: string;
+  stage: "stage1" | "stage2" | "full";
+  sequence: number;
+  status: StrategyOptimizeTaskStatus;
+  totalCombinations: number;
+  evaluatedCombinations: number;
+  resultCount: number;
+  topComboId: string | null;
+  progress: number;
+  eta: string;
+  message: string;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
 };
 
 export type StrategyOptimizeResultRow = {
@@ -284,6 +325,12 @@ export type StrategyOptimizeTaskDetail = {
   task: StrategyOptimizeTask;
   topStrategies: StrategyOptimizeResultRow[];
   topBonds: StrategyTopBondRow[];
+  shards: StrategyOptimizeShard[];
+};
+
+export type StrategyOptimizeBatchDetail = {
+  batch: StrategyOptimizeBatch;
+  tasks: StrategyOptimizeTask[];
 };
 
 export type StrategyOptimizeSummary = {
@@ -648,6 +695,7 @@ type TushareSyncStatusApi = {
 
 type StrategyOptimizeTaskApi = {
   task_id: string;
+  batch_id?: string | null;
   template_id: string;
   template_name: string;
   status: StrategyOptimizeTaskStatus;
@@ -662,6 +710,11 @@ type StrategyOptimizeTaskApi = {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  shard_count?: number;
+  queued_shards?: number;
+  running_shards?: number;
+  finished_shards?: number;
+  failed_shards?: number;
   task_config?: {
     initial_capital_wan: number;
     benchmark_name: string;
@@ -673,6 +726,40 @@ type StrategyOptimizeTaskApi = {
     take_profit_pct: number | null;
     stop_loss_pct: number | null;
   };
+};
+
+type StrategyOptimizeBatchApi = {
+  batch_id: string;
+  status: StrategyOptimizeBatchStatus;
+  task_count: number;
+  queued_tasks?: number;
+  running_tasks?: number;
+  finished_tasks?: number;
+  failed_tasks?: number;
+  total_combinations: number;
+  evaluated_combinations: number;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  message?: string | null;
+};
+
+type StrategyOptimizeShardApi = {
+  shard_id: string;
+  task_id: string;
+  stage: "stage1" | "stage2" | "full";
+  sequence: number;
+  status: StrategyOptimizeTaskStatus;
+  total_combinations: number;
+  evaluated_combinations: number;
+  result_count?: number;
+  top_combo_id?: string | null;
+  progress: number;
+  eta: string;
+  message: string;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
 };
 
 type StrategyOptimizeResultRowApi = {
@@ -1091,6 +1178,7 @@ function mapOptimizeTask(row: StrategyOptimizeTaskApi): StrategyOptimizeTask {
   };
   return {
     taskId: row.task_id,
+    batchId: row.batch_id ?? null,
     templateId: row.template_id,
     templateName: row.template_name,
     status: row.status,
@@ -1105,6 +1193,11 @@ function mapOptimizeTask(row: StrategyOptimizeTaskApi): StrategyOptimizeTask {
     createdAt: row.created_at,
     startedAt: row.started_at,
     finishedAt: row.finished_at,
+    shardCount: row.shard_count ?? 0,
+    queuedShards: row.queued_shards ?? 0,
+    runningShards: row.running_shards ?? 0,
+    finishedShards: row.finished_shards ?? 0,
+    failedShards: row.failed_shards ?? 0,
     taskConfig: {
       initialCapitalWan: taskConfig.initial_capital_wan,
       benchmarkName: taskConfig.benchmark_name,
@@ -1116,6 +1209,44 @@ function mapOptimizeTask(row: StrategyOptimizeTaskApi): StrategyOptimizeTask {
       takeProfitPct: taskConfig.take_profit_pct,
       stopLossPct: taskConfig.stop_loss_pct,
     },
+  };
+}
+
+function mapOptimizeBatch(row: StrategyOptimizeBatchApi): StrategyOptimizeBatch {
+  return {
+    batchId: row.batch_id,
+    status: row.status,
+    taskCount: row.task_count,
+    queuedTasks: row.queued_tasks ?? 0,
+    runningTasks: row.running_tasks ?? 0,
+    finishedTasks: row.finished_tasks ?? 0,
+    failedTasks: row.failed_tasks ?? 0,
+    totalCombinations: row.total_combinations,
+    evaluatedCombinations: row.evaluated_combinations,
+    createdAt: row.created_at,
+    startedAt: row.started_at ?? null,
+    finishedAt: row.finished_at ?? null,
+    message: row.message ?? "",
+  };
+}
+
+function mapOptimizeShard(row: StrategyOptimizeShardApi): StrategyOptimizeShard {
+  return {
+    shardId: row.shard_id,
+    taskId: row.task_id,
+    stage: row.stage,
+    sequence: row.sequence,
+    status: row.status,
+    totalCombinations: row.total_combinations,
+    evaluatedCombinations: row.evaluated_combinations,
+    resultCount: row.result_count ?? 0,
+    topComboId: row.top_combo_id ?? null,
+    progress: row.progress,
+    eta: row.eta,
+    message: row.message,
+    createdAt: row.created_at,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
   };
 }
 
@@ -1641,6 +1772,7 @@ export async function listStrategyCandidates(params?: {
 
 export async function createStrategyOptimizeTask(payload: {
   templateId: string;
+  batchId?: string;
   windows: WindowName[];
   startDate?: string;
   endDate?: string;
@@ -1667,6 +1799,7 @@ export async function createStrategyOptimizeTask(payload: {
     method: "POST",
     body: JSON.stringify({
       template_id: payload.templateId,
+      batch_id: payload.batchId,
       windows: payload.windows,
       start_date: payload.startDate,
       end_date: payload.endDate,
@@ -1719,16 +1852,54 @@ export async function listStrategyOptimizeTasks(params?: {
   };
 }
 
+export async function listStrategyOptimizeBatches(params?: {
+  status?: string;
+  page?: number;
+  pageSize?: number;
+}): Promise<{ items: StrategyOptimizeBatch[]; total: number; page: number; pageSize: number }> {
+  const payload = await requestJson<{
+    items: StrategyOptimizeBatchApi[];
+    total: number;
+    page: number;
+    page_size: number;
+  }>(
+    buildUrl("/api/v1/cb-quant/strategy/optimize-batches", {
+      status: params?.status ?? "all",
+      page: params?.page ?? 1,
+      page_size: params?.pageSize ?? 20,
+    }),
+  );
+  return {
+    items: payload.items.map(mapOptimizeBatch),
+    total: payload.total,
+    page: payload.page,
+    pageSize: payload.page_size,
+  };
+}
+
+export async function getStrategyOptimizeBatchDetail(batchId: string): Promise<StrategyOptimizeBatchDetail> {
+  const payload = await requestJson<{
+    batch: StrategyOptimizeBatchApi;
+    tasks: StrategyOptimizeTaskApi[];
+  }>(buildUrl(`/api/v1/cb-quant/strategy/optimize-batches/${batchId}`));
+  return {
+    batch: mapOptimizeBatch(payload.batch),
+    tasks: payload.tasks.map(mapOptimizeTask),
+  };
+}
+
 export async function getStrategyOptimizeTaskDetail(taskId: string): Promise<StrategyOptimizeTaskDetail> {
   const payload = await requestJson<{
     task: StrategyOptimizeTaskApi;
     top_strategies: StrategyOptimizeResultRowApi[];
     top_bonds: StrategyTopBondRowApi[];
+    shards?: StrategyOptimizeShardApi[];
   }>(buildUrl(`/api/v1/cb-quant/strategy/optimize-tasks/${taskId}`));
   return {
     task: mapOptimizeTask(payload.task),
     topStrategies: payload.top_strategies.map(mapOptimizeResultRow),
     topBonds: payload.top_bonds.map(mapTopBondRow),
+    shards: (payload.shards ?? []).map(mapOptimizeShard),
   };
 }
 

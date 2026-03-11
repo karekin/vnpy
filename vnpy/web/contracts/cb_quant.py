@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field
 WindowName = Literal["full", "3y", "1y", "1w"]
 JobStatus = Literal["queued", "running", "finished", "failed", "cancelled"]
 OptimizeTaskStatus = Literal["queued", "running", "finished", "failed"]
+OptimizeShardStatus = Literal["queued", "running", "finished", "failed"]
+OptimizeBatchStatus = Literal["queued", "running", "finished", "failed"]
 CompareCategory = Literal["return", "risk", "trade"]
 RuleSourceMode = Literal["inherit", "candidate", "custom"]
 StrategyTemplateStatus = Literal["active", "draft", "archived"]
@@ -352,6 +354,7 @@ class BacktestTaskConfig(BaseModel):
 
 class StrategyOptimizeTaskCreateRequest(BaseModel):
     template_id: str = Field(min_length=3)
+    batch_id: str | None = None
     windows: list[WindowName] = Field(default_factory=lambda: ["full", "3y", "1y"])
     start_date: date | None = None
     end_date: date | None = None
@@ -363,6 +366,7 @@ class StrategyOptimizeTaskCreateRequest(BaseModel):
 
 class StrategyOptimizeTaskRow(BaseModel):
     task_id: str
+    batch_id: str | None = None
     template_id: str
     template_name: str
     status: OptimizeTaskStatus
@@ -377,11 +381,60 @@ class StrategyOptimizeTaskRow(BaseModel):
     created_at: str
     started_at: str | None = None
     finished_at: str | None = None
+    shard_count: int = Field(default=0, ge=0)
+    queued_shards: int = Field(default=0, ge=0)
+    running_shards: int = Field(default=0, ge=0)
+    finished_shards: int = Field(default=0, ge=0)
+    failed_shards: int = Field(default=0, ge=0)
     task_config: BacktestTaskConfig = Field(default_factory=BacktestTaskConfig)
+
+
+class StrategyOptimizeBatchRow(BaseModel):
+    batch_id: str
+    status: OptimizeBatchStatus
+    task_count: int = Field(default=0, ge=0)
+    queued_tasks: int = Field(default=0, ge=0)
+    running_tasks: int = Field(default=0, ge=0)
+    finished_tasks: int = Field(default=0, ge=0)
+    failed_tasks: int = Field(default=0, ge=0)
+    total_combinations: int = Field(default=0, ge=0)
+    evaluated_combinations: int = Field(default=0, ge=0)
+    created_at: str
+    started_at: str | None = None
+    finished_at: str | None = None
+    message: str = ""
+
+
+class StrategyOptimizeShardRow(BaseModel):
+    shard_id: str
+    task_id: str
+    stage: Literal["stage1", "stage2", "full"]
+    sequence: int = Field(ge=1)
+    status: OptimizeShardStatus
+    combo_start: int | None = Field(default=None, ge=1)
+    combo_end: int | None = Field(default=None, ge=1)
+    combo_ids: list[str] = Field(default_factory=list)
+    total_combinations: int = Field(default=0, ge=0)
+    evaluated_combinations: int = Field(default=0, ge=0)
+    result_count: int = Field(default=0, ge=0)
+    top_combo_id: str | None = None
+    progress: int = Field(default=0, ge=0, le=100)
+    eta: str = "--"
+    message: str = ""
+    created_at: str
+    started_at: str | None = None
+    finished_at: str | None = None
 
 
 class StrategyOptimizeTaskListResponse(BaseModel):
     items: list[StrategyOptimizeTaskRow]
+    total: int
+    page: int
+    page_size: int
+
+
+class StrategyOptimizeBatchListResponse(BaseModel):
+    items: list[StrategyOptimizeBatchRow]
     total: int
     page: int
     page_size: int
@@ -420,6 +473,12 @@ class StrategyOptimizeTaskDetailResponse(BaseModel):
     task: StrategyOptimizeTaskRow
     top_strategies: list[StrategyOptimizeResultRow]
     top_bonds: list[StrategyTopBondRow]
+    shards: list[StrategyOptimizeShardRow] = Field(default_factory=list)
+
+
+class StrategyOptimizeBatchDetailResponse(BaseModel):
+    batch: StrategyOptimizeBatchRow
+    tasks: list[StrategyOptimizeTaskRow]
 
 
 class StrategyOptimizeTaskCreateResponse(BaseModel):

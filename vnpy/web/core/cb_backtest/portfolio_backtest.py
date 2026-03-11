@@ -17,7 +17,10 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from vnpy.web.core.cb_backtest.candidate_selection import filter_multiple_factors
+from vnpy.web.core.cb_backtest.candidate_selection import (
+    build_tradeable_mask,
+    filter_multiple_factors,
+)
 from vnpy.web.core.cb_backtest.normalizer import _safe_float
 from vnpy.web.core.cb_backtest.strategy_config import BacktestRuntimeConfig, StrategyParameters
 
@@ -168,7 +171,7 @@ def build_candidates(
     """
     try:
         df_candidate = filter_multiple_factors(
-            df_all.copy(),
+            df_all,
             trade_date=trade_date,
             strategy_parameters=strategy_parameters,
         )
@@ -179,6 +182,12 @@ def build_candidates(
     if candidate_count > 0:
         df_candidate = df_candidate.head(candidate_count)
     return df_candidate
+
+
+def _is_tradeable_row(row: pd.Series) -> bool:
+    if "is_tradeable" in row.index:
+        return bool(row.get("is_tradeable", False)) and _safe_float(row.get("close_price"), 0.0) > 0
+    return bool(build_tradeable_mask(pd.DataFrame([row])).iloc[0])
 
 
 def _run_backtest_core(
@@ -231,6 +240,8 @@ def _run_backtest_core(
                 if len(holdings) >= runtime_config.max_hold_count:
                     break
                 row = df_all.loc[bond_code]
+                if not _is_tradeable_row(row):
+                    continue
                 price = _safe_float(row.get("close_price"), 0.0)
                 # 价格无效的标的不参与建仓。
                 if price <= 0:
@@ -254,6 +265,9 @@ def _run_backtest_core(
                 continue
 
             row = df_all.loc[item.bond_code]
+            if not _is_tradeable_row(row):
+                keep_list.append(item)
+                continue
             cur_price = _safe_float(row.get("close_price"), item.last_price)
             # 强赎状态优先级最高，一旦触发直接卖出。
             is_redeem_triggered = bool(row.get("is_redeem_triggered", False))
@@ -303,6 +317,8 @@ def _run_backtest_core(
                 if bond_code in existing_codes:
                     continue
                 row = df_all.loc[bond_code]
+                if not _is_tradeable_row(row):
+                    continue
                 price = _safe_float(row.get("close_price"), 0.0)
                 if price <= 0:
                     continue

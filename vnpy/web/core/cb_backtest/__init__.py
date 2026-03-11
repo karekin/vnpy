@@ -15,6 +15,12 @@ from vnpy.web.core.cb_backtest.portfolio_backtest import (
     run_backtest,
     run_backtest_from_candidates,
 )
+from vnpy.web.core.cb_backtest.candidate_selection import (
+    PreparedCandidatePool,
+    build_candidate_codes,
+    build_tradeable_mask,
+    prepare_candidate_pool,
+)
 from vnpy.web.core.cb_backtest.cli import (
     GLOBAL_TARGET,
     build_optimization_setting,
@@ -38,8 +44,11 @@ __all__ = [
     "GLOBAL_TARGET",
     "BacktestRuntimeConfig",
     "Holding",
+    "PreparedCandidatePool",
     "StrategyParameters",
+    "build_candidate_codes",
     "build_candidates",
+    "build_tradeable_mask",
     "build_optimization_setting",
     "build_runtime_config",
     "build_strategy_parameters",
@@ -50,6 +59,7 @@ __all__ = [
     "multiple_factors_config",
     "normalize_market_frame",
     "parse_args",
+    "prepare_candidate_pool",
     "rename_map",
     "run_backtest",
     "run_backtest_from_candidates",

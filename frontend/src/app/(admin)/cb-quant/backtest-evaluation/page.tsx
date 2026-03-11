@@ -95,6 +95,13 @@ function defaultTaskConfig(): BacktestTaskConfig {
   };
 }
 
+function createOptimizeBatchId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `OPB-${crypto.randomUUID().slice(0, 8)}`;
+  }
+  return `OPB-${Date.now()}`;
+}
+
 function formatPercent(value: number | null | undefined, digits = 2): string {
   if (value === null || value === undefined || Number.isNaN(value)) {
     return "/";
@@ -150,6 +157,7 @@ export default function CbQuantBacktestEvaluationPage() {
   const [cancellingBacktestJobId, setCancellingBacktestJobId] = useState<string>("");
   const [selectedBacktestJobIds, setSelectedBacktestJobIds] = useState<string[]>([]);
   const [deletingBacktestJobIds, setDeletingBacktestJobIds] = useState<string[]>([]);
+  const [selectingAllBacktestJobs, setSelectingAllBacktestJobs] = useState<boolean>(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string>("");
   const [resultMode, setResultMode] = useState<"global" | "task">("global");
   const [detail, setDetail] = useState<StrategyOptimizeTaskDetail | null>(null);
@@ -194,6 +202,10 @@ export default function CbQuantBacktestEvaluationPage() {
       deletableBacktestJobIds.length > 0
       && deletableBacktestJobIds.every((jobId) => selectedBacktestJobIds.includes(jobId)),
     [deletableBacktestJobIds, selectedBacktestJobIds],
+  );
+  const allFilteredBacktestJobsSelected = useMemo(
+    () => backtestJobsTotal > 0 && selectedBacktestJobIds.length >= backtestJobsTotal,
+    [backtestJobsTotal, selectedBacktestJobIds.length],
   );
 
   const activeWindows = useMemo(
@@ -423,15 +435,15 @@ export default function CbQuantBacktestEvaluationPage() {
     try {
       const response = await listStrategyOptimizeTasks({
         templateId: "all",
+        status: "active",
         page: tasksPage,
         pageSize: 10,
       });
-      const activeItems = response.items.filter((item) => item.status === "queued" || item.status === "running");
-      setTasks(activeItems);
-      setTasksTotal(activeItems.length);
-      setTasksTotalPages(getTotalPages(activeItems.length, 10));
-      if (!selectedTaskId && activeItems.length) {
-        setSelectedTaskId(activeItems[0].taskId);
+      setTasks(response.items);
+      setTasksTotal(response.total);
+      setTasksTotalPages(getTotalPages(response.total, 10));
+      if (!selectedTaskId && response.items.length) {
+        setSelectedTaskId(response.items[0].taskId);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "任务列表加载失败");
@@ -489,6 +501,44 @@ export default function CbQuantBacktestEvaluationPage() {
       setResultMode("global");
     }
   }, [selectedTaskId]);
+
+  const selectAllFilteredBacktestJobs = useCallback(async () => {
+    setSelectingAllBacktestJobs(true);
+    setError("");
+    try {
+      const pageSize = 200;
+      let page = 1;
+      let totalPages = 1;
+      const allJobIds: string[] = [];
+      while (page <= totalPages) {
+        const response = await listBacktestJobs({
+          status: backtestJobStatusFilter,
+          businessDate: backtestBusinessDate || undefined,
+          businessDateFrom: backtestBusinessDateFrom || undefined,
+          businessDateTo: backtestBusinessDateTo || undefined,
+          page,
+          pageSize,
+        });
+        allJobIds.push(
+          ...response.items
+            .filter((item) => isBacktestJobDeletable(item.status))
+            .map((item) => item.jobId),
+        );
+        totalPages = response.pageSize > 0 ? Math.max(1, Math.ceil(response.total / response.pageSize)) : 1;
+        page += 1;
+      }
+      setSelectedBacktestJobIds(Array.from(new Set(allJobIds)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "全选回测任务失败");
+    } finally {
+      setSelectingAllBacktestJobs(false);
+    }
+  }, [
+    backtestBusinessDate,
+    backtestBusinessDateFrom,
+    backtestBusinessDateTo,
+    backtestJobStatusFilter,
+  ]);
 
   const loadDetail = useCallback(async () => {
     if (!selectedTaskId) {
@@ -699,12 +749,14 @@ export default function CbQuantBacktestEvaluationPage() {
     try {
       const createdTaskIds: string[] = [];
       const failedStrategyNames: string[] = [];
+      const batchId = createOptimizeBatchId();
 
       for (const strategy of enabledStrategies) {
         try {
           const strategyData = strategyById.get(strategy.id);
           const result = await createStrategyOptimizeTask({
             templateId: strategy.id,
+            batchId,
             windows: activeWindows,
             startDate,
             endDate,
@@ -720,14 +772,13 @@ export default function CbQuantBacktestEvaluationPage() {
       }
 
       const createdCount = createdTaskIds.length;
-      const totalTasks = createdCount * activeWindows.length;
       if (!createdCount) {
         setError("任务创建失败，请检查策略配置与历史数据。");
         return;
       }
 
       setHint(
-        `已为 ${createdCount} 个启用策略创建回测任务，共 ${totalTasks} 个窗口任务。${
+        `已为 ${createdCount} 个启用策略创建优化任务，窗口 ${activeWindows.join("/")}，批次 ${batchId}。${
           failedStrategyNames.length ? `失败 ${failedStrategyNames.length} 个策略：${failedStrategyNames.join("、")}` : ""
         }`,
       );
@@ -1137,6 +1188,13 @@ export default function CbQuantBacktestEvaluationPage() {
                         <div className="h-2 rounded bg-brand-500" style={{ width: `${row.progress}%` }} />
                       </div>
                       <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{row.progress}%</p>
+                      {row.shardCount > 0 ? (
+                        <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                          shards {row.finishedShards}/{row.shardCount}
+                          {row.runningShards ? ` · running ${row.runningShards}` : ""}
+                          {row.queuedShards ? ` · queued ${row.queuedShards}` : ""}
+                        </p>
+                      ) : null}
                     </div>
                   </TableCell>
                   <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">
@@ -1234,11 +1292,19 @@ export default function CbQuantBacktestEvaluationPage() {
               <div className="flex items-end gap-2">
                 <button
                   type="button"
+                  onClick={() => void (allFilteredBacktestJobsSelected ? setSelectedBacktestJobIds([]) : selectAllFilteredBacktestJobs())}
+                  disabled={loadingBacktestJobs || selectingAllBacktestJobs || deletingBacktestJobIds.length > 0 || backtestJobsTotal === 0}
+                  className="h-10 rounded-lg border border-gray-300 px-3 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:text-gray-300"
+                >
+                  {selectingAllBacktestJobs ? "全选中..." : allFilteredBacktestJobsSelected ? "取消全选" : "全选全部"}
+                </button>
+                <button
+                  type="button"
                   onClick={() => void handleBatchDeleteBacktestJobs()}
                   disabled={!selectedBacktestJobIds.length || deletingBacktestJobIds.length > 0}
                   className="h-10 rounded-lg border border-red-500 px-3 text-xs font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-400 dark:text-red-300"
                 >
-                  {deletingBacktestJobIds.length > 0 ? "删除中..." : `批量删除已选${selectedBacktestJobIds.length ? ` (${selectedBacktestJobIds.length})` : ""}`}
+                  {deletingBacktestJobIds.length > 0 ? "删除中..." : `删除已选${selectedBacktestJobIds.length ? ` (${selectedBacktestJobIds.length})` : ""}`}
                 </button>
                 <button
                   type="button"
@@ -1247,18 +1313,19 @@ export default function CbQuantBacktestEvaluationPage() {
                     setBacktestBusinessDateFrom("");
                     setBacktestBusinessDateTo("");
                     setBacktestJobStatusFilter("all");
+                    setSelectedBacktestJobIds([]);
                     setBacktestJobsPage(1);
                   }}
                   className="h-10 rounded-lg border border-gray-300 px-3 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300"
                 >
-                  重置筛选
+                  重置
                 </button>
                 <button
                   type="button"
                   onClick={() => void loadBacktestJobs()}
                   className="h-10 rounded-lg border border-brand-500 px-3 text-xs font-medium text-brand-600 hover:bg-brand-50 dark:border-brand-400 dark:text-brand-300"
                 >
-                  手动刷新
+                  刷新
                 </button>
               </div>
             </div>

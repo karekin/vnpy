@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -19,6 +20,42 @@ from vnpy.web.domain.cb_quant.strategy_factor_registry import (
     get_strategy_factor_definition,
 )
 from vnpy.web.domain.cb_quant.snapshot_schema import PutStatus
+
+
+@dataclass(frozen=True)
+class PreparedCandidatePool:
+    """单日候选池的预计算结果。
+
+    这层对象只保存“与具体参数组合无关”的静态特征：
+    - 第一层基础过滤后的 universe
+    - 上市天数 / 剩余天数
+    - 动态双因子等执行核需要的输入列
+
+    这样优化阶段在评估不同参数组合时，只需要复用这些特征做数值打分，
+    不必反复做字符串过滤、日期解析和派生列计算。
+    """
+
+    trade_date: str
+    frame: pd.DataFrame
+    listing_days: pd.Series
+    days_remain: pd.Series
+    dynamic_inputs: dict[str, pd.Series]
+
+
+def build_tradeable_mask(df: pd.DataFrame) -> pd.Series:
+    """返回“可近似交易”的布尔掩码。
+
+    当前快照里没有严格的停牌字段，因此这里采用统一代理口径：
+    1. 收盘价必须有效
+    2. 若已有 `is_tradeable` 列，直接复用
+    3. 否则要求成交量或成交额至少一项大于 0
+    """
+    close_ok = pd.to_numeric(df.get("close_price"), errors="coerce").fillna(0.0) > 0
+    if "is_tradeable" in df.columns:
+        return close_ok & df["is_tradeable"].fillna(False).astype(bool)
+    volume = pd.to_numeric(df.get("volume_hand"), errors="coerce").fillna(0.0)
+    amount = pd.to_numeric(df.get("turnover_amount_wan"), errors="coerce").fillna(0.0)
+    return close_ok & ((volume > 0) | (amount > 0))
 
 
 def _score_lower_better(series: pd.Series, benchmark: float) -> pd.Series:
@@ -95,6 +132,17 @@ def _build_dynamic_factor_scores(
     listing_days: pd.Series,
 ) -> dict[str, pd.Series]:
     input_map = _build_dynamic_factor_inputs(df=df, listing_days=listing_days)
+    return _build_dynamic_factor_scores_from_inputs(
+        input_map=input_map,
+        factor_values=factor_values,
+    )
+
+
+def _build_dynamic_factor_scores_from_inputs(
+    *,
+    input_map: dict[str, pd.Series],
+    factor_values: dict[str, Any],
+) -> dict[str, pd.Series]:
     score_map: dict[str, pd.Series] = {}
 
     for factor_key, expected in factor_values.items():
@@ -117,63 +165,93 @@ def _build_dynamic_factor_scores(
     return score_map
 
 
-def filter_multiple_factors(
+def prepare_candidate_pool(
     df: pd.DataFrame,
     *,
     trade_date: str,
-    strategy_parameters: StrategyParameters,
-) -> pd.DataFrame:
-    """按当前策略核心约定的口径执行多因子筛债。
+) -> PreparedCandidatePool:
+    """预计算单日候选池的静态特征。"""
+    if df.empty:
+        empty = df.iloc[0:0].copy()
+        return PreparedCandidatePool(
+            trade_date=trade_date,
+            frame=empty,
+            listing_days=pd.Series(dtype="float64"),
+            days_remain=pd.Series(dtype="float64"),
+            dynamic_inputs={},
+        )
 
-    参数说明：
-    - df: 当日可转债快照数据，每一行代表一只债券。
-    - trade_date: 交易日，格式固定为 ``YYYY-MM-DD``，用于计算上市天数等时间因子。
-    - strategy_parameters: 策略参数对象，包含各类阈值、基准值和权重配置。
-
-    返回值说明：
-    - 返回经过基础过滤、因子打分、最终二次过滤后的候选可转债列表。
-    - 若任一过滤阶段后数据为空，则直接返回空 DataFrame。
-    """
-    # 为了后续代码书写更紧凑，这里先给策略参数起一个局部别名。
-    params = strategy_parameters
-
-    # 第一层基础过滤：
-    # 1. 必须存在回售状态，排除不适用的标的。
-    # 2. 必须已经上市，避免未上市债券进入候选池。
-    # 3. 排除名称中包含 EB 的品种，通常表示与当前可转债策略口径不一致。
-    # 4. 排除已经触发强赎的债券，避免临近退出的标的干扰策略。
-    # 5. 纯债价值比限制在合理区间内，剔除极端异常值或数据质量较差的记录。
-    df_filter = df.loc[
+    base_mask = (
         (df["put_status"] != PutStatus.NOT_APPLICABLE.value)
         & (df["is_listed"])
-        & (~df["bond_name"].str.contains("EB"))
+        & build_tradeable_mask(df)
+        & (~df["bond_name"].astype(str).str.contains("EB", na=False))
         & (~df["is_redeem_triggered"])
         & (df["bond_pure_value_ratio"] > 0.5)
         & (df["bond_pure_value_ratio"] < 15)
-    ]
-    # 如果基础过滤后已经没有数据，就没有继续打分的意义，直接返回。
+    )
+    df_filter = df.loc[base_mask].copy()
+    if df_filter.empty:
+        return PreparedCandidatePool(
+            trade_date=trade_date,
+            frame=df_filter,
+            listing_days=pd.Series(dtype="float64"),
+            days_remain=pd.Series(dtype="float64"),
+            dynamic_inputs={},
+        )
+
+    now_date = datetime.strptime(trade_date, "%Y-%m-%d")
+    listing_dates = pd.to_datetime(df_filter["listing_date"], errors="coerce")
+    listing_days = (now_date - listing_dates).dt.days.fillna(0)
+    days_remain = 365 * 6 - listing_days
+    dynamic_inputs = _build_dynamic_factor_inputs(df=df_filter, listing_days=listing_days)
+    return PreparedCandidatePool(
+        trade_date=trade_date,
+        frame=df_filter,
+        listing_days=listing_days,
+        days_remain=days_remain,
+        dynamic_inputs=dynamic_inputs,
+    )
+
+
+def _filter_prepared_candidate_pool(
+    prepared: PreparedCandidatePool,
+    *,
+    strategy_parameters: StrategyParameters,
+) -> tuple[pd.DataFrame, pd.Series, pd.Series, dict[str, pd.Series]]:
+    df_filter = prepared.frame
+    listing_days = prepared.listing_days
+    days_remain = prepared.days_remain
+    dynamic_inputs = prepared.dynamic_inputs
+    if df_filter.empty:
+        return df_filter, listing_days, days_remain, dynamic_inputs
+
+    params = strategy_parameters
+    if params.exclude_redeem_days_below is not None and "days_to_redeem" in df_filter.columns:
+        days_to_redeem = pd.to_numeric(df_filter["days_to_redeem"], errors="coerce")
+        mask = days_to_redeem.isna() | (days_to_redeem > float(params.exclude_redeem_days_below))
+        df_filter = df_filter.loc[mask].copy()
+        listing_days = listing_days.loc[df_filter.index]
+        days_remain = days_remain.loc[df_filter.index]
+        dynamic_inputs = {
+            factor_key: values.loc[df_filter.index]
+            for factor_key, values in dynamic_inputs.items()
+        }
+    return df_filter, listing_days, days_remain, dynamic_inputs
+
+
+def _score_candidate_frame(
+    df_filter: pd.DataFrame,
+    *,
+    strategy_parameters: StrategyParameters,
+    listing_days: pd.Series,
+    days_remain: pd.Series,
+    dynamic_inputs: dict[str, pd.Series],
+) -> pd.DataFrame:
     if df_filter.empty:
         return df_filter
 
-    # 第二层可选过滤：
-    # 如果策略配置了“距赎回日最低剩余天数”，并且数据中存在该列，则进一步剔除
-    # 快到赎回日的标的；空值保留，表示未知时不过度过滤。
-    if params.exclude_redeem_days_below is not None and "days_to_redeem" in df_filter.columns:
-        # 统一转成数值类型，无法转换的值记为 NaN，避免字符串脏数据影响比较逻辑。
-        days_to_redeem = pd.to_numeric(df_filter["days_to_redeem"], errors="coerce")
-        # 保留空值或剩余赎回天数大于阈值的记录。
-        df_filter = df_filter.loc[
-            days_to_redeem.isna() | (days_to_redeem > float(params.exclude_redeem_days_below))
-        ]
-        # 如果过滤后为空，同样直接返回。
-        if df_filter.empty:
-            return df_filter
-
-    # 将交易日字符串转成 datetime，后续用于计算上市已过天数和期权时间价值因子。
-    now_date = datetime.strptime(trade_date, "%Y-%m-%d")
-
-    # 溢价率得分：
-    # 溢价率越接近或低于基准值，得分越高；高于基准值越多，得分越低。
+    params = strategy_parameters
     premium_score = 1 - (df_filter["conversion_premium_pct"] - params.premium_benchmark) / params.premium_benchmark
 
     # 债券价格得分：
@@ -187,11 +265,7 @@ def filter_multiple_factors(
     ).clip(lower=params.pb_score_min, upper=1).round(2)
 
     # 解析上市日期。无法解析的日期会变成 NaT，后续统一按缺失值处理。
-    listing_dates = pd.to_datetime(df_filter["listing_date"], errors="coerce")
-    # 计算距离上市已经过去了多少天；缺失值按 0 天处理，避免中断打分。
-    days_elapsed = (now_date - listing_dates).dt.days.fillna(0)
-    # 可转债通常按 6 年存续期粗略估算剩余时间，用于衡量期权时间价值。
-    days_remain = 365 * 6 - days_elapsed
+    days_elapsed = listing_days
     # 默认期权时间得分为满分 1，只有剩余时间过短时才开始扣分。
     option_score = pd.Series(1.0, index=df_filter.index)
     # 找出剩余时间低于策略基准天数的标的。
@@ -282,10 +356,9 @@ def filter_multiple_factors(
     # 如果模板显式选择了原始市场因子，则在基准多因子分之上叠加一层“动态因子分”。
     # 这样因子库里选中的因子会真实进入排序，而不是只在模板界面里存在。
     factor_values = dict(params.factor_values or {})
-    dynamic_scores = _build_dynamic_factor_scores(
-        df=df_filter,
+    dynamic_scores = _build_dynamic_factor_scores_from_inputs(
+        input_map=dynamic_inputs,
         factor_values=factor_values,
-        listing_days=days_elapsed,
     )
     if dynamic_scores:
         dynamic_factor_score = sum(dynamic_scores.values()) / len(dynamic_scores)
@@ -324,3 +397,47 @@ def filter_multiple_factors(
     df_filter = df_filter.sort_values(by="weight_score", ascending=False, ignore_index=True)
     # 返回最终筛选结果。
     return df_filter
+
+
+def filter_multiple_factors(
+    df: pd.DataFrame,
+    *,
+    trade_date: str,
+    strategy_parameters: StrategyParameters,
+) -> pd.DataFrame:
+    """按当前策略核心约定的口径执行多因子筛债。"""
+    prepared = prepare_candidate_pool(df, trade_date=trade_date)
+    df_filter, listing_days, days_remain, dynamic_inputs = _filter_prepared_candidate_pool(
+        prepared,
+        strategy_parameters=strategy_parameters,
+    )
+    return _score_candidate_frame(
+        df_filter,
+        strategy_parameters=strategy_parameters,
+        listing_days=listing_days,
+        days_remain=days_remain,
+        dynamic_inputs=dynamic_inputs,
+    )
+
+
+def build_candidate_codes(
+    prepared: PreparedCandidatePool,
+    *,
+    strategy_parameters: StrategyParameters,
+    candidate_count: int,
+) -> list[str]:
+    """基于预计算候选池快速返回候选代码列表。"""
+    df_filter, listing_days, days_remain, dynamic_inputs = _filter_prepared_candidate_pool(
+        prepared,
+        strategy_parameters=strategy_parameters,
+    )
+    df_candidate = _score_candidate_frame(
+        df_filter,
+        strategy_parameters=strategy_parameters,
+        listing_days=listing_days,
+        days_remain=days_remain,
+        dynamic_inputs=dynamic_inputs,
+    )
+    if df_candidate.empty or "bond_code" not in df_candidate.columns:
+        return []
+    return df_candidate["bond_code"].astype(str).tolist()[: max(1, candidate_count)]

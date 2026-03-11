@@ -21,6 +21,8 @@ from vnpy.web.contracts.cb_quant import (
     TushareSyncStatusResponse,
     StrategyOptimizeTaskCreateRequest,
     StrategyOptimizeTaskCreateResponse,
+    StrategyOptimizeBatchDetailResponse,
+    StrategyOptimizeBatchListResponse,
     StrategyOptimizeTaskAnalysisResponse,
     StrategyOptimizeTaskAiInsightRequest,
     StrategyOptimizeTaskAiInsightResponse,
@@ -314,6 +316,27 @@ def list_optimize_tasks(
         page=page,
         page_size=page_size,
     )
+
+
+@router.get("/strategy/optimize-batches", response_model=StrategyOptimizeBatchListResponse)
+def list_optimize_batches(
+    status: str = Query(default="all"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200),
+) -> StrategyOptimizeBatchListResponse:
+    return cb_quant_service.list_optimize_batches(
+        status=status,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get("/strategy/optimize-batches/{batch_id}", response_model=StrategyOptimizeBatchDetailResponse)
+def get_optimize_batch_detail(batch_id: str) -> StrategyOptimizeBatchDetailResponse:
+    detail = cb_quant_service.get_optimize_batch_detail(batch_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail=f"optimize batch not found: {batch_id}")
+    return detail
 
 
 @router.get("/strategy/optimize-tasks/{task_id}", response_model=StrategyOptimizeTaskDetailResponse)

@@ -272,6 +272,50 @@ class CbQuantStore:
                     continue
         return rows
 
+    def load_optimize_batches(self) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        with self._connect() as conn:
+            for row in conn.execute(
+                "SELECT row_json FROM cb_optimize_batch ORDER BY created_at DESC, batch_id DESC"
+            ).fetchall():
+                try:
+                    rows.append(json.loads(str(row[0])))
+                except Exception:
+                    continue
+        return rows
+
+    def load_optimize_shards(self) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        with self._connect() as conn:
+            for row in conn.execute(
+                "SELECT row_json FROM cb_optimize_shard ORDER BY task_id, sequence ASC, shard_id ASC"
+            ).fetchall():
+                try:
+                    rows.append(json.loads(str(row[0])))
+                except Exception:
+                    continue
+        return rows
+
+    def load_optimize_shard_result_rows(self) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        with self._connect() as conn:
+            for row in conn.execute(
+                "SELECT task_id, shard_id, row_json FROM cb_optimize_shard_result "
+                "ORDER BY task_id, shard_id, rank ASC"
+            ).fetchall():
+                try:
+                    payload = json.loads(str(row[2]))
+                except Exception:
+                    continue
+                rows.append(
+                    {
+                        "task_id": str(row[0] or ""),
+                        "shard_id": str(row[1] or ""),
+                        "row": payload,
+                    }
+                )
+        return rows
+
     def upsert_optimize_task(self, *, row: dict[str, Any]) -> None:
         task_id = str(row.get("task_id") or "").strip()
         if not task_id:
@@ -298,6 +342,130 @@ class CbQuantStore:
                     json.dumps(row, ensure_ascii=False, separators=(",", ":")),
                 ),
             )
+            conn.commit()
+
+    def upsert_optimize_batch(self, *, row: dict[str, Any]) -> None:
+        batch_id = str(row.get("batch_id") or "").strip()
+        if not batch_id:
+            return
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        created_at = str(row.get("created_at") or now)
+        status = str(row.get("status") or "queued")
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT INTO cb_optimize_batch ("
+                "batch_id, status, created_at, updated_at, row_json"
+                ") VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(batch_id) DO UPDATE SET "
+                "status=excluded.status, created_at=excluded.created_at, updated_at=excluded.updated_at, "
+                "row_json=excluded.row_json",
+                (
+                    batch_id,
+                    status,
+                    created_at,
+                    now,
+                    json.dumps(row, ensure_ascii=False, separators=(",", ":")),
+                ),
+            )
+            conn.commit()
+
+    def delete_optimize_batch(self, batch_id: str) -> None:
+        if not batch_id:
+            return
+        with self._lock, self._connect() as conn:
+            conn.execute("DELETE FROM cb_optimize_batch WHERE batch_id = ?", (batch_id,))
+            conn.commit()
+
+    def upsert_optimize_shard(self, *, row: dict[str, Any]) -> None:
+        shard_id = str(row.get("shard_id") or "").strip()
+        task_id = str(row.get("task_id") or "").strip()
+        if not shard_id or not task_id:
+            return
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        created_at = str(row.get("created_at") or now)
+        status = str(row.get("status") or "queued")
+        stage = str(row.get("stage") or "full")
+        sequence = int(row.get("sequence") or 1)
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT INTO cb_optimize_shard ("
+                "shard_id, task_id, stage, sequence, status, created_at, updated_at, row_json"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(shard_id) DO UPDATE SET "
+                "task_id=excluded.task_id, stage=excluded.stage, sequence=excluded.sequence, "
+                "status=excluded.status, created_at=excluded.created_at, updated_at=excluded.updated_at, "
+                "row_json=excluded.row_json",
+                (
+                    shard_id,
+                    task_id,
+                    stage,
+                    sequence,
+                    status,
+                    created_at,
+                    now,
+                    json.dumps(row, ensure_ascii=False, separators=(",", ":")),
+                ),
+            )
+            conn.commit()
+
+    def replace_optimize_shards(self, *, task_id: str, rows: list[dict[str, Any]]) -> None:
+        if not task_id:
+            return
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock, self._connect() as conn:
+            conn.execute("DELETE FROM cb_optimize_shard WHERE task_id = ?", (task_id,))
+            for row in rows:
+                shard_id = str(row.get("shard_id") or "").strip()
+                if not shard_id:
+                    continue
+                stage = str(row.get("stage") or "full")
+                sequence = int(row.get("sequence") or 1)
+                status = str(row.get("status") or "queued")
+                created_at = str(row.get("created_at") or now)
+                conn.execute(
+                    "INSERT INTO cb_optimize_shard ("
+                    "shard_id, task_id, stage, sequence, status, created_at, updated_at, row_json"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        shard_id,
+                        task_id,
+                        stage,
+                        sequence,
+                        status,
+                        created_at,
+                        now,
+                        json.dumps(row, ensure_ascii=False, separators=(",", ":")),
+                    ),
+                )
+            conn.commit()
+
+    def replace_optimize_shard_result_rows(self, *, task_id: str, shard_id: str, rows: list[dict[str, Any]]) -> None:
+        if not task_id or not shard_id:
+            return
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "DELETE FROM cb_optimize_shard_result WHERE task_id = ? AND shard_id = ?",
+                (task_id, shard_id),
+            )
+            for row in rows:
+                combo_id = str(row.get("combo_id") or "").strip()
+                if not combo_id:
+                    continue
+                rank = int(row.get("rank") or 0)
+                conn.execute(
+                    "INSERT INTO cb_optimize_shard_result ("
+                    "task_id, shard_id, combo_id, rank, updated_at, row_json"
+                    ") VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        task_id,
+                        shard_id,
+                        combo_id,
+                        rank,
+                        now,
+                        json.dumps(row, ensure_ascii=False, separators=(",", ":")),
+                    ),
+                )
             conn.commit()
 
     def load_optimize_result_rows(self) -> list[dict[str, Any]]:
@@ -487,6 +655,8 @@ class CbQuantStore:
             return
         with self._lock, self._connect() as conn:
             conn.execute("DELETE FROM cb_optimize_task WHERE task_id = ?", (task_id,))
+            conn.execute("DELETE FROM cb_optimize_shard WHERE task_id = ?", (task_id,))
+            conn.execute("DELETE FROM cb_optimize_shard_result WHERE task_id = ?", (task_id,))
             conn.execute("DELETE FROM cb_optimize_result WHERE task_id = ?", (task_id,))
             conn.execute("DELETE FROM cb_optimize_top_bond WHERE task_id = ?", (task_id,))
             conn.execute("DELETE FROM cb_optimize_task_analysis_snapshot WHERE task_id = ?", (task_id,))
@@ -570,6 +740,20 @@ class CbQuantStore:
             )
 
             conn.execute(
+                "CREATE TABLE IF NOT EXISTS cb_optimize_batch ("
+                "batch_id TEXT PRIMARY KEY, "
+                "status TEXT NOT NULL, "
+                "created_at TEXT NOT NULL, "
+                "updated_at TEXT NOT NULL, "
+                "row_json TEXT NOT NULL"
+                ")"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_cb_optimize_batch_status "
+                "ON cb_optimize_batch (status, created_at DESC)"
+            )
+
+            conn.execute(
                 "CREATE TABLE IF NOT EXISTS cb_optimize_task ("
                 "task_id TEXT PRIMARY KEY, "
                 "template_id TEXT NOT NULL, "
@@ -585,6 +769,27 @@ class CbQuantStore:
             )
 
             conn.execute(
+                "CREATE TABLE IF NOT EXISTS cb_optimize_shard ("
+                "shard_id TEXT PRIMARY KEY, "
+                "task_id TEXT NOT NULL, "
+                "stage TEXT NOT NULL, "
+                "sequence INTEGER NOT NULL DEFAULT 1, "
+                "status TEXT NOT NULL, "
+                "created_at TEXT NOT NULL, "
+                "updated_at TEXT NOT NULL, "
+                "row_json TEXT NOT NULL"
+                ")"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_cb_optimize_shard_task_stage "
+                "ON cb_optimize_shard (task_id, stage, sequence ASC)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_cb_optimize_shard_status "
+                "ON cb_optimize_shard (status, created_at DESC)"
+            )
+
+            conn.execute(
                 "CREATE TABLE IF NOT EXISTS cb_optimize_result ("
                 "task_id TEXT NOT NULL, "
                 "combo_id TEXT NOT NULL, "
@@ -597,6 +802,22 @@ class CbQuantStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_cb_optimize_result_task_rank "
                 "ON cb_optimize_result (task_id, rank ASC)"
+            )
+
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS cb_optimize_shard_result ("
+                "task_id TEXT NOT NULL, "
+                "shard_id TEXT NOT NULL, "
+                "combo_id TEXT NOT NULL, "
+                "rank INTEGER NOT NULL DEFAULT 0, "
+                "updated_at TEXT NOT NULL, "
+                "row_json TEXT NOT NULL, "
+                "PRIMARY KEY (task_id, shard_id, combo_id)"
+                ")"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_cb_optimize_shard_result_task_shard_rank "
+                "ON cb_optimize_shard_result (task_id, shard_id, rank ASC)"
             )
 
             conn.execute(

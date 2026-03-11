@@ -145,6 +145,13 @@ def normalize_market_frame(frame: pd.DataFrame) -> pd.DataFrame:
     _ensure_bool_column(df, "is_listed", True)
     _ensure_bool_column(df, "was_listed_prev_day", True)
     _ensure_bool_column(df, "is_redeem_triggered", False)
+    if "is_tradeable" in df.columns:
+        _ensure_bool_column(df, "is_tradeable", False)
+    else:
+        df["is_tradeable"] = (
+            (df["close_price"] > 0)
+            & ((df["volume_hand"] > 0) | (df["turnover_amount_wan"] > 0))
+        )
 
     # 文本类字段统一做三件事：
     # 1. 缺失值补 schema 默认值

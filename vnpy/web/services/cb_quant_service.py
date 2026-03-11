@@ -57,6 +57,10 @@ from vnpy.web.contracts.cb_quant import (
     StrategyBacktestMetricRow,
     StrategyBacktestRotationRow,
     StrategyOptimizeResultRow,
+    StrategyOptimizeBatchDetailResponse,
+    StrategyOptimizeBatchListResponse,
+    StrategyOptimizeBatchRow,
+    StrategyOptimizeShardRow,
     StrategyOptimizeTaskAiCompareResponse,
     StrategyOptimizeTaskAnalysisResponse,
     StrategyOptimizeTaskAiInsightResponse,
@@ -116,6 +120,24 @@ def _now_compact() -> str:
     return datetime.now().strftime("%Y%m%d%H%M")
 
 
+def _generate_optimize_batch_id() -> str:
+    """返回一次优化实验批次的默认编号。"""
+    return f"OPB-{_now_compact()}"
+
+
+_OPTIMIZE_STAGE_PROGRESS_RANGE: dict[str, tuple[int, int]] = {
+    "stage1": (1, 70),
+    "stage2": (70, 99),
+    "full": (1, 99),
+}
+
+_OPTIMIZE_STAGE_LABEL: dict[str, str] = {
+    "stage1": "阶段1筛选",
+    "stage2": "阶段2复评",
+    "full": "全量评估",
+}
+
+
 class CbQuantService:
     """CB Quant 主服务。
 
@@ -128,7 +150,20 @@ class CbQuantService:
     def __init__(self) -> None:
         """初始化全部运行态缓存，并从本地存储恢复历史状态。"""
         self._lock: Lock = Lock()
-        self._executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="cbq-bt")
+        self._job_executor: ThreadPoolExecutor = ThreadPoolExecutor(
+            max_workers=self._job_worker_count(),
+            thread_name_prefix="cbq-job",
+        )
+        self._optimize_executor: ThreadPoolExecutor = ThreadPoolExecutor(
+            max_workers=self._optimize_task_pool_size(),
+            thread_name_prefix="cbq-opt-task",
+        )
+        self._optimize_shard_executor: ThreadPoolExecutor = ThreadPoolExecutor(
+            max_workers=self._optimize_shard_pool_size(),
+            thread_name_prefix="cbq-opt-shard",
+        )
+        # 保留旧属性名，兼容仍然引用 `_executor` 的历史路径和测试替身。
+        self._executor: ThreadPoolExecutor = self._job_executor
         self._backtest_service: CbBacktestService = CbBacktestService()
         self._market_service: CbMarketService = CbMarketService()
         self._seq: int = 0
@@ -156,9 +191,20 @@ class CbQuantService:
         self._compare: list[BacktestCompareRow] = []
         self._refresh_compare_rows()
 
-        self._optimize_tasks, self._optimize_results, self._optimize_top_bonds = self._load_optimize_state()
+        (
+            self._optimize_batches,
+            self._optimize_tasks,
+            self._optimize_results,
+            self._optimize_top_bonds,
+            self._optimize_shards,
+            self._optimize_shard_results,
+        ) = (
+            self._load_optimize_state()
+        )
         self._opt_task_seq = self._derive_opt_task_seq(self._optimize_tasks)
         self._mark_unfinished_optimize_tasks_as_failed_after_restart()
+        self._refresh_all_optimize_task_shard_counters()
+        self._refresh_all_optimize_batches()
         self._optimize_analysis_cache: dict[tuple[str, str, float, str], StrategyOptimizeTaskAnalysisResponse] = {}
         self._optimize_ai_cache: dict[tuple[str, str, float, str], StrategyOptimizeTaskAiInsightResponse] = {}
         self._optimize_ai_compare_cache: dict[tuple[str, tuple[str, str], float, str], StrategyOptimizeTaskAiCompareResponse] = {}
@@ -848,6 +894,7 @@ class CbQuantService:
             task_id = f"OPT-{_now_yyyymmdd()}-{self._opt_task_seq:04d}"
             task = StrategyOptimizeTaskRow(
                 task_id=task_id,
+                batch_id=str(request.batch_id or _generate_optimize_batch_id()),
                 template_id=template.id,
                 template_name=template.name,
                 status="queued",
@@ -860,12 +907,19 @@ class CbQuantService:
                 eta="--",
                 message="任务已入队",
                 created_at=_now_readable(),
+                shard_count=0,
+                queued_shards=0,
+                running_shards=0,
+                finished_shards=0,
+                failed_shards=0,
                 task_config=task_config,
             )
             self._optimize_tasks = [task, *self._optimize_tasks]
             self._optimize_results[task_id] = []
             self._optimize_top_bonds[task_id] = []
+            self._optimize_shards[task_id] = []
         self._store.upsert_optimize_task(row=task.model_dump())
+        self._refresh_optimize_batch(task.batch_id)
         self._sync_optimize_task_as_backtest_job(task)
 
         submit_error: str | None = None
@@ -877,7 +931,7 @@ class CbQuantService:
             # 3. `_iter_combo_results_parallel(...)` 并行遍历参数组合
             # 4. `_evaluate_combo(...)` 评估单个组合
             # 5. `_run_backtest_from_candidate_map(...)` 产出收益/回撤/胜率等指标
-            self._executor.submit(
+            self._optimize_executor.submit(
                 self._run_optimize_task,
                 task_id,
                 request.top_n,
@@ -901,9 +955,9 @@ class CbQuantService:
 
         response_task = self._get_optimize_task(task_id) or task
         response_message = (
-            f"已创建优化任务 {task_id}，但提交执行失败：{submit_error}"
+            f"已创建优化任务 {task_id}（批次 {response_task.batch_id or '--'}），但提交执行失败：{submit_error}"
             if submit_error
-            else f"已创建优化任务 {task_id}，待评估参数组合数={capped_total}"
+            else f"已创建优化任务 {task_id}（批次 {response_task.batch_id or '--'}），待评估参数组合数={capped_total}"
         )
         return StrategyOptimizeTaskCreateResponse(
             task=response_task,
@@ -922,12 +976,42 @@ class CbQuantService:
         for row in self._optimize_tasks:
             if template_id != "all" and row.template_id != template_id:
                 continue
-            if status != "all" and row.status != status:
+            if status == "active":
+                if row.status not in {"queued", "running"}:
+                    continue
+            elif status != "all" and row.status != status:
                 continue
             rows.append(row)
         total = len(rows)
         paged = _paginate(rows, page, page_size)
         return StrategyOptimizeTaskListResponse(items=paged, total=total, page=page, page_size=page_size)
+
+    def list_optimize_batches(
+        self,
+        *,
+        status: str = "all",
+        page: int = 1,
+        page_size: int = 20,
+    ) -> StrategyOptimizeBatchListResponse:
+        rows: list[StrategyOptimizeBatchRow] = []
+        for row in self._optimize_batches:
+            if status == "active":
+                if row.status not in {"queued", "running"}:
+                    continue
+            elif status != "all" and row.status != status:
+                continue
+            rows.append(row)
+        total = len(rows)
+        paged = _paginate(rows, page, page_size)
+        return StrategyOptimizeBatchListResponse(items=paged, total=total, page=page, page_size=page_size)
+
+    def get_optimize_batch_detail(self, batch_id: str) -> StrategyOptimizeBatchDetailResponse | None:
+        batch = self._get_optimize_batch(batch_id)
+        if not batch:
+            return None
+        tasks = [row for row in self._optimize_tasks if row.batch_id == batch_id]
+        tasks.sort(key=lambda item: (item.created_at, item.task_id), reverse=True)
+        return StrategyOptimizeBatchDetailResponse(batch=batch, tasks=tasks)
 
     def get_optimize_task_detail(self, task_id: str) -> StrategyOptimizeTaskDetailResponse | None:
         task = self._get_optimize_task(task_id)
@@ -938,6 +1022,7 @@ class CbQuantService:
                 task=task,
                 top_strategies=[],
                 top_bonds=[],
+                shards=self._list_optimize_shards(task_id),
             )
         rows = [
             row
@@ -948,6 +1033,7 @@ class CbQuantService:
             task=task,
             top_strategies=rows,
             top_bonds=self._optimize_top_bonds.get(task_id, []),
+            shards=self._list_optimize_shards(task_id),
         )
 
     def get_optimize_task_analysis(
@@ -2047,22 +2133,19 @@ class CbQuantService:
             return
 
         # 任务进入 running，说明已经从线程池真正出队开始执行。
-        self._update_optimize_task(
+        task = self._update_optimize_task(
             task_id,
             status="running",
             progress=1,
             started_at=task.started_at or _now_readable(),
             eta="initializing",
             message="任务已出队，正在初始化引擎与加载数据",
-        )
+        ) or task
 
         # 读取历史快照数据集。`CbBacktestService` 会优先从 cb_snapshots.db 读取标准化日快照；
         # 如果本地快照库没有数据，就返回空数据集，由当前任务统一走“无数据失败”分支。
         dataset = self._backtest_service.load_market_data()
         total = max(1, task.total_combinations)
-
-        # workers 控制参数组合评估时的并行度；不是数据库连接数，也不是 Web 请求并发数。
-        workers = self._optimize_worker_count()
 
         # 这里把一整份历史数据预先切成多个窗口数据集，避免每个组合再重复切片。
         # 例如 full / 3y / 1y / 1w 都会得到一份独立的 dataset。
@@ -2084,29 +2167,22 @@ class CbQuantService:
             )
             return
 
-        # 到这里说明：cb_backtest 核心已直接引用、历史快照已读取、窗口切片已准备完毕。
-        self._update_optimize_task(
+        task = self._update_optimize_task(
             task_id,
             status="running",
             progress=3,
             eta="loading",
-            message=f"正在加载历史快照并初始化参数空间（workers={workers}）",
-        )
+            message="正在加载历史快照并初始化参数空间（sharded）",
+        ) or task
 
         ranking_rows: list[StrategyOptimizeResultRow] = []
         evaluated_primary = 0
         evaluated_secondary = 0
         skipped_no_trade = 0
-        start_at = datetime.now()
 
         try:
-            # 这里决定是否启用“两阶段评估”：
-            # - 开：先拿短窗口做低成本粗筛，再对 shortlist 做全窗口复评
-            # - 关：直接全量遍历所有组合
-            # 这个判断只和参数空间大小、窗口数量有关，不和数据库有关。
             screening_enabled = self._should_enable_stage1_screening(total=total, windows=task.windows)
             stage1_window = self._pick_stage1_window(task.windows)
-            stage1_windows: list[WindowName] = [stage1_window]
             stage1_sample_limit = self._stage1_sample_limit(total=total, top_n=top_n) if screening_enabled else total
             stage2_shortlist_limit = self._stage2_shortlist_limit(
                 total=total,
@@ -2115,230 +2191,121 @@ class CbQuantService:
             )
 
             if screening_enabled:
-                # stage1_best_rows 只保存粗筛阶段表现最好的 shortlist，不保存全部组合。
-                stage1_best_rows: list[StrategyOptimizeResultRow] = []
-                stage1_combo_iter = self._iter_sampled_template_settings(
-                    template_id=task.template_id,
-                    total=total,
-                    sample_limit=stage1_sample_limit,
-                )
-                stage1_map = {stage1_window: window_dataset_map.get(stage1_window, [])}
-                # 阶段1只在一个较短窗口上跑抽样组合，目标是尽快得到“值得复评”的 shortlist。
-                # 这里保留 stage2_shortlist_limit 条最佳结果，避免把明显较差的组合带入完整回测。
-                for row in self._iter_combo_results_parallel(
+                stage1_combo_ids = [
+                    f"CMB-{combo_seq:06d}"
+                    for combo_seq in self._sample_combo_indices(total, stage1_sample_limit)
+                ]
+                stage1_shards = self._build_optimize_shards_for_combo_ids(
                     task_id=task_id,
-                    template_id=task.template_id,
-                    template_name=task.template_name,
+                    stage="stage1",
+                    combo_ids=stage1_combo_ids,
+                )
+                self._set_optimize_stage_shards(task_id=task_id, stage="stage1", shards=stage1_shards)
+                stage1_map = {stage1_window: window_dataset_map.get(stage1_window, [])}
+                stage1_prepared_pool_map = self._prepare_candidate_pool_map(
+                    dataset=self._resolve_base_dataset_for_windows(
+                        dataset=dataset,
+                        windows=[stage1_window],
+                        window_dataset_map=stage1_map,
+                    )
+                )
+                stage1_best_rows, evaluated_primary, skipped_primary = self._run_optimize_shard_stage(
+                    task=task,
+                    stage="stage1",
+                    shards=stage1_shards,
                     dataset=dataset,
-                    combo_iter=stage1_combo_iter,
-                    windows=stage1_windows,
+                    windows=[stage1_window],
                     start_date=start_date,
                     end_date=end_date,
                     window_dataset_map=stage1_map,
-                    workers=workers,
+                    prepared_pool_map=stage1_prepared_pool_map,
                     task_config=task_config,
-                ):
-                    # evaluated_primary 记录“主筛阶段”已经评估了多少个组合。
-                    evaluated_primary += 1
-
-                    # 零收益且零换手的组合，通常意味着根本没有触发有效交易。
-                    # 这类组合会计入统计，但不放进候选排行榜。
-                    if abs(row.total_return_pct) < 1e-9 and row.turnover <= 1e-9:
-                        skipped_no_trade += 1
-                    else:
-                        stage1_best_rows.append(row)
-                        stage1_best_rows.sort(
-                            key=lambda item: (item.robust_score, item.cagr, -item.mdd),
-                            reverse=True,
-                        )
-                        stage1_best_rows = stage1_best_rows[:stage2_shortlist_limit]
-
-                    # 不是每评估一个组合都刷新前端状态，否则锁竞争和持久化开销会偏大。
-                    # 这里只在关键节点或固定步长更新一次任务进度和临时排行榜。
-                    should_emit = (
-                        evaluated_primary == 1
-                        or evaluated_primary == stage1_sample_limit
-                        or evaluated_primary % max(1, stage1_sample_limit // 100) == 0
-                        or evaluated_primary % 200 == 0
-                    )
-                    if not should_emit:
-                        continue
-                    elapsed_seconds = max(1.0, (datetime.now() - start_at).total_seconds())
-                    remain = max(0, stage1_sample_limit - evaluated_primary)
-                    per_cost = elapsed_seconds / max(1, evaluated_primary)
-                    eta_minutes = int((remain * per_cost) / 60)
-
-                    # 优化过程中，前端列表看到的是“阶段性 top_n”，不是最终结果。
-                    self._optimize_results[task_id] = self._rank_optimize_rows(stage1_best_rows[:top_n])
-                    self._update_optimize_task(
-                        task_id,
-                        evaluated_combinations=min(total, evaluated_primary),
-                        progress=max(1, min(70, ceil(evaluated_primary / max(1, stage1_sample_limit) * 70))),
-                        eta=f"{eta_minutes}m" if remain else "stage1-done",
-                        message=(
-                            f"阶段1({stage1_window})筛选 {evaluated_primary}/{stage1_sample_limit}，"
-                            f"入围 {min(len(stage1_best_rows), stage2_shortlist_limit)}"
-                        ),
-                    )
-
-                # 阶段2对 shortlist 做全窗口复评。
-                # 到这一步才会使用用户真正选择的 window 集合，因此这里的结果才接近最终排行榜。
-                shortlist = sorted(
+                    result_limit=stage2_shortlist_limit,
+                    top_n=top_n,
+                    progress_start=1,
+                    progress_end=70,
+                    total_stage_combinations=stage1_sample_limit,
+                    stage_label=f"阶段1({stage1_window})筛选",
+                )
+                skipped_no_trade += skipped_primary
+                stage1_best_rows = sorted(
                     stage1_best_rows,
                     key=lambda item: (item.robust_score, item.cagr, -item.mdd),
                     reverse=True,
                 )[:stage2_shortlist_limit]
+
+                shortlist = stage1_best_rows
                 stage2_total = len(shortlist)
                 if stage2_total == 0:
-                    # 粗筛完全没有留下可复评组合时，最终结果必然为空。
                     ranking_rows = []
                 else:
-                    # 阶段2直接复用 stage1 已经挑出来的参数 settings，
-                    # 不再重新遍历整个模板参数空间。
-                    stage2_combo_iter = (
-                        (row.combo_id, dict(row.params))
-                        for row in shortlist
-                    )
-                    for row in self._iter_combo_results_parallel(
+                    stage2_combo_ids = [row.combo_id for row in shortlist]
+                    stage2_shards = self._build_optimize_shards_for_combo_ids(
                         task_id=task_id,
-                        template_id=task.template_id,
-                        template_name=task.template_name,
+                        stage="stage2",
+                        combo_ids=stage2_combo_ids,
+                    )
+                    self._set_optimize_stage_shards(task_id=task_id, stage="stage2", shards=stage2_shards)
+                    stage2_prepared_pool_map = self._prepare_candidate_pool_map(
+                        dataset=self._resolve_base_dataset_for_windows(
+                            dataset=dataset,
+                            windows=task.windows,
+                            window_dataset_map=window_dataset_map,
+                        )
+                    )
+                    ranking_rows, evaluated_secondary, skipped_secondary = self._run_optimize_shard_stage(
+                        task=task,
+                        stage="stage2",
+                        shards=stage2_shards,
                         dataset=dataset,
-                        combo_iter=stage2_combo_iter,
                         windows=task.windows,
                         start_date=start_date,
                         end_date=end_date,
                         window_dataset_map=window_dataset_map,
-                        workers=workers,
+                        prepared_pool_map=stage2_prepared_pool_map,
                         task_config=task_config,
-                    ):
-                        # evaluated_secondary 只统计复评阶段数量。
-                        evaluated_secondary += 1
-                        if abs(row.total_return_pct) < 1e-9 and row.turnover <= 1e-9:
-                            skipped_no_trade += 1
-                            continue
-                        ranking_rows.append(row)
-                        ranking_rows.sort(
-                            key=lambda item: (item.robust_score, item.cagr, -item.mdd),
-                            reverse=True,
-                        )
-                        ranking_rows = ranking_rows[:top_n]
-
-                        # 复评阶段的进度区间固定映射到 70%~99%，和 stage1 区分开。
-                        should_emit = (
-                            evaluated_secondary == 1
-                            or evaluated_secondary == stage2_total
-                            or evaluated_secondary % max(1, stage2_total // 50) == 0
-                            or evaluated_secondary % 100 == 0
-                        )
-                        if not should_emit:
-                            continue
-                        elapsed_seconds = max(1.0, (datetime.now() - start_at).total_seconds())
-                        remain = max(0, stage2_total - evaluated_secondary)
-                        per_cost = elapsed_seconds / max(1, evaluated_primary + evaluated_secondary)
-                        eta_minutes = int((remain * per_cost) / 60)
-                        self._optimize_results[task_id] = self._rank_optimize_rows(ranking_rows)
-                        stage2_progress = 70 + ceil(evaluated_secondary / max(1, stage2_total) * 29)
-                        self._update_optimize_task(
-                            task_id,
-                            evaluated_combinations=min(total, evaluated_primary),
-                            progress=max(70, min(99, stage2_progress)),
-                            eta=f"{eta_minutes}m" if remain else "done",
-                            message=f"阶段2复评 {evaluated_secondary}/{stage2_total}",
-                        )
+                        result_limit=top_n,
+                        top_n=top_n,
+                        progress_start=70,
+                        progress_end=99,
+                        total_stage_combinations=stage2_total,
+                        stage_label="阶段2复评",
+                    )
+                    skipped_no_trade += skipped_secondary
             else:
-                # 参数空间不大时直接全量遍历，避免两阶段策略带来的额外复杂度和重复计算。
-                # 这里 `combo_iter` 会按模板配置展开全部参数组合。
-                # 这一分支的特点是：
-                # - 不做 stage1 抽样
-                # - 不做 shortlist 复评
-                # - 所有组合都直接进入 `_evaluate_combo(...)`
-                # 因此逻辑更直观，但当组合数较大时耗时也会线性增长。
-                combo_iter = self._iter_template_settings(
-                    template_id=task.template_id,
-                    limit=task.total_combinations,
-                )
-                # `_iter_combo_results_parallel(...)` 会逐个取出参数组合并执行评估：
-                # - workers=1 时实际是串行
-                # - workers>1 时会并行提交多个 `_evaluate_combo(...)`
-                # 无论底层是否并行，这里拿到的都是“一个组合评估完成后的结果行”。
-                for row in self._iter_combo_results_parallel(
+                full_shards = self._build_optimize_shards_for_range(
                     task_id=task_id,
-                    template_id=task.template_id,
-                    template_name=task.template_name,
+                    stage="full",
+                    total=task.total_combinations,
+                )
+                self._set_optimize_stage_shards(task_id=task_id, stage="full", shards=full_shards)
+                full_prepared_pool_map = self._prepare_candidate_pool_map(
+                    dataset=self._resolve_base_dataset_for_windows(
+                        dataset=dataset,
+                        windows=task.windows,
+                        window_dataset_map=window_dataset_map,
+                    )
+                )
+                ranking_rows, evaluated_primary, skipped_primary = self._run_optimize_shard_stage(
+                    task=task,
+                    stage="full",
+                    shards=full_shards,
                     dataset=dataset,
-                    combo_iter=combo_iter,
                     windows=task.windows,
                     start_date=start_date,
                     end_date=end_date,
                     window_dataset_map=window_dataset_map,
-                    workers=workers,
+                    prepared_pool_map=full_prepared_pool_map,
                     task_config=task_config,
-                ):
-                    # 这里的 evaluated_primary 表示：
-                    # “全量遍历分支已经完成了多少个组合评估”。
-                    # 因为当前没有 stage2，所以它也等同于主进度计数器。
-                    evaluated_primary += 1
+                    result_limit=top_n,
+                    top_n=top_n,
+                    progress_start=1,
+                    progress_end=99,
+                    total_stage_combinations=total,
+                    stage_label="已评估",
+                )
+                skipped_no_trade += skipped_primary
 
-                    # total_return_pct≈0 且 turnover≈0，通常意味着：
-                    # - 这个组合没有真正形成交易
-                    # - 或者交易极少，几乎没有形成有效收益曲线
-                    # 这类组合会计入“无交易组合”统计，但不参与排行榜。
-                    if abs(row.total_return_pct) < 1e-9 and row.turnover <= 1e-9:
-                        skipped_no_trade += 1
-                        continue
-
-                    # 把当前组合结果加入候选排行榜。
-                    ranking_rows.append(row)
-
-                    # 每加入一个结果，都立即按核心排序规则重排一次：
-                    # 1. robust_score 越高越好
-                    # 2. cagr 越高越好
-                    # 3. mdd 越低越好（因此这里用 -item.mdd）
-                    ranking_rows.sort(
-                        key=lambda item: (item.robust_score, item.cagr, -item.mdd),
-                        reverse=True,
-                    )
-
-                    # 只保留前 top_n 条临时最优结果，避免内存里累计保存全部组合结果。
-                    # 这一步是优化过程中“滚动维护 TopN”的关键。
-                    ranking_rows = ranking_rows[:top_n]
-
-                    # 不是每评估一个组合都写一次任务状态。
-                    # 否则频繁更新会带来额外锁竞争和持久化开销。
-                    # 这里选择几个关键时刻更新：
-                    # - 第 1 个组合完成时
-                    # - 最后 1 个组合完成时
-                    # - 按总量的 1% 步长更新
-                    # - 或每满 200 个组合更新一次
-                    if (
-                        evaluated_primary == 1
-                        or evaluated_primary == total
-                        or evaluated_primary % max(1, total // 100) == 0
-                        or evaluated_primary % 200 == 0
-                    ):
-                        # 先把当前临时 TopN 写回内存态，供前端轮询查看“过程中的排行榜”。
-                        self._optimize_results[task_id] = self._rank_optimize_rows(ranking_rows)
-
-                        # 用“当前累计耗时 / 已完成组合数”估算单组合平均耗时，
-                        # 再乘以剩余组合数，得到粗略 ETA。
-                        elapsed_seconds = max(1.0, (datetime.now() - start_at).total_seconds())
-                        remain = max(0, total - evaluated_primary)
-                        per_cost = elapsed_seconds / max(1, evaluated_primary)
-                        eta_minutes = int((remain * per_cost) / 60)
-
-                        # progress 在这个分支里近似等于：
-                        # 已完成组合数 / 总组合数
-                        # 但上限先卡到 99%，把 100% 留给最终收尾和持久化完成时统一写入。
-                        self._update_optimize_task(
-                            task_id,
-                            evaluated_combinations=evaluated_primary,
-                            progress=max(1, min(99, ceil(evaluated_primary / total * 100))),
-                            eta=f"{eta_minutes}m" if remain else "done",
-                            message=f"已评估 {evaluated_primary}/{total}",
-                        )
-
-            # 统一按稳健分 / CAGR / MDD 对最终候选结果排序，并补 rank 字段。
             ranked = [
                 row.model_copy(update={"rank": idx + 1})
                 for idx, row in enumerate(
@@ -2591,7 +2558,7 @@ class CbQuantService:
             self._jobs = [*created, *self._jobs]
 
         for row in created:
-            self._executor.submit(self._run_job, row.job_id)
+            self._job_executor.submit(self._run_job, row.job_id)
 
         window_text = "、".join([self._window_label(name) for name in windows])
         message = f"已入队 {len(created)} 个窗口任务（{window_text}）：{request.combo_id} × {rule_pack_id}"
@@ -2657,6 +2624,7 @@ class CbQuantService:
         deleted_job_ids: list[str] = []
         deleted_combo_ids: set[str] = set()
         deleted_optimize_task_ids: list[str] = []
+        deleted_batch_ids: set[str] = set()
         leaderboard_keys: list[tuple[str, str, str]] = []
 
         for job_id in normalized_job_ids:
@@ -2671,6 +2639,9 @@ class CbQuantService:
             deleted_combo_ids.add(row.combo_id)
             if job_id in optimize_task_ids:
                 deleted_optimize_task_ids.append(job_id)
+                task_row = next((item for item in self._optimize_tasks if item.task_id == job_id), None)
+                if task_row and task_row.batch_id:
+                    deleted_batch_ids.add(task_row.batch_id)
                 continue
             context = self._job_context.get(job_id) or self._store.get_job_context(job_id) or {}
             window_name = str(context.get("window_name") or "").strip()
@@ -2696,12 +2667,16 @@ class CbQuantService:
                 for task_id in deleted_optimize_task_id_set:
                     self._optimize_results.pop(task_id, None)
                     self._optimize_top_bonds.pop(task_id, None)
+                    self._optimize_shards.pop(task_id, None)
+                    self._optimize_shard_results.pop(task_id, None)
 
         if leaderboard_keys:
             self._delete_leaderboard_rows(leaderboard_keys)
         self._store.delete_jobs(deleted_job_ids)
         for task_id in deleted_optimize_task_ids:
             self._store.delete_optimize_task_bundle(task_id)
+        for batch_id in deleted_batch_ids:
+            self._refresh_optimize_batch(batch_id)
         self._purge_optimize_task_caches(deleted_optimize_task_id_set)
         for combo_id in deleted_combo_ids:
             self._refresh_candidate_status(combo_id)
@@ -2843,6 +2818,22 @@ class CbQuantService:
                     return row
         return None
 
+    def _get_optimize_batch(self, batch_id: str) -> StrategyOptimizeBatchRow | None:
+        with self._lock:
+            for row in self._optimize_batches:
+                if row.batch_id == batch_id:
+                    return row
+        return None
+
+    def _list_optimize_shards(self, task_id: str) -> list[StrategyOptimizeShardRow]:
+        with self._lock:
+            rows = list(self._optimize_shards.get(task_id, []))
+        return sorted(rows, key=lambda item: (item.stage, item.sequence, item.shard_id))
+
+    def _list_optimize_shard_results(self, task_id: str, shard_id: str) -> list[StrategyOptimizeResultRow]:
+        with self._lock:
+            return list((self._optimize_shard_results.get(task_id) or {}).get(shard_id, []))
+
     def _update_optimize_task(self, task_id: str, **updates: Any) -> StrategyOptimizeTaskRow | None:
         merged_row: StrategyOptimizeTaskRow | None = None
         with self._lock:
@@ -2855,7 +2846,274 @@ class CbQuantService:
         if merged_row is not None:
             self._store.upsert_optimize_task(row=merged_row.model_dump())
             self._sync_optimize_task_as_backtest_job(merged_row)
+            self._refresh_optimize_batch(merged_row.batch_id)
         return merged_row
+
+    def _upsert_optimize_batch(self, row: StrategyOptimizeBatchRow) -> StrategyOptimizeBatchRow:
+        with self._lock:
+            replaced = False
+            for index, item in enumerate(self._optimize_batches):
+                if item.batch_id != row.batch_id:
+                    continue
+                self._optimize_batches[index] = row
+                replaced = True
+                break
+            if not replaced:
+                self._optimize_batches = [row, *self._optimize_batches]
+            self._optimize_batches.sort(key=lambda item: (item.created_at, item.batch_id), reverse=True)
+        self._store.upsert_optimize_batch(row=row.model_dump())
+        return row
+
+    def _refresh_optimize_batch(self, batch_id: str | None) -> StrategyOptimizeBatchRow | None:
+        safe_batch_id = str(batch_id or "").strip()
+        if not safe_batch_id:
+            return None
+        tasks = [row for row in self._optimize_tasks if row.batch_id == safe_batch_id]
+        if not tasks:
+            with self._lock:
+                self._optimize_batches = [row for row in self._optimize_batches if row.batch_id != safe_batch_id]
+            self._store.delete_optimize_batch(safe_batch_id)
+            return None
+
+        queued = sum(1 for row in tasks if row.status == "queued")
+        running = sum(1 for row in tasks if row.status == "running")
+        finished = sum(1 for row in tasks if row.status == "finished")
+        failed = sum(1 for row in tasks if row.status == "failed")
+        if running > 0:
+            status = "running"
+        elif queued > 0:
+            status = "queued"
+        elif failed > 0:
+            status = "failed"
+        else:
+            status = "finished"
+
+        created_at = min((row.created_at for row in tasks if row.created_at), default=_now_readable())
+        started_candidates = [row.started_at for row in tasks if row.started_at]
+        finished_candidates = [row.finished_at for row in tasks if row.finished_at]
+        latest_message_task = max(tasks, key=lambda item: (item.created_at, item.task_id))
+        batch_row = StrategyOptimizeBatchRow(
+            batch_id=safe_batch_id,
+            status=status,  # type: ignore[arg-type]
+            task_count=len(tasks),
+            queued_tasks=queued,
+            running_tasks=running,
+            finished_tasks=finished,
+            failed_tasks=failed,
+            total_combinations=sum(int(row.total_combinations) for row in tasks),
+            evaluated_combinations=sum(int(row.evaluated_combinations) for row in tasks),
+            created_at=created_at,
+            started_at=min(started_candidates) if started_candidates else None,
+            finished_at=max(finished_candidates) if finished_candidates and finished == len(tasks) else None,
+            message=latest_message_task.message,
+        )
+        return self._upsert_optimize_batch(batch_row)
+
+    def _refresh_all_optimize_batches(self) -> None:
+        batch_ids = sorted({row.batch_id for row in self._optimize_tasks if row.batch_id})
+        for batch_id in batch_ids:
+            self._refresh_optimize_batch(batch_id)
+
+    def _replace_optimize_shards(self, task_id: str, shards: list[StrategyOptimizeShardRow]) -> None:
+        ordered = sorted(shards, key=lambda item: (item.stage, item.sequence, item.shard_id))
+        with self._lock:
+            self._optimize_shards[task_id] = ordered
+        self._store.replace_optimize_shards(task_id=task_id, rows=[row.model_dump() for row in ordered])
+        self._refresh_optimize_task_from_shards(task_id)
+
+    def _upsert_optimize_shard(self, row: StrategyOptimizeShardRow) -> StrategyOptimizeShardRow:
+        with self._lock:
+            current = list(self._optimize_shards.get(row.task_id, []))
+            replaced = False
+            for index, item in enumerate(current):
+                if item.shard_id != row.shard_id:
+                    continue
+                current[index] = row
+                replaced = True
+                break
+            if not replaced:
+                current.append(row)
+            current.sort(key=lambda item: (item.stage, item.sequence, item.shard_id))
+            self._optimize_shards[row.task_id] = current
+        self._store.upsert_optimize_shard(row=row.model_dump())
+        self._refresh_optimize_task_from_shards(row.task_id)
+        return row
+
+    def _replace_optimize_shard_results(
+        self,
+        *,
+        task_id: str,
+        shard_id: str,
+        rows: list[StrategyOptimizeResultRow],
+    ) -> None:
+        ranked_rows = self._rank_optimize_rows(rows)
+        with self._lock:
+            task_map = dict(self._optimize_shard_results.get(task_id, {}))
+            task_map[shard_id] = ranked_rows
+            self._optimize_shard_results[task_id] = task_map
+        self._store.replace_optimize_shard_result_rows(
+            task_id=task_id,
+            shard_id=shard_id,
+            rows=[row.model_dump() for row in ranked_rows],
+        )
+
+    def _update_optimize_shard(self, shard_id: str, **updates: Any) -> StrategyOptimizeShardRow | None:
+        merged: StrategyOptimizeShardRow | None = None
+        task_id = ""
+        with self._lock:
+            for current_task_id, rows in self._optimize_shards.items():
+                for index, row in enumerate(rows):
+                    if row.shard_id != shard_id:
+                        continue
+                    merged = row.model_copy(update=updates)
+                    rows[index] = merged
+                    task_id = current_task_id
+                    break
+                if merged is not None:
+                    rows.sort(key=lambda item: (item.stage, item.sequence, item.shard_id))
+                    break
+        if merged is not None:
+            self._store.upsert_optimize_shard(row=merged.model_dump())
+            self._refresh_optimize_task_from_shards(task_id or merged.task_id)
+        return merged
+
+    def _refresh_optimize_task_from_shards(self, task_id: str) -> StrategyOptimizeTaskRow | None:
+        task = self._get_optimize_task(task_id)
+        if task is None:
+            return None
+        shards = self._list_optimize_shards(task_id)
+        queued = sum(1 for row in shards if row.status == "queued")
+        running = sum(1 for row in shards if row.status == "running")
+        finished = sum(1 for row in shards if row.status == "finished")
+        failed = sum(1 for row in shards if row.status == "failed")
+        updates: dict[str, Any] = {
+            "shard_count": len(shards),
+            "queued_shards": queued,
+            "running_shards": running,
+            "finished_shards": finished,
+            "failed_shards": failed,
+        }
+        if shards and task.status in {"queued", "running"}:
+            total_evaluated = sum(max(0, int(row.evaluated_combinations or 0)) for row in shards)
+            updates["evaluated_combinations"] = min(max(0, task.total_combinations), total_evaluated)
+            active_stage = self._resolve_active_optimize_stage(shards)
+            if active_stage is not None:
+                stage_rows = [row for row in shards if row.stage == active_stage]
+                progress, eta, message = self._build_optimize_task_runtime_snapshot(
+                    task=task,
+                    stage=active_stage,
+                    stage_rows=stage_rows,
+                    queued_shards=queued,
+                    running_shards=running,
+                    finished_shards=finished,
+                    failed_shards=failed,
+                )
+                updates["progress"] = progress
+                updates["eta"] = eta
+                updates["message"] = message
+        return self._update_optimize_task(task_id, **updates)
+
+    @staticmethod
+    def _resolve_active_optimize_stage(shards: list[StrategyOptimizeShardRow]) -> str | None:
+        for stage_name in ("stage1", "stage2", "full"):
+            if any(row.stage == stage_name and row.status == "running" for row in shards):
+                return stage_name
+        for stage_name in ("stage1", "stage2", "full"):
+            if any(row.stage == stage_name and row.status == "queued" for row in shards):
+                return stage_name
+        for stage_name in ("stage2", "stage1", "full"):
+            if any(row.stage == stage_name for row in shards):
+                return stage_name
+        return None
+
+    def _build_optimize_task_runtime_snapshot(
+        self,
+        *,
+        task: StrategyOptimizeTaskRow,
+        stage: str,
+        stage_rows: list[StrategyOptimizeShardRow],
+        queued_shards: int,
+        running_shards: int,
+        finished_shards: int,
+        failed_shards: int,
+    ) -> tuple[int, str, str]:
+        start_progress, end_progress = _OPTIMIZE_STAGE_PROGRESS_RANGE.get(stage, (1, 99))
+        stage_total = max(1, sum(max(0, int(row.total_combinations or 0)) for row in stage_rows))
+        stage_evaluated = sum(max(0, int(row.evaluated_combinations or 0)) for row in stage_rows)
+        stage_progress_ratio = min(1.0, stage_evaluated / stage_total)
+        progress = start_progress + ceil(stage_progress_ratio * max(1, end_progress - start_progress))
+        if running_shards > 0 and stage_evaluated == 0:
+            progress = max(progress, 4)
+        progress = max(0, min(99, progress))
+        eta = self._estimate_optimize_stage_eta(stage_rows=stage_rows, stage_total=stage_total, stage_evaluated=stage_evaluated)
+        stage_label = _OPTIMIZE_STAGE_LABEL.get(stage, stage)
+        message = (
+            f"{stage_label} {min(stage_total, stage_evaluated)}/{stage_total}"
+            f"；queued={queued_shards}, running={running_shards}, finished={finished_shards}, failed={failed_shards}"
+        )
+        if task.status == "queued" and running_shards <= 0:
+            progress = min(progress, 1)
+            eta = "--"
+            message = "任务已入队，等待 shard 调度"
+        return progress, eta, message
+
+    def _estimate_optimize_stage_eta(
+        self,
+        *,
+        stage_rows: list[StrategyOptimizeShardRow],
+        stage_total: int,
+        stage_evaluated: int,
+    ) -> str:
+        running_rows = [row for row in stage_rows if row.status == "running"]
+        if not running_rows:
+            if any(row.status == "queued" for row in stage_rows):
+                return "queued"
+            if all(row.status == "finished" for row in stage_rows):
+                return "done"
+            return "--"
+
+        shard_eta_minutes: list[int] = []
+        for row in running_rows:
+            text = str(row.eta or "").strip().lower()
+            if text.endswith("m"):
+                try:
+                    shard_eta_minutes.append(int(text[:-1]))
+                except Exception:
+                    continue
+        if shard_eta_minutes:
+            return f"{max(shard_eta_minutes)}m"
+
+        if stage_evaluated <= 0:
+            return "warming up"
+
+        started_ats = [self._parse_task_timestamp(row.started_at) for row in running_rows if row.started_at]
+        valid_started = [value for value in started_ats if value is not None]
+        if not valid_started:
+            return "running"
+
+        earliest_started = min(valid_started)
+        elapsed_seconds = max(1.0, (datetime.now() - earliest_started).total_seconds())
+        remain = max(0, stage_total - stage_evaluated)
+        per_combo = elapsed_seconds / max(1, stage_evaluated)
+        eta_minutes = int((remain * per_combo) / 60)
+        return f"{max(1, eta_minutes)}m" if remain > 0 else "done"
+
+    @staticmethod
+    def _parse_task_timestamp(value: str | None) -> datetime | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+            try:
+                return datetime.strptime(text, fmt)
+            except Exception:
+                continue
+        return None
+
+    def _refresh_all_optimize_task_shard_counters(self) -> None:
+        task_ids = [row.task_id for row in self._optimize_tasks]
+        for task_id in task_ids:
+            self._refresh_optimize_task_from_shards(task_id)
 
     def _ensure_optimize_tasks_synced_as_backtest_jobs(self) -> None:
         with self._lock:
@@ -2947,6 +3205,21 @@ class CbQuantService:
         return sliced_map
 
     @staticmethod
+    def _resolve_base_dataset_for_windows(
+        *,
+        dataset: list[tuple[str, Any]],
+        windows: list[WindowName],
+        window_dataset_map: dict[WindowName, list[tuple[str, Any]]] | None,
+    ) -> list[tuple[str, Any]]:
+        base_dataset: list[tuple[str, Any]] = []
+        if window_dataset_map is not None:
+            for window_name in windows:
+                candidate_dataset = window_dataset_map.get(window_name) or []
+                if len(candidate_dataset) > len(base_dataset):
+                    base_dataset = candidate_dataset
+        return base_dataset or dataset
+
+    @staticmethod
     def _pick_stage1_window(windows: list[WindowName]) -> WindowName:
         if "1w" in windows:
             return "1w"
@@ -2981,9 +3254,23 @@ class CbQuantService:
     def _optimize_worker_count(self) -> int:
         return self._env_int("CBQ_OPT_WORKERS", 1, low=1, high=32)
 
+    def _job_worker_count(self) -> int:
+        return self._env_int("CBQ_JOB_WORKERS", 4, low=1, high=64)
+
+    def _optimize_task_pool_size(self) -> int:
+        return self._env_int("CBQ_OPT_TASK_WORKERS", 4, low=1, high=64)
+
+    def _optimize_shard_pool_size(self) -> int:
+        default = max(4, min(16, os.cpu_count() or 8))
+        return self._env_int("CBQ_OPT_SHARD_WORKERS", default, low=1, high=128)
+
+    def _optimize_shard_size(self) -> int:
+        return self._env_int("CBQ_OPT_SHARD_SIZE", 200, low=20, high=100_000)
+
     def _should_enable_stage1_screening(self, *, total: int, windows: list[WindowName]) -> bool:
         threshold = self._env_int("CBQ_OPT_STAGE1_THRESHOLD", 500, low=10, high=5_000_000)
-        return total >= threshold and len(windows) >= 2
+        min_windows = self._env_int("CBQ_OPT_STAGE1_MIN_WINDOWS", 1, low=1, high=16)
+        return total >= threshold and len(windows) >= min_windows
 
     def _stage1_sample_limit(self, *, total: int, top_n: int) -> int:
         ratio = self._env_float("CBQ_OPT_STAGE1_RATIO", 0.1, low=0.01, high=1.0)
@@ -2998,6 +3285,266 @@ class CbQuantService:
         max_shortlist = self._env_int("CBQ_OPT_SHORTLIST_MAX", 3_000, low=50, high=100_000)
         base = max(min_shortlist, max(top_n, current_top_n) * multiplier)
         return max(1, min(total, min(max_shortlist, base)))
+
+    @staticmethod
+    def _chunk_list(values: list[Any], chunk_size: int) -> list[list[Any]]:
+        safe_size = max(1, chunk_size)
+        return [values[index : index + safe_size] for index in range(0, len(values), safe_size)]
+
+    def _build_optimize_shards_for_range(
+        self,
+        *,
+        task_id: str,
+        stage: str,
+        total: int,
+    ) -> list[StrategyOptimizeShardRow]:
+        shard_size = self._optimize_shard_size()
+        created_at = _now_readable()
+        shards: list[StrategyOptimizeShardRow] = []
+        sequence = 0
+        for combo_start in range(1, max(1, total) + 1, shard_size):
+            combo_end = min(total, combo_start + shard_size - 1)
+            sequence += 1
+            shards.append(
+                StrategyOptimizeShardRow(
+                    shard_id=f"{task_id}-{stage}-{sequence:04d}",
+                    task_id=task_id,
+                    stage=stage,  # type: ignore[arg-type]
+                    sequence=sequence,
+                    status="queued",
+                    combo_start=combo_start,
+                    combo_end=combo_end,
+                    total_combinations=max(0, combo_end - combo_start + 1),
+                    evaluated_combinations=0,
+                    progress=0,
+                    eta="--",
+                    message="分片已入队",
+                    created_at=created_at,
+                )
+            )
+        return shards
+
+    def _build_optimize_shards_for_combo_ids(
+        self,
+        *,
+        task_id: str,
+        stage: str,
+        combo_ids: list[str],
+    ) -> list[StrategyOptimizeShardRow]:
+        shard_size = self._optimize_shard_size()
+        created_at = _now_readable()
+        shards: list[StrategyOptimizeShardRow] = []
+        for sequence, chunk in enumerate(self._chunk_list(combo_ids, shard_size), start=1):
+            shards.append(
+                StrategyOptimizeShardRow(
+                    shard_id=f"{task_id}-{stage}-{sequence:04d}",
+                    task_id=task_id,
+                    stage=stage,  # type: ignore[arg-type]
+                    sequence=sequence,
+                    status="queued",
+                    combo_ids=list(chunk),
+                    total_combinations=len(chunk),
+                    evaluated_combinations=0,
+                    progress=0,
+                    eta="--",
+                    message="分片已入队",
+                    created_at=created_at,
+                )
+            )
+        return shards
+
+    def _set_optimize_stage_shards(
+        self,
+        *,
+        task_id: str,
+        stage: str,
+        shards: list[StrategyOptimizeShardRow],
+    ) -> None:
+        current = [row for row in self._list_optimize_shards(task_id) if row.stage != stage]
+        self._replace_optimize_shards(task_id, [*current, *shards])
+
+    def _run_optimize_shard(
+        self,
+        *,
+        shard: StrategyOptimizeShardRow,
+        task: StrategyOptimizeTaskRow,
+        dataset: list[tuple[str, Any]],
+        windows: list[WindowName],
+        start_date: date | None,
+        end_date: date | None,
+        window_dataset_map: dict[WindowName, list[tuple[str, Any]]] | None,
+        prepared_pool_map: dict[str, cb_backtest.PreparedCandidatePool] | None,
+        task_config: BacktestTaskConfig,
+        result_limit: int,
+    ) -> dict[str, Any]:
+        self._replace_optimize_shard_results(task_id=task.task_id, shard_id=shard.shard_id, rows=[])
+        self._update_optimize_shard(
+            shard.shard_id,
+            status="running",
+            progress=1,
+            started_at=shard.started_at or _now_readable(),
+            eta="running",
+            message="分片开始执行",
+        )
+        total = max(1, shard.total_combinations)
+        ranking_rows: list[StrategyOptimizeResultRow] = []
+        skipped_no_trade = 0
+        evaluated = 0
+        start_at = datetime.now()
+        try:
+            if shard.combo_ids:
+                combo_iter = self._iter_combo_id_settings(template_id=task.template_id, combo_ids=shard.combo_ids)
+            else:
+                combo_iter = self._iter_template_settings_range(
+                    template_id=task.template_id,
+                    combo_start=int(shard.combo_start or 1),
+                    combo_end=int(shard.combo_end or shard.combo_start or 1),
+                )
+            for row in self._iter_combo_results_parallel(
+                task_id=task.task_id,
+                template_id=task.template_id,
+                template_name=task.template_name,
+                dataset=dataset,
+                combo_iter=combo_iter,
+                windows=windows,
+                start_date=start_date,
+                end_date=end_date,
+                window_dataset_map=window_dataset_map,
+                prepared_pool_map=prepared_pool_map,
+                workers=self._optimize_worker_count(),
+                task_config=task_config,
+            ):
+                evaluated += 1
+                if abs(row.total_return_pct) < 1e-9 and row.turnover <= 1e-9:
+                    skipped_no_trade += 1
+                else:
+                    ranking_rows.append(row)
+                    ranking_rows.sort(
+                        key=lambda item: (item.robust_score, item.cagr, -item.mdd),
+                        reverse=True,
+                    )
+                    ranking_rows = ranking_rows[:result_limit]
+                should_emit = evaluated == 1 or evaluated == total or evaluated % max(1, total // 10) == 0
+                if not should_emit:
+                    continue
+                elapsed_seconds = max(1.0, (datetime.now() - start_at).total_seconds())
+                remain = max(0, total - evaluated)
+                per_cost = elapsed_seconds / max(1, evaluated)
+                eta_minutes = int((remain * per_cost) / 60)
+                self._update_optimize_shard(
+                    shard.shard_id,
+                    evaluated_combinations=evaluated,
+                    progress=max(1, min(99, ceil(evaluated / total * 100))),
+                    eta=f"{eta_minutes}m" if remain else "done",
+                    message=f"分片已评估 {evaluated}/{total}",
+                )
+            self._update_optimize_shard(
+                shard.shard_id,
+                status="finished",
+                evaluated_combinations=evaluated,
+                result_count=len(ranking_rows),
+                top_combo_id=ranking_rows[0].combo_id if ranking_rows else None,
+                progress=100,
+                eta="done",
+                finished_at=_now_readable(),
+                message=f"分片完成（有效结果 {len(ranking_rows)}）",
+            )
+            self._replace_optimize_shard_results(
+                task_id=task.task_id,
+                shard_id=shard.shard_id,
+                rows=ranking_rows,
+            )
+            return {
+                "shard_id": shard.shard_id,
+                "rows": ranking_rows,
+                "evaluated": evaluated,
+                "skipped_no_trade": skipped_no_trade,
+            }
+        except Exception as exc:
+            self._update_optimize_shard(
+                shard.shard_id,
+                status="failed",
+                progress=max(1, min(99, ceil(evaluated / total * 100))) if evaluated else 1,
+                evaluated_combinations=evaluated,
+                eta="--",
+                finished_at=_now_readable(),
+                message=f"分片失败: {str(exc)[:120]}",
+            )
+            raise
+
+    def _run_optimize_shard_stage(
+        self,
+        *,
+        task: StrategyOptimizeTaskRow,
+        stage: str,
+        shards: list[StrategyOptimizeShardRow],
+        dataset: list[tuple[str, Any]],
+        windows: list[WindowName],
+        start_date: date | None,
+        end_date: date | None,
+        window_dataset_map: dict[WindowName, list[tuple[str, Any]]] | None,
+        prepared_pool_map: dict[str, cb_backtest.PreparedCandidatePool] | None,
+        task_config: BacktestTaskConfig,
+        result_limit: int,
+        top_n: int,
+        progress_start: int,
+        progress_end: int,
+        total_stage_combinations: int,
+        stage_label: str,
+    ) -> tuple[list[StrategyOptimizeResultRow], int, int]:
+        combined_rows: list[StrategyOptimizeResultRow] = []
+        evaluated = 0
+        skipped_no_trade = 0
+        inflight: dict[Any, StrategyOptimizeShardRow] = {}
+        for shard in shards:
+            future = self._optimize_shard_executor.submit(
+                self._run_optimize_shard,
+                shard=shard,
+                task=task,
+                dataset=dataset,
+                windows=windows,
+                start_date=start_date,
+                end_date=end_date,
+                window_dataset_map=window_dataset_map,
+                prepared_pool_map=prepared_pool_map,
+                task_config=task_config,
+                result_limit=result_limit,
+            )
+            inflight[future] = shard
+
+        stage_total = max(1, total_stage_combinations)
+        stage_error: Exception | None = None
+        while inflight:
+            done, _ = wait(set(inflight.keys()), return_when=FIRST_COMPLETED)
+            for future in done:
+                inflight.pop(future, None)
+                try:
+                    payload = future.result()
+                except Exception as exc:  # pragma: no cover - failure path exercised via task status assertions
+                    if stage_error is None:
+                        stage_error = exc
+                    continue
+                evaluated += int(payload.get("evaluated") or 0)
+                skipped_no_trade += int(payload.get("skipped_no_trade") or 0)
+                combined_rows.extend(payload.get("rows") or [])
+                combined_rows.sort(
+                    key=lambda item: (item.robust_score, item.cagr, -item.mdd),
+                    reverse=True,
+                )
+                combined_rows = combined_rows[:result_limit]
+                self._optimize_results[task.task_id] = self._rank_optimize_rows(combined_rows[:top_n])
+                progress_ratio = min(1.0, evaluated / stage_total)
+                progress = progress_start + ceil(progress_ratio * max(1, progress_end - progress_start))
+                self._update_optimize_task(
+                    task.task_id,
+                    evaluated_combinations=min(task.total_combinations, evaluated),
+                    progress=max(progress_start, min(progress_end, progress)),
+                    eta=f"{max(0, stage_total - evaluated)} combos",
+                    message=f"{stage_label} {min(stage_total, evaluated)}/{stage_total}",
+                )
+        if stage_error is not None:
+            raise stage_error
+        return combined_rows, evaluated, skipped_no_trade
 
     @staticmethod
     def _sample_combo_indices(total: int, sample_limit: int) -> list[int]:
@@ -3048,6 +3595,44 @@ class CbQuantService:
                 continue
             yield combo_id, setting
 
+    def _iter_template_settings_range(
+        self,
+        *,
+        template_id: str,
+        combo_start: int,
+        combo_end: int,
+    ) -> Iterable[tuple[str, dict[str, Any]]]:
+        safe_start = max(1, combo_start)
+        safe_end = max(safe_start, combo_end)
+        cfg = self._require_template_config(template_id)
+        enabled_rows = [row for row in cfg.parameter_space if row.enabled and row.factor_key in cfg.factor_keys]
+        if not enabled_rows:
+            raise RuntimeError(f"template parameter space is empty: {template_id}")
+        factor_keys = [row.factor_key for row in enabled_rows]
+        all_choices = [self._choices_for_param_row(row) for row in enabled_rows]
+        if any(not choices for choices in all_choices):
+            raise RuntimeError(f"template parameter choices are invalid: {template_id}")
+
+        for offset, combo_values in enumerate(islice(product(*all_choices), safe_start - 1, safe_end), start=safe_start):
+            factor_values = dict(zip(factor_keys, combo_values))
+            combo_id = f"CMB-{offset:06d}"
+            yield combo_id, self._build_setting_from_factor_values(factor_values)
+
+    def _iter_combo_id_settings(
+        self,
+        *,
+        template_id: str,
+        combo_ids: Iterable[str],
+    ) -> Iterable[tuple[str, dict[str, Any]]]:
+        for combo_id in combo_ids:
+            safe_combo_id = str(combo_id or "").strip()
+            if not safe_combo_id:
+                continue
+            setting = self._build_candidate_setting(template_id=template_id, combo_id=safe_combo_id)
+            if not setting:
+                continue
+            yield safe_combo_id, setting
+
     def _iter_combo_results_parallel(
         self,
         *,
@@ -3060,6 +3645,7 @@ class CbQuantService:
         start_date: date | None,
         end_date: date | None,
         window_dataset_map: dict[WindowName, list[tuple[str, Any]]] | None,
+        prepared_pool_map: dict[str, cb_backtest.PreparedCandidatePool] | None,
         workers: int,
         task_config: BacktestTaskConfig,
     ) -> Iterable[StrategyOptimizeResultRow]:
@@ -3091,6 +3677,7 @@ class CbQuantService:
                     end_date=end_date,
                     setting=setting,
                     window_dataset_map=window_dataset_map,
+                    prepared_pool_map=prepared_pool_map,
                     task_config=task_config,
                 )
             return
@@ -3124,6 +3711,7 @@ class CbQuantService:
                     end_date=end_date,
                     setting=setting,
                     window_dataset_map=window_dataset_map,
+                    prepared_pool_map=prepared_pool_map,
                     task_config=task_config,
                 )
 
@@ -3161,6 +3749,7 @@ class CbQuantService:
         dataset: list[tuple[str, Any]],
         strategy_parameters: cb_backtest.StrategyParameters,
         candidate_count: int,
+        prepared_pool_map: dict[str, cb_backtest.PreparedCandidatePool] | None = None,
     ) -> dict[str, list[str]]:
         """预先为每个交易日构建候选代码列表。
 
@@ -3168,12 +3757,16 @@ class CbQuantService:
         """
         candidate_code_map: dict[str, list[str]] = {}
         for trade_date, frame in dataset:
-            candidate = cb_backtest.build_candidates(
-                frame,
-                trade_date,
-                strategy_parameters,
-                candidate_count,
-            )
+            prepared = (prepared_pool_map or {}).get(trade_date)
+            if prepared is not None:
+                codes = cb_backtest.build_candidate_codes(
+                    prepared,
+                    strategy_parameters=strategy_parameters,
+                    candidate_count=candidate_count,
+                )
+                candidate_code_map[trade_date] = codes[: max(1, candidate_count)]
+                continue
+            candidate = cb_backtest.build_candidates(frame, trade_date, strategy_parameters, candidate_count)
             if candidate is None or getattr(candidate, "empty", True):
                 candidate_code_map[trade_date] = []
                 continue
@@ -3182,6 +3775,16 @@ class CbQuantService:
             codes = candidate["bond_code"].astype(str).tolist()
             candidate_code_map[trade_date] = codes[: max(1, candidate_count)]
         return candidate_code_map
+
+    def _prepare_candidate_pool_map(
+        self,
+        *,
+        dataset: list[tuple[str, Any]],
+    ) -> dict[str, cb_backtest.PreparedCandidatePool]:
+        prepared: dict[str, cb_backtest.PreparedCandidatePool] = {}
+        for trade_date, frame in dataset:
+            prepared[trade_date] = cb_backtest.prepare_candidate_pool(frame, trade_date=trade_date)
+        return prepared
 
     def _run_backtest_from_candidate_map(
         self,
@@ -3218,6 +3821,7 @@ class CbQuantService:
         end_date: date | None,
         setting: dict[str, Any],
         window_dataset_map: dict[WindowName, list[tuple[str, Any]]] | None = None,
+        prepared_pool_map: dict[str, cb_backtest.PreparedCandidatePool] | None = None,
         task_config: BacktestTaskConfig,
     ) -> StrategyOptimizeResultRow:
         """评估单个参数组合在多个窗口下的综合表现。
@@ -3246,22 +3850,17 @@ class CbQuantService:
         # 把通用 setting 转成 cb_backtest 真正用于筛债的 cfg。
         # 后面 `build_candidates(...)` 会直接使用这个 cfg。
         strategy_parameters = cb_backtest.build_strategy_parameters(setting)
-        base_dataset: list[tuple[str, Any]] = []
-        if window_dataset_map is not None:
-            # 当调用方已经提前准备好多个窗口切片时，这里优先挑“长度最大”的一份数据集，
-            # 用来一次性预计算候选池，避免每个窗口都重复 build_candidates。
-            for window_name in windows:
-                candidate_dataset = window_dataset_map.get(window_name) or []
-                if len(candidate_dataset) > len(base_dataset):
-                    base_dataset = candidate_dataset
-        if not base_dataset:
-            # 如果没有传入预切片，就退回到整份 dataset 自己做候选池预计算。
-            base_dataset = dataset
+        base_dataset = self._resolve_base_dataset_for_windows(
+            dataset=dataset,
+            windows=windows,
+            window_dataset_map=window_dataset_map,
+        )
         # 候选池基于“可用范围最大的一份数据集”预计算一次，避免多窗口重复生成。
         candidate_code_map = self._build_candidate_code_map(
             dataset=base_dataset,
             strategy_parameters=strategy_parameters,
             candidate_count=candidate_count,
+            prepared_pool_map=prepared_pool_map or self._prepare_candidate_pool_map(dataset=base_dataset),
         )
 
         all_metrics: list[dict[str, float]] = []
@@ -3573,6 +4172,8 @@ class CbQuantService:
                 # 这样从第二个交易日起，收益率才有明确的“昨收 -> 今收”基准。
                 if candidate is not None and not candidate.empty:
                     for _, row in candidate.head(max_hold_count).iterrows():
+                        if not self._is_tradeable_market_row(row):
+                            continue
                         price = self._to_float(row.get("close_price"), 0.0)
                         if price <= 0:
                             continue
@@ -3644,6 +4245,9 @@ class CbQuantService:
                     sell_list.append(item)
                     continue
                 row = df_all.loc[code]
+                if not self._is_tradeable_market_row(row):
+                    keep_list.append(item)
+                    continue
                 cur_price = self._to_float(row.get("close_price"), self._to_float(item.get("last_price"), 0.0))
                 is_redeem_triggered = bool(row.get("is_redeem_triggered", False))
                 if is_redeem_triggered:
@@ -3684,6 +4288,8 @@ class CbQuantService:
                         break
                     code = str(row.get("bond_code", ""))
                     if code in existing_codes:
+                        continue
+                    if not self._is_tradeable_market_row(row):
                         continue
                     price = self._to_float(row.get("close_price"), 0.0)
                     if price <= 0:
@@ -4148,6 +4754,16 @@ class CbQuantService:
         if stop_loss_pct is not None and pnl_pct <= -self._to_float(stop_loss_pct, 0.0):
             return True
         return False
+
+    def _is_tradeable_market_row(self, row: Any) -> bool:
+        close_price = self._to_float(getattr(row, "get", lambda *_args, **_kwargs: 0.0)("close_price"), 0.0)
+        if close_price <= 0:
+            return False
+        if getattr(row, "get", None) is not None and "is_tradeable" in getattr(row, "index", []):
+            return bool(row.get("is_tradeable", False))
+        volume = self._to_float(getattr(row, "get", lambda *_args, **_kwargs: 0.0)("volume_hand"), 0.0)
+        amount = self._to_float(getattr(row, "get", lambda *_args, **_kwargs: 0.0)("turnover_amount_wan"), 0.0)
+        return volume > 0 or amount > 0
 
     def _resolve_setting_for_combo(self, *, combo_id: str, template_name: str) -> dict[str, Any]:
         template_id = ""
@@ -4927,10 +5543,22 @@ class CbQuantService:
     def _load_optimize_state(
         self,
     ) -> tuple[
+        list[StrategyOptimizeBatchRow],
         list[StrategyOptimizeTaskRow],
         dict[str, list[StrategyOptimizeResultRow]],
         dict[str, list[StrategyTopBondRow]],
+        dict[str, list[StrategyOptimizeShardRow]],
+        dict[str, dict[str, list[StrategyOptimizeResultRow]]],
     ]:
+        batches: list[StrategyOptimizeBatchRow] = []
+        for payload in self._store.load_optimize_batches():
+            try:
+                row = StrategyOptimizeBatchRow.model_validate(payload)
+            except Exception:
+                continue
+            batches.append(row)
+        batches.sort(key=lambda item: (item.created_at, item.batch_id), reverse=True)
+
         tasks: list[StrategyOptimizeTaskRow] = []
         for payload in self._store.load_optimize_tasks():
             try:
@@ -4969,7 +5597,33 @@ class CbQuantService:
             ordered = sorted(rows, key=lambda item: item.rank)
             top_bonds[task_id] = [row.model_copy(update={"rank": idx + 1}) for idx, row in enumerate(ordered)]
 
-        return tasks, results, top_bonds
+        shards: dict[str, list[StrategyOptimizeShardRow]] = {}
+        for payload in self._store.load_optimize_shards():
+            try:
+                row = StrategyOptimizeShardRow.model_validate(payload)
+            except Exception:
+                continue
+            shards.setdefault(row.task_id, []).append(row)
+        for task_id, rows in shards.items():
+            shards[task_id] = sorted(rows, key=lambda item: (item.stage, item.sequence, item.shard_id))
+
+        shard_results: dict[str, dict[str, list[StrategyOptimizeResultRow]]] = {}
+        for item in self._store.load_optimize_shard_result_rows():
+            task_id = str(item.get("task_id") or "")
+            shard_id = str(item.get("shard_id") or "")
+            payload = item.get("row") or {}
+            if not task_id or not shard_id:
+                continue
+            try:
+                row = StrategyOptimizeResultRow.model_validate(payload)
+            except Exception:
+                continue
+            shard_results.setdefault(task_id, {}).setdefault(shard_id, []).append(row)
+        for task_id, shard_map in shard_results.items():
+            for shard_id, rows in shard_map.items():
+                shard_map[shard_id] = self._rank_optimize_rows(rows)
+
+        return batches, tasks, results, top_bonds, shards, shard_results
 
     def _mark_unfinished_jobs_as_failed_after_restart(self) -> None:
         stale: list[tuple[BacktestJobRow, dict[str, Any]]] = []
@@ -4995,6 +5649,7 @@ class CbQuantService:
 
     def _mark_unfinished_optimize_tasks_as_failed_after_restart(self) -> None:
         stale: list[StrategyOptimizeTaskRow] = []
+        stale_shards: list[StrategyOptimizeShardRow] = []
         with self._lock:
             updated_rows: list[StrategyOptimizeTaskRow] = []
             for row in self._optimize_tasks:
@@ -5013,10 +5668,32 @@ class CbQuantService:
                 updated_rows.append(recovered)
                 stale.append(recovered)
             self._optimize_tasks = updated_rows
+            updated_shards: dict[str, list[StrategyOptimizeShardRow]] = {}
+            for task_id, rows in self._optimize_shards.items():
+                next_rows: list[StrategyOptimizeShardRow] = []
+                for row in rows:
+                    if row.status not in {"queued", "running"}:
+                        next_rows.append(row)
+                        continue
+                    recovered = row.model_copy(
+                        update={
+                            "status": "failed",
+                            "progress": row.progress if row.progress > 0 else 1,
+                            "eta": "--",
+                            "finished_at": _now_readable(),
+                            "message": "interrupted-after-restart",
+                        }
+                    )
+                    next_rows.append(recovered)
+                    stale_shards.append(recovered)
+                updated_shards[task_id] = next_rows
+            self._optimize_shards = updated_shards
 
         for row in stale:
             self._store.upsert_optimize_task(row=row.model_dump())
             self._sync_optimize_task_as_backtest_job(row)
+        for row in stale_shards:
+            self._store.upsert_optimize_shard(row=row.model_dump())
 
     def _is_job_cancel_requested(self, job_id: str) -> bool:
         with self._lock:

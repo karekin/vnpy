@@ -15,7 +15,9 @@ from vnpy.web.contracts.cb_quant import (
     CandidateRow,
     JobStatus,
     StrategyParamSpaceRow,
+    StrategyOptimizeBatchRow,
     StrategyOptimizeResultRow,
+    StrategyOptimizeShardRow,
     StrategyOptimizeTaskAnalysisResponse,
     StrategyOptimizeTaskCreateRequest,
     StrategyTemplateConfigRequest,
@@ -29,11 +31,17 @@ from vnpy.web.services.cb_quant_service import CbQuantService
 class _DummyStore:
     def __init__(self) -> None:
         self.saved: list[dict[str, Any]] = []
+        self.saved_optimize_batches: list[dict[str, Any]] = []
         self.saved_optimize: list[dict[str, Any]] = []
+        self.saved_shards: list[dict[str, Any]] = []
+        self.saved_shard_results: list[dict[str, Any]] = []
         self.saved_templates: list[dict[str, Any]] = []
         self.replaced_leaderboard: list[dict[str, Any]] = []
+        self.replaced_optimize_results: list[dict[str, Any]] = []
+        self.replaced_optimize_top_bonds: list[dict[str, Any]] = []
         self.deleted_job_ids: list[str] = []
         self.deleted_optimize_task_ids: list[str] = []
+        self.deleted_optimize_analysis_snapshot_ids: list[str] = []
         self.optimize_task_analysis_snapshot: dict[str, Any] | None = None
 
     def upsert_job(self, *, row: dict[str, Any], context: dict[str, Any]) -> None:
@@ -41,6 +49,50 @@ class _DummyStore:
 
     def upsert_optimize_task(self, *, row: dict[str, Any]) -> None:
         self.saved_optimize.append(row)
+
+    def load_optimize_batches(self) -> list[dict[str, Any]]:
+        return list(self.saved_optimize_batches)
+
+    def upsert_optimize_batch(self, *, row: dict[str, Any]) -> None:
+        self.saved_optimize_batches = [item for item in self.saved_optimize_batches if item.get("batch_id") != row.get("batch_id")]
+        self.saved_optimize_batches.append(row)
+
+    def delete_optimize_batch(self, batch_id: str) -> None:
+        self.saved_optimize_batches = [item for item in self.saved_optimize_batches if item.get("batch_id") != batch_id]
+
+    def load_optimize_shards(self) -> list[dict[str, Any]]:
+        return []
+
+    def load_optimize_shard_result_rows(self) -> list[dict[str, Any]]:
+        return list(self.saved_shard_results)
+
+    def upsert_optimize_shard(self, *, row: dict[str, Any]) -> None:
+        self.saved_shards.append(row)
+
+    def replace_optimize_shards(self, *, task_id: str, rows: list[dict[str, Any]]) -> None:
+        self.saved_shards = [row for row in self.saved_shards if row.get("task_id") != task_id]
+        self.saved_shards.extend(rows)
+
+    def replace_optimize_shard_result_rows(self, *, task_id: str, shard_id: str, rows: list[dict[str, Any]]) -> None:
+        self.saved_shard_results = [
+            row
+            for row in self.saved_shard_results
+            if row.get("task_id") != task_id or row.get("shard_id") != shard_id
+        ]
+        self.saved_shard_results.extend({"task_id": task_id, "shard_id": shard_id, "row": row} for row in rows)
+
+    def replace_optimize_result_rows(self, *, task_id: str, rows: list[dict[str, Any]]) -> None:
+        self.replaced_optimize_results = [row for row in self.replaced_optimize_results if row.get("task_id") != task_id]
+        self.replaced_optimize_results.extend({"task_id": task_id, **row} for row in rows)
+
+    def replace_optimize_top_bond_rows(self, *, task_id: str, rows: list[dict[str, Any]]) -> None:
+        self.replaced_optimize_top_bonds = [
+            row for row in self.replaced_optimize_top_bonds if row.get("task_id") != task_id
+        ]
+        self.replaced_optimize_top_bonds.extend({"task_id": task_id, **row} for row in rows)
+
+    def delete_optimize_task_analysis_snapshot(self, task_id: str) -> None:
+        self.deleted_optimize_analysis_snapshot_ids.append(task_id)
 
     def get_job_context(self, job_id: str) -> dict[str, Any] | None:
         return None
@@ -66,10 +118,10 @@ class _DummyStore:
 
 class _DummyExecutor:
     def __init__(self) -> None:
-        self.submitted: list[tuple[Any, tuple[Any, ...]]] = []
+        self.submitted: list[tuple[Any, tuple[Any, ...], dict[str, Any]]] = []
 
-    def submit(self, func: Any, *args: Any) -> None:
-        self.submitted.append((func, args))
+    def submit(self, func: Any, *args: Any, **kwargs: Any) -> None:
+        self.submitted.append((func, args, kwargs))
 
 
 class _DummyBacktestService:
@@ -119,14 +171,20 @@ def _build_service() -> CbQuantService:
     service._template_seq = 1
     service._opt_task_seq = 0
     service._optimize_tasks = []
+    service._optimize_batches = []
     service._optimize_results = {}
     service._optimize_top_bonds = {}
+    service._optimize_shards = {}
+    service._optimize_shard_results = {}
     service._optimize_analysis_cache = {}
     service._optimize_ai_cache = {}
     service._optimize_ai_compare_cache = {}
     service._backtest_service = _DummyBacktestService()
     service._store = _DummyStore()
-    service._executor = _DummyExecutor()
+    service._job_executor = _DummyExecutor()
+    service._optimize_executor = _DummyExecutor()
+    service._optimize_shard_executor = _DummyExecutor()
+    service._executor = service._job_executor
     return service
 
 
@@ -273,7 +331,15 @@ class TestOptimizeSamplingHelpers:
         monkeypatch.setenv("CBQ_OPT_STAGE1_THRESHOLD", "500")
         assert service._should_enable_stage1_screening(total=600, windows=["full", "3y", "1y"]) is True
         assert service._should_enable_stage1_screening(total=400, windows=["full", "3y", "1y"]) is False
+        assert service._should_enable_stage1_screening(total=600, windows=["full"]) is True
+
+    def test_should_enable_stage1_screening_should_allow_legacy_multi_window_guard(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        service = _build_service()
+        monkeypatch.setenv("CBQ_OPT_STAGE1_THRESHOLD", "500")
+        monkeypatch.setenv("CBQ_OPT_STAGE1_MIN_WINDOWS", "2")
+
         assert service._should_enable_stage1_screening(total=600, windows=["full"]) is False
+        assert service._should_enable_stage1_screening(total=600, windows=["full", "1y"]) is True
 
     def test_normalize_template_config_should_preserve_dblow_and_normalize_legacy_typo(self) -> None:
         service = _build_service()
@@ -449,6 +515,7 @@ class TestOptimizeAnalysisDataIntegrity:
         )
         task = StrategyOptimizeTaskRow(
             task_id="OPT-20260308-0025",
+            batch_id="OPB-202603102200",
             template_id="TPL-001",
             template_name="实盘模板",
             status="finished",
@@ -627,6 +694,39 @@ class TestOptimizeRestartRecovery:
         assert statuses["OPT-20260226-0002"] == "finished"
 
 
+class TestOptimizeTaskListFiltering:
+    def test_list_optimize_tasks_should_filter_active_before_paging(self) -> None:
+        service = _build_service()
+        service._optimize_tasks = [
+            StrategyOptimizeTaskRow(
+                task_id=f"OPT-20260309-{index:04d}",
+                template_id="TPL-001",
+                template_name="实盘模板",
+                status=status,
+                progress=0 if status == "queued" else 50,
+                total_combinations=100,
+                evaluated_combinations=0 if status == "queued" else 50,
+                windows=["1y"],
+                start_date=None,
+                end_date=None,
+                eta="--",
+                message="",
+                created_at=f"2026-03-09 10:{index:02d}",
+                started_at=None,
+                finished_at=None,
+            )
+            for index, status in enumerate(
+                ["queued", "finished", "running", "failed", "queued", "running", "finished"],
+                start=1,
+            )
+        ]
+
+        payload = service.list_optimize_tasks(template_id="all", status="active", page=1, page_size=2)
+
+        assert payload.total == 4
+        assert [item.task_id for item in payload.items] == ["OPT-20260309-0001", "OPT-20260309-0003"]
+
+
 class TestBacktestJobDeletion:
     def test_batch_delete_backtest_jobs_should_remove_terminal_job_and_skip_missing_or_running(self) -> None:
         service = _build_service()
@@ -687,6 +787,7 @@ class TestBacktestJobDeletion:
         service = _build_service()
         task = StrategyOptimizeTaskRow(
             task_id="OPT-20260308-0025",
+            batch_id="OPB-202603102200",
             template_id="TPL-001",
             template_name="实盘模板",
             status="finished",
@@ -730,6 +831,23 @@ class TestBacktestJobDeletion:
             }
         }
         service._optimize_tasks = [task]
+        service._optimize_batches = [
+            StrategyOptimizeBatchRow(
+                batch_id=task.batch_id or "OPB-202603102200",
+                status="finished",
+                task_count=1,
+                queued_tasks=0,
+                running_tasks=0,
+                finished_tasks=1,
+                failed_tasks=0,
+                total_combinations=32,
+                evaluated_combinations=32,
+                created_at=task.created_at,
+                started_at=task.created_at,
+                finished_at="2026-03-08 10:10",
+                message="done",
+            )
+        ]
         service._optimize_results = {
             task.task_id: [
                 StrategyOptimizeResultRow(
@@ -751,6 +869,50 @@ class TestBacktestJobDeletion:
             ]
         }
         service._optimize_top_bonds = {task.task_id: []}
+        service._optimize_shards = {
+            task.task_id: [
+                StrategyOptimizeShardRow(
+                    shard_id=f"{task.task_id}-full-0001",
+                    task_id=task.task_id,
+                    stage="full",
+                    sequence=1,
+                    status="finished",
+                    combo_start=1,
+                    combo_end=32,
+                    combo_ids=[],
+                    total_combinations=32,
+                    evaluated_combinations=32,
+                    progress=100,
+                    eta="done",
+                    message="ok",
+                    created_at="2026-03-08 10:00",
+                    started_at="2026-03-08 10:00",
+                    finished_at="2026-03-08 10:10",
+                )
+            ]
+        }
+        service._optimize_shard_results = {
+            task.task_id: {
+                f"{task.task_id}-full-0001": [
+                    StrategyOptimizeResultRow(
+                        rank=1,
+                        task_id=task.task_id,
+                        template_id=task.template_id,
+                        template_name=task.template_name,
+                        combo_id="CMB-000040",
+                        robust_score=100.0,
+                        cagr=0.33,
+                        mdd=0.05,
+                        calmar=6.6,
+                        win_rate=60.0,
+                        turnover=1.2,
+                        recent_1y=0.33,
+                        total_return_pct=33.67,
+                        params={"price_benchmark": 115.0},
+                    )
+                ]
+            }
+        }
         service._optimize_analysis_cache = {(task.task_id, "CMB-000040", 100.0, "v2:finished:32/32"): object()}
         service._optimize_ai_cache = {(task.task_id, "CMB-000040", 100.0, "kimi"): object()}
         service._optimize_ai_compare_cache = {
@@ -764,8 +926,11 @@ class TestBacktestJobDeletion:
         assert blocked == []
         assert service._jobs == []
         assert service._optimize_tasks == []
+        assert service._optimize_batches == []
         assert service._optimize_results == {}
         assert service._optimize_top_bonds == {}
+        assert service._optimize_shards == {}
+        assert service._optimize_shard_results == {}
         assert service._optimize_analysis_cache == {}
         assert service._optimize_ai_cache == {}
         assert service._optimize_ai_compare_cache == {}
@@ -781,7 +946,7 @@ class TestOptimizeTaskSubmit:
             def submit(self, *_args: Any, **_kwargs: Any) -> None:
                 raise RuntimeError("executor closed")
 
-        service._executor = _FailingExecutor()
+        service._optimize_executor = _FailingExecutor()
         request = StrategyOptimizeTaskCreateRequest(
             template_id="TPL-001",
             windows=["1y"],
@@ -795,6 +960,235 @@ class TestOptimizeTaskSubmit:
         assert payload is not None
         assert payload.task.status == "failed"
         assert "提交执行失败" in payload.message
+
+    def test_create_optimize_task_should_submit_to_optimize_executor(self) -> None:
+        service = _build_service()
+        request = StrategyOptimizeTaskCreateRequest(
+            template_id="TPL-001",
+            windows=["1y"],
+            max_combinations=1,
+            top_n=5,
+            current_top_n=5,
+        )
+
+        payload = service.create_optimize_task(request)
+
+        assert payload is not None
+        assert len(service._optimize_executor.submitted) == 1
+        assert service._optimize_executor.submitted[0][0] == service._run_optimize_task
+        assert service._job_executor.submitted == []
+
+    def test_create_optimize_task_should_refresh_batch_summary(self) -> None:
+        service = _build_service()
+        request = StrategyOptimizeTaskCreateRequest(
+            template_id="TPL-001",
+            batch_id="OPB-202603102359",
+            windows=["1y"],
+            max_combinations=3,
+            top_n=5,
+            current_top_n=5,
+        )
+
+        payload = service.create_optimize_task(request)
+
+        assert payload is not None
+        batch = service.get_optimize_batch_detail("OPB-202603102359")
+        assert batch is not None
+        assert batch.batch.batch_id == "OPB-202603102359"
+        assert batch.batch.task_count == 1
+        assert batch.batch.queued_tasks == 1
+        assert batch.tasks[0].task_id == payload.task.task_id
+
+
+class TestOptimizeTaskSharding:
+    @staticmethod
+    def _task(*, task_id: str, total_combinations: int, windows: list[str]) -> StrategyOptimizeTaskRow:
+        return StrategyOptimizeTaskRow(
+            task_id=task_id,
+            batch_id="OPB-202603102200",
+            template_id="TPL-001",
+            template_name="实盘模板",
+            status="queued",
+            progress=0,
+            total_combinations=total_combinations,
+            evaluated_combinations=0,
+            windows=windows,
+            start_date=None,
+            end_date=None,
+            eta="--",
+            message="任务已入队",
+            created_at="2026-03-10 22:00",
+        )
+
+    @staticmethod
+    def _result(*, combo_id: str, score: float) -> StrategyOptimizeResultRow:
+        return StrategyOptimizeResultRow(
+            rank=0,
+            task_id="",
+            template_id="TPL-001",
+            template_name="实盘模板",
+            combo_id=combo_id,
+            robust_score=score,
+            cagr=0.3,
+            mdd=0.1,
+            calmar=3.0,
+            win_rate=60.0,
+            turnover=1.2,
+            recent_1y=0.25,
+            total_return_pct=25.0,
+            params={"price_benchmark": 110.0},
+        )
+
+    def test_run_optimize_task_should_split_full_scan_into_shards_and_finalize(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        service = _build_service()
+        task = self._task(task_id="OPT-20260310-0001", total_combinations=450, windows=["1y"])
+        service._optimize_tasks = [task]
+        service._optimize_results = {task.task_id: []}
+        service._optimize_top_bonds = {task.task_id: []}
+        service._optimize_shards = {task.task_id: []}
+        monkeypatch.setenv("CBQ_OPT_SHARD_SIZE", "200")
+        monkeypatch.setattr(service._backtest_service, "load_market_data", lambda: [("2026-03-10", object())])
+        monkeypatch.setattr(
+            service,
+            "_prepare_window_dataset_map",
+            lambda **_kwargs: {"1y": [("2026-03-10", object())]},
+        )
+        monkeypatch.setattr(service, "_prepare_candidate_pool_map", lambda **_kwargs: {})
+        monkeypatch.setattr(service, "_score_current_market", lambda *_args, **_kwargs: ([], "eastmoney.mock"))
+        monkeypatch.setattr(service, "_persist_optimize_task_best_analysis_snapshot", lambda **_kwargs: None)
+        captured: dict[str, list[int]] = {}
+
+        def fake_run_stage(**kwargs: Any) -> tuple[list[StrategyOptimizeResultRow], int, int]:
+            shards = kwargs["shards"]
+            captured[kwargs["stage"]] = [int(item.total_combinations) for item in shards]
+            for shard in shards:
+                service._update_optimize_shard(
+                    shard.shard_id,
+                    status="finished",
+                    progress=100,
+                    evaluated_combinations=shard.total_combinations,
+                    finished_at="2026-03-10 22:10",
+                    message="ok",
+                )
+            return ([self._result(combo_id="CMB-000321", score=99.0)], kwargs["total_stage_combinations"], 0)
+
+        monkeypatch.setattr(service, "_run_optimize_shard_stage", fake_run_stage)
+
+        service._run_optimize_task(task.task_id, top_n=5, current_top_n=5, start_date=None, end_date=None, task_config=task.task_config)
+
+        updated = service._get_optimize_task(task.task_id)
+        assert updated is not None
+        assert captured["full"] == [200, 200, 50]
+        assert updated.status == "finished"
+        assert updated.shard_count == 3
+        assert updated.finished_shards == 3
+        assert service._optimize_results[task.task_id][0].combo_id == "CMB-000321"
+
+    def test_run_optimize_task_should_create_stage1_and_stage2_shards_for_single_window(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        service = _build_service()
+        task = self._task(task_id="OPT-20260310-0002", total_combinations=600, windows=["1y"])
+        service._optimize_tasks = [task]
+        service._optimize_results = {task.task_id: []}
+        service._optimize_top_bonds = {task.task_id: []}
+        service._optimize_shards = {task.task_id: []}
+        monkeypatch.setenv("CBQ_OPT_SHARD_SIZE", "200")
+        monkeypatch.setattr(service._backtest_service, "load_market_data", lambda: [("2026-03-10", object())])
+        monkeypatch.setattr(
+            service,
+            "_prepare_window_dataset_map",
+            lambda **_kwargs: {"1y": [("2026-03-10", object())]},
+        )
+        monkeypatch.setattr(service, "_prepare_candidate_pool_map", lambda **_kwargs: {})
+        monkeypatch.setattr(service, "_score_current_market", lambda *_args, **_kwargs: ([], "eastmoney.mock"))
+        monkeypatch.setattr(service, "_persist_optimize_task_best_analysis_snapshot", lambda **_kwargs: None)
+        stages: dict[str, list[int]] = {}
+
+        def fake_run_stage(**kwargs: Any) -> tuple[list[StrategyOptimizeResultRow], int, int]:
+            shards = kwargs["shards"]
+            stages[kwargs["stage"]] = [int(item.total_combinations) for item in shards]
+            for shard in shards:
+                service._update_optimize_shard(
+                    shard.shard_id,
+                    status="finished",
+                    progress=100,
+                    evaluated_combinations=shard.total_combinations,
+                    finished_at="2026-03-10 22:20",
+                    message="ok",
+                )
+            if kwargs["stage"] == "stage1":
+                return (
+                    [
+                        self._result(combo_id="CMB-000005", score=95.0),
+                        self._result(combo_id="CMB-000125", score=96.0),
+                        self._result(combo_id="CMB-000399", score=97.0),
+                    ],
+                    kwargs["total_stage_combinations"],
+                    0,
+                )
+            return ([self._result(combo_id="CMB-000399", score=98.0)], kwargs["total_stage_combinations"], 0)
+
+        monkeypatch.setattr(service, "_run_optimize_shard_stage", fake_run_stage)
+
+        service._run_optimize_task(task.task_id, top_n=5, current_top_n=5, start_date=None, end_date=None, task_config=task.task_config)
+
+        updated = service._get_optimize_task(task.task_id)
+        assert updated is not None
+        assert stages["stage1"] == [200, 200]
+        assert stages["stage2"] == [3]
+        assert updated.status == "finished"
+        assert updated.finished_shards == 3
+        assert service._optimize_results[task.task_id][0].combo_id == "CMB-000399"
+
+    def test_refresh_optimize_task_from_shards_should_roll_up_running_progress_and_eta(self) -> None:
+        service = _build_service()
+        task = self._task(task_id="OPT-20260311-0543", total_combinations=180, windows=["1y"])
+        running_task = task.model_copy(
+            update={
+                "status": "running",
+                "progress": 3,
+                "eta": "loading",
+                "message": "正在加载历史快照并初始化参数空间（sharded）",
+            }
+        )
+        service._optimize_tasks = [running_task]
+        service._optimize_shards = {
+            task.task_id: [
+                StrategyOptimizeShardRow(
+                    shard_id=f"{task.task_id}-full-0001",
+                    task_id=task.task_id,
+                    stage="full",
+                    sequence=1,
+                    status="running",
+                    combo_start=1,
+                    combo_end=180,
+                    total_combinations=180,
+                    evaluated_combinations=36,
+                    result_count=4,
+                    top_combo_id="CMB-000036",
+                    progress=20,
+                    eta="9m",
+                    message="分片已评估 36/180",
+                    created_at="2026-03-11 00:25",
+                    started_at="2026-03-11 00:25",
+                    finished_at=None,
+                )
+            ]
+        }
+
+        updated = service._refresh_optimize_task_from_shards(task.task_id)
+
+        assert updated is not None
+        assert updated.progress > 3
+        assert updated.eta == "9m"
+        assert updated.evaluated_combinations == 36
+        assert "全量评估" in updated.message
+        assert updated.running_shards == 1
 
 
 class TestOptimizeTaskAnalysisSnapshot:
