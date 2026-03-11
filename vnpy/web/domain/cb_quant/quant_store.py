@@ -468,6 +468,22 @@ class CbQuantStore:
                 )
             conn.commit()
 
+    def delete_optimize_shard_result_rows(self, *, task_id: str, shard_id: str | None = None) -> None:
+        if not task_id:
+            return
+        with self._lock, self._connect() as conn:
+            if shard_id:
+                conn.execute(
+                    "DELETE FROM cb_optimize_shard_result WHERE task_id = ? AND shard_id = ?",
+                    (task_id, shard_id),
+                )
+            else:
+                conn.execute(
+                    "DELETE FROM cb_optimize_shard_result WHERE task_id = ?",
+                    (task_id,),
+                )
+            conn.commit()
+
     def load_optimize_result_rows(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         with self._connect() as conn:

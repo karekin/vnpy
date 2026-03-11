@@ -60,7 +60,8 @@ def main() -> None:
 
     host = os.getenv("VNPY_WEB_HOST", "0.0.0.0")
     port = int(os.getenv("VNPY_WEB_PORT", "8000"))
-    uvicorn.run("vnpy.web.app:app", host=host, port=port, reload=True)
+    reload_enabled = os.getenv("VNPY_WEB_RELOAD", "").strip().lower() in {"1", "true", "yes", "y", "on"}
+    uvicorn.run("vnpy.web.app:app", host=host, port=port, reload=reload_enabled)
 
 
 if __name__ == "__main__":

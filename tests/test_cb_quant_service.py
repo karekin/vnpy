@@ -81,6 +81,16 @@ class _DummyStore:
         ]
         self.saved_shard_results.extend({"task_id": task_id, "shard_id": shard_id, "row": row} for row in rows)
 
+    def delete_optimize_shard_result_rows(self, *, task_id: str, shard_id: str | None = None) -> None:
+        if shard_id:
+            self.saved_shard_results = [
+                row
+                for row in self.saved_shard_results
+                if row.get("task_id") != task_id or row.get("shard_id") != shard_id
+            ]
+            return
+        self.saved_shard_results = [row for row in self.saved_shard_results if row.get("task_id") != task_id]
+
     def replace_optimize_result_rows(self, *, task_id: str, rows: list[dict[str, Any]]) -> None:
         self.replaced_optimize_results = [row for row in self.replaced_optimize_results if row.get("task_id") != task_id]
         self.replaced_optimize_results.extend({"task_id": task_id, **row} for row in rows)
@@ -646,11 +656,12 @@ class TestWindowHelpers:
 
 
 class TestOptimizeRestartRecovery:
-    def test_mark_unfinished_optimize_tasks_as_failed_after_restart(self) -> None:
+    def test_recover_unfinished_optimize_tasks_after_restart_should_requeue_and_resubmit(self) -> None:
         service = _build_service()
         service._optimize_tasks = [
             StrategyOptimizeTaskRow(
                 task_id="OPT-20260226-0001",
+                batch_id="OPB-202602260000",
                 template_id="TPL-001",
                 template_name="实盘模板",
                 status="queued",
@@ -665,9 +676,12 @@ class TestOptimizeRestartRecovery:
                 created_at="2026-02-26 00:00",
                 started_at=None,
                 finished_at=None,
+                top_n=20,
+                current_top_n=20,
             ),
             StrategyOptimizeTaskRow(
                 task_id="OPT-20260226-0002",
+                batch_id="OPB-202602260001",
                 template_id="TPL-001",
                 template_name="实盘模板",
                 status="finished",
@@ -682,16 +696,19 @@ class TestOptimizeRestartRecovery:
                 created_at="2026-02-26 00:01",
                 started_at="2026-02-26 00:01",
                 finished_at="2026-02-26 00:10",
+                top_n=20,
+                current_top_n=20,
             ),
         ]
         service._optimize_results = {}
         service._optimize_top_bonds = {}
-
-        service._mark_unfinished_optimize_tasks_as_failed_after_restart()
+        service._recover_unfinished_optimize_tasks_after_restart()
 
         statuses = {row.task_id: row.status for row in service._optimize_tasks}
-        assert statuses["OPT-20260226-0001"] == "failed"
+        assert statuses["OPT-20260226-0001"] == "queued"
         assert statuses["OPT-20260226-0002"] == "finished"
+        assert service._optimize_executor.submitted[0][0] == service._run_optimize_task
+        assert service._optimize_executor.submitted[0][1][0] == "OPT-20260226-0001"
 
 
 class TestOptimizeTaskListFiltering:
@@ -1081,10 +1098,10 @@ class TestOptimizeTaskSharding:
 
         updated = service._get_optimize_task(task.task_id)
         assert updated is not None
-        assert captured["full"] == [200, 200, 50]
+        assert captured["full"] == [113, 113, 113, 111]
         assert updated.status == "finished"
-        assert updated.shard_count == 3
-        assert updated.finished_shards == 3
+        assert updated.shard_count == 4
+        assert updated.finished_shards == 4
         assert service._optimize_results[task.task_id][0].combo_id == "CMB-000321"
 
     def test_run_optimize_task_should_create_stage1_and_stage2_shards_for_single_window(
@@ -1139,11 +1156,18 @@ class TestOptimizeTaskSharding:
 
         updated = service._get_optimize_task(task.task_id)
         assert updated is not None
-        assert stages["stage1"] == [200, 200]
+        assert stages["stage1"] == [100, 100, 100, 100]
         assert stages["stage2"] == [3]
         assert updated.status == "finished"
-        assert updated.finished_shards == 3
+        assert updated.finished_shards == 5
         assert service._optimize_results[task.task_id][0].combo_id == "CMB-000399"
+
+    def test_effective_optimize_shard_size_should_split_small_tasks_for_parallelism(self) -> None:
+        service = _build_service()
+
+        assert service._effective_optimize_shard_size(total=180) == 45
+        assert service._effective_optimize_shard_size(total=150) == 38
+        assert service._effective_optimize_shard_size(total=3000) == 200
 
     def test_refresh_optimize_task_from_shards_should_roll_up_running_progress_and_eta(self) -> None:
         service = _build_service()

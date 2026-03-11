@@ -187,7 +187,7 @@ class CbQuantService:
         self._jobs, self._job_context = self._load_jobs_and_context()
         self._seq = self._derive_job_seq(self._jobs)
         self._leaderboard, self._leaderboard_business_dates = self._load_leaderboard_rows()
-        self._mark_unfinished_jobs_as_failed_after_restart()
+        self._recover_unfinished_jobs_after_restart()
         self._compare: list[BacktestCompareRow] = []
         self._refresh_compare_rows()
 
@@ -202,7 +202,7 @@ class CbQuantService:
             self._load_optimize_state()
         )
         self._opt_task_seq = self._derive_opt_task_seq(self._optimize_tasks)
-        self._mark_unfinished_optimize_tasks_as_failed_after_restart()
+        self._recover_unfinished_optimize_tasks_after_restart()
         self._refresh_all_optimize_task_shard_counters()
         self._refresh_all_optimize_batches()
         self._optimize_analysis_cache: dict[tuple[str, str, float, str], StrategyOptimizeTaskAnalysisResponse] = {}
@@ -912,6 +912,8 @@ class CbQuantService:
                 running_shards=0,
                 finished_shards=0,
                 failed_shards=0,
+                top_n=request.top_n,
+                current_top_n=request.current_top_n,
                 task_config=task_config,
             )
             self._optimize_tasks = [task, *self._optimize_tasks]
@@ -3267,6 +3269,18 @@ class CbQuantService:
     def _optimize_shard_size(self) -> int:
         return self._env_int("CBQ_OPT_SHARD_SIZE", 200, low=20, high=100_000)
 
+    def _optimize_min_shards_per_task(self) -> int:
+        return self._env_int("CBQ_OPT_MIN_SHARDS_PER_TASK", 4, low=1, high=64)
+
+    def _effective_optimize_shard_size(self, *, total: int) -> int:
+        safe_total = max(1, int(total))
+        base_size = self._optimize_shard_size()
+        min_shards = min(safe_total, self._optimize_min_shards_per_task())
+        if min_shards <= 1:
+            return base_size
+        adaptive_size = ceil(safe_total / min_shards)
+        return max(20, min(base_size, adaptive_size))
+
     def _should_enable_stage1_screening(self, *, total: int, windows: list[WindowName]) -> bool:
         threshold = self._env_int("CBQ_OPT_STAGE1_THRESHOLD", 500, low=10, high=5_000_000)
         min_windows = self._env_int("CBQ_OPT_STAGE1_MIN_WINDOWS", 1, low=1, high=16)
@@ -3298,7 +3312,7 @@ class CbQuantService:
         stage: str,
         total: int,
     ) -> list[StrategyOptimizeShardRow]:
-        shard_size = self._optimize_shard_size()
+        shard_size = self._effective_optimize_shard_size(total=total)
         created_at = _now_readable()
         shards: list[StrategyOptimizeShardRow] = []
         sequence = 0
@@ -3331,7 +3345,7 @@ class CbQuantService:
         stage: str,
         combo_ids: list[str],
     ) -> list[StrategyOptimizeShardRow]:
-        shard_size = self._optimize_shard_size()
+        shard_size = self._effective_optimize_shard_size(total=len(combo_ids))
         created_at = _now_readable()
         shards: list[StrategyOptimizeShardRow] = []
         for sequence, chunk in enumerate(self._chunk_list(combo_ids, shard_size), start=1):
@@ -5625,8 +5639,9 @@ class CbQuantService:
 
         return batches, tasks, results, top_bonds, shards, shard_results
 
-    def _mark_unfinished_jobs_as_failed_after_restart(self) -> None:
+    def _recover_unfinished_jobs_after_restart(self) -> None:
         stale: list[tuple[BacktestJobRow, dict[str, Any]]] = []
+        resubmit_ids: list[str] = []
         with self._lock:
             updated_rows: list[BacktestJobRow] = []
             for row in self._jobs:
@@ -5635,21 +5650,28 @@ class CbQuantService:
                     continue
                 recovered = row.model_copy(
                     update={
-                        "status": "failed",
-                        "eta": "interrupted-after-restart",
+                        "status": "queued",
+                        "progress": 0,
+                        "eta": "--",
+                        "started_at": "",
+                        "worker": "",
                     }
                 )
                 updated_rows.append(recovered)
                 context = self._job_context.get(row.job_id, {})
                 stale.append((recovered, context))
+                resubmit_ids.append(recovered.job_id)
             self._jobs = updated_rows
 
         for row, context in stale:
             self._store.upsert_job(row=row.model_dump(), context=context)
+        for job_id in resubmit_ids:
+            self._job_executor.submit(self._run_job, job_id)
 
-    def _mark_unfinished_optimize_tasks_as_failed_after_restart(self) -> None:
+    def _recover_unfinished_optimize_tasks_after_restart(self) -> None:
         stale: list[StrategyOptimizeTaskRow] = []
         stale_shards: list[StrategyOptimizeShardRow] = []
+        resubmit_tasks: list[StrategyOptimizeTaskRow] = []
         with self._lock:
             updated_rows: list[StrategyOptimizeTaskRow] = []
             for row in self._optimize_tasks:
@@ -5658,43 +5680,73 @@ class CbQuantService:
                     continue
                 recovered = row.model_copy(
                     update={
-                        "status": "failed",
-                        "progress": row.progress if row.progress > 0 else 1,
+                        "status": "queued",
+                        "progress": 0,
+                        "evaluated_combinations": 0,
                         "eta": "--",
-                        "finished_at": _now_readable(),
-                        "message": "interrupted-after-restart",
+                        "started_at": None,
+                        "finished_at": None,
+                        "message": "requeued-after-restart",
                     }
                 )
                 updated_rows.append(recovered)
                 stale.append(recovered)
+                resubmit_tasks.append(recovered)
             self._optimize_tasks = updated_rows
             updated_shards: dict[str, list[StrategyOptimizeShardRow]] = {}
             for task_id, rows in self._optimize_shards.items():
                 next_rows: list[StrategyOptimizeShardRow] = []
                 for row in rows:
-                    if row.status not in {"queued", "running"}:
-                        next_rows.append(row)
+                    if row.status in {"queued", "running"}:
+                        recovered = row.model_copy(
+                            update={
+                                "status": "queued",
+                                "progress": 0,
+                                "evaluated_combinations": 0,
+                                "result_count": 0,
+                                "top_combo_id": None,
+                                "eta": "--",
+                                "started_at": None,
+                                "finished_at": None,
+                                "message": "requeued-after-restart",
+                            }
+                        )
+                        next_rows.append(recovered)
+                        stale_shards.append(recovered)
                         continue
-                    recovered = row.model_copy(
-                        update={
-                            "status": "failed",
-                            "progress": row.progress if row.progress > 0 else 1,
-                            "eta": "--",
-                            "finished_at": _now_readable(),
-                            "message": "interrupted-after-restart",
-                        }
-                    )
-                    next_rows.append(recovered)
-                    stale_shards.append(recovered)
+                    next_rows.append(row)
                 updated_shards[task_id] = next_rows
             self._optimize_shards = updated_shards
 
         for row in stale:
+            self._optimize_results[row.task_id] = []
+            self._optimize_top_bonds[row.task_id] = []
+            self._optimize_shard_results[row.task_id] = {}
             self._store.upsert_optimize_task(row=row.model_dump())
+            self._store.replace_optimize_result_rows(task_id=row.task_id, rows=[])
+            self._store.replace_optimize_top_bond_rows(task_id=row.task_id, rows=[])
+            self._store.delete_optimize_shard_result_rows(task_id=row.task_id)
             self._sync_optimize_task_as_backtest_job(row)
         for row in stale_shards:
             self._store.upsert_optimize_shard(row=row.model_dump())
+        for task in resubmit_tasks:
+            start_date = self._parse_iso_date(task.start_date)
+            end_date = self._parse_iso_date(task.end_date)
+            self._optimize_executor.submit(
+                self._run_optimize_task,
+                task.task_id,
+                task.top_n,
+                task.current_top_n,
+                start_date,
+                end_date,
+                self._normalize_task_config(task.task_config),
+            )
 
+    def _mark_unfinished_jobs_as_failed_after_restart(self) -> None:
+        self._recover_unfinished_jobs_after_restart()
+
+    def _mark_unfinished_optimize_tasks_as_failed_after_restart(self) -> None:
+        self._recover_unfinished_optimize_tasks_after_restart()
     def _is_job_cancel_requested(self, job_id: str) -> bool:
         with self._lock:
             context = self._job_context.get(job_id)

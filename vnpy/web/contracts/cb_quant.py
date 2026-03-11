@@ -386,6 +386,8 @@ class StrategyOptimizeTaskRow(BaseModel):
     running_shards: int = Field(default=0, ge=0)
     finished_shards: int = Field(default=0, ge=0)
     failed_shards: int = Field(default=0, ge=0)
+    top_n: int = Field(default=20, ge=1, le=200)
+    current_top_n: int = Field(default=20, ge=1, le=200)
     task_config: BacktestTaskConfig = Field(default_factory=BacktestTaskConfig)
 
 
