@@ -19,6 +19,8 @@ from vnpy.web.contracts.cb_quant import (
     TushareSyncRequest,
     TushareSyncResponse,
     TushareSyncStatusResponse,
+    StrategyOptimizeTaskBatchCreateRequest,
+    StrategyOptimizeTaskBatchCreateResponse,
     StrategyOptimizeTaskCreateRequest,
     StrategyOptimizeTaskCreateResponse,
     StrategyOptimizeBatchDetailResponse,
@@ -301,6 +303,13 @@ def create_optimize_task(
     if not created:
         raise HTTPException(status_code=404, detail=f"template not found: {request.template_id}")
     return created
+
+
+@router.post("/strategy/optimize-tasks/batch", response_model=StrategyOptimizeTaskBatchCreateResponse)
+def create_optimize_tasks_batch(
+    request: StrategyOptimizeTaskBatchCreateRequest,
+) -> StrategyOptimizeTaskBatchCreateResponse:
+    return cb_quant_service.create_optimize_tasks_batch(request)
 
 
 @router.get("/strategy/optimize-tasks", response_model=StrategyOptimizeTaskListResponse)

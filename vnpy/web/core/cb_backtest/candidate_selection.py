@@ -240,17 +240,14 @@ def _filter_prepared_candidate_pool(
     return df_filter, listing_days, days_remain, dynamic_inputs
 
 
-def _score_candidate_frame(
+def _compute_candidate_scores(
     df_filter: pd.DataFrame,
     *,
     strategy_parameters: StrategyParameters,
     listing_days: pd.Series,
     days_remain: pd.Series,
     dynamic_inputs: dict[str, pd.Series],
-) -> pd.DataFrame:
-    if df_filter.empty:
-        return df_filter
-
+) -> dict[str, Any]:
     params = strategy_parameters
     premium_score = 1 - (df_filter["conversion_premium_pct"] - params.premium_benchmark) / params.premium_benchmark
 
@@ -264,8 +261,6 @@ def _score_candidate_frame(
         1 - (params.pb_benchmark - df_filter["underlying_pb"]) / params.pb_benchmark
     ).clip(lower=params.pb_score_min, upper=1).round(2)
 
-    # 解析上市日期。无法解析的日期会变成 NaT，后续统一按缺失值处理。
-    days_elapsed = listing_days
     # 默认期权时间得分为满分 1，只有剩余时间过短时才开始扣分。
     option_score = pd.Series(1.0, index=df_filter.index)
     # 找出剩余时间低于策略基准天数的标的。
@@ -366,37 +361,79 @@ def _score_candidate_frame(
     else:
         dynamic_factor_score = pd.Series(0.0, index=df_filter.index)
 
-    # 复制一份过滤后的数据，避免对原始 DataFrame 产生链式赋值副作用。
-    df_filter = df_filter.copy()
-    # 将各个中间得分写回结果表，便于后续排查、展示和回测分析。
-    df_filter["option_score"] = option_score
-    df_filter["outstanding_amount_score"] = outstanding_amount_score
-    df_filter["pb_score"] = pb_score
-    df_filter["volatility_score"] = volatility_score
-    df_filter["market_cap_score"] = market_cap_score
-    df_filter["bond_score"] = bond_score
-    df_filter["stock_score"] = stock_score
-    df_filter["dynamic_factor_score"] = dynamic_factor_score
-    for factor_key, score_series in dynamic_scores.items():
-        df_filter[f"{factor_key}_score"] = score_series
-    df_filter["weight_score"] = weight_score
-
     # 最终候选过滤条件：
     # 1. 距离到期至少还要超过 90 天，避免临近到期的债券。
     pass_maturity = df_filter["days_to_maturity"] > 90
     # 2. 综合权重分必须大于 1，确保候选标的整体质量过线。
-    pass_weight = df_filter["weight_score"] > 1
+    pass_weight = weight_score > 1
     # 3. 债券价格不能超过候选池允许的最高价格。
     pass_price = df_filter["close_price"] <= params.max_candidate_price
-    # 三个条件同时满足，才进入最终候选池。
-    final_mask = pass_maturity & pass_weight & pass_price
+
+    return {
+        "weight_score": weight_score,
+        "dynamic_scores": dynamic_scores,
+        "dynamic_factor_score": dynamic_factor_score,
+        "option_score": option_score,
+        "outstanding_amount_score": outstanding_amount_score,
+        "pb_score": pb_score,
+        "volatility_score": volatility_score,
+        "market_cap_score": market_cap_score,
+        "bond_score": bond_score,
+        "stock_score": stock_score,
+        "final_mask": pass_maturity & pass_weight & pass_price,
+    }
+
+
+def _score_candidate_frame(
+    df_filter: pd.DataFrame,
+    *,
+    strategy_parameters: StrategyParameters,
+    listing_days: pd.Series,
+    days_remain: pd.Series,
+    dynamic_inputs: dict[str, pd.Series],
+    include_details: bool = True,
+) -> pd.DataFrame:
+    if df_filter.empty:
+        return df_filter
+
+    scores = _compute_candidate_scores(
+        df_filter,
+        strategy_parameters=strategy_parameters,
+        listing_days=listing_days,
+        days_remain=days_remain,
+        dynamic_inputs=dynamic_inputs,
+    )
+    final_mask = scores["final_mask"]
+    if not include_details:
+        ranked = pd.DataFrame(
+            {
+                "bond_code": df_filter.loc[final_mask, "bond_code"].astype(str),
+                "weight_score": scores["weight_score"].loc[final_mask],
+            }
+        )
+        return ranked.sort_values(by="weight_score", ascending=False, ignore_index=True)
+
+    # 复制一份过滤后的数据，避免对原始 DataFrame 产生链式赋值副作用。
+    df_scored = df_filter.copy()
+    # 将各个中间得分写回结果表，便于后续排查、展示和回测分析。
+    df_scored["option_score"] = scores["option_score"]
+    df_scored["outstanding_amount_score"] = scores["outstanding_amount_score"]
+    df_scored["pb_score"] = scores["pb_score"]
+    df_scored["volatility_score"] = scores["volatility_score"]
+    df_scored["market_cap_score"] = scores["market_cap_score"]
+    df_scored["bond_score"] = scores["bond_score"]
+    df_scored["stock_score"] = scores["stock_score"]
+    df_scored["dynamic_factor_score"] = scores["dynamic_factor_score"]
+    for factor_key, score_series in scores["dynamic_scores"].items():
+        df_scored[f"{factor_key}_score"] = score_series
+    df_scored["weight_score"] = scores["weight_score"]
 
     # 应用最终过滤条件，留下真正可参与排序的候选标的。
-    df_filter = df_filter.loc[final_mask]
+    df_scored = df_scored.loc[final_mask]
     # 按综合权重分从高到低排序，并重置索引，方便后续直接使用。
-    df_filter = df_filter.sort_values(by="weight_score", ascending=False, ignore_index=True)
+    df_scored = df_scored.sort_values(by="weight_score", ascending=False, ignore_index=True)
     # 返回最终筛选结果。
-    return df_filter
+    return df_scored
 
 
 def filter_multiple_factors(
@@ -437,6 +474,7 @@ def build_candidate_codes(
         listing_days=listing_days,
         days_remain=days_remain,
         dynamic_inputs=dynamic_inputs,
+        include_details=False,
     )
     if df_candidate.empty or "bond_code" not in df_candidate.columns:
         return []

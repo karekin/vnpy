@@ -1,0 +1,26 @@
+[parallel]
+job_workers = 12
+optimize_task_workers = 10
+optimize_shard_workers = 20
+optimize_eval_mode = "process"
+optimize_eval_workers = 2
+optimize_shard_size = 80
+optimize_min_shards_per_task = 8
+
+[screening]
+stage1_threshold = 500
+stage1_min_windows = 1
+stage1_ratio = 0.1
+stage1_min = 400
+stage1_max = 12000
+shortlist_multiplier = 8
+shortlist_min = 120
+shortlist_max = 3000
+
+[bundling]
+small_task_threshold = 400
+target_combinations = 1200
+max_tasks_per_bundle = 6
+
+[profiling]
+output_dir = "out/cb_quant/profiles"

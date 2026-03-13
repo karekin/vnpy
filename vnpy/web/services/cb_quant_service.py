@@ -14,11 +14,13 @@
 
 from __future__ import annotations
 
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, wait
+from contextlib import nullcontext
 from datetime import date, datetime
 from itertools import combinations, islice, product
 import json
 from math import ceil, comb, sqrt
+from multiprocessing import get_context
 import os
 from pathlib import Path
 import re
@@ -36,6 +38,7 @@ from vnpy.web.domain.cb_quant.strategy_factor_registry import (
 from vnpy.web.domain.cb_quant.quant_store import CbQuantStore
 from vnpy.web.services.cb_backtest_service import CbBacktestService
 from vnpy.web.services.cb_market_service import CbMarketService
+from vnpy.web.runtime_config import CbQuantRuntimeConfig, load_cb_quant_runtime_config
 from vnpy.web.contracts.cb_quant import (
     BacktestTaskConfig,
     BacktestCompareResponse,
@@ -64,6 +67,8 @@ from vnpy.web.contracts.cb_quant import (
     StrategyOptimizeTaskAiCompareResponse,
     StrategyOptimizeTaskAnalysisResponse,
     StrategyOptimizeTaskAiInsightResponse,
+    StrategyOptimizeTaskBatchCreateRequest,
+    StrategyOptimizeTaskBatchCreateResponse,
     StrategyOptimizeTaskCreateRequest,
     StrategyOptimizeTaskCreateResponse,
     StrategyOptimizeTaskDetailResponse,
@@ -137,6 +142,200 @@ _OPTIMIZE_STAGE_LABEL: dict[str, str] = {
     "full": "全量评估",
 }
 
+_OPTIMIZE_PROCESS_CONTEXT: dict[str, Any] = {}
+
+
+def _build_candidate_code_map_payload(
+    *,
+    dataset: list[tuple[str, Any]],
+    strategy_parameters: cb_backtest.StrategyParameters,
+    candidate_count: int,
+    prepared_pool_map: dict[str, cb_backtest.PreparedCandidatePool] | None,
+) -> dict[str, list[str]]:
+    candidate_code_map: dict[str, list[str]] = {}
+    for trade_date, frame in dataset:
+        prepared = (prepared_pool_map or {}).get(trade_date)
+        if prepared is not None:
+            codes = cb_backtest.build_candidate_codes(
+                prepared,
+                strategy_parameters=strategy_parameters,
+                candidate_count=candidate_count,
+            )
+            candidate_code_map[trade_date] = codes[: max(1, candidate_count)]
+            continue
+        candidate = cb_backtest.build_candidates(frame, trade_date, strategy_parameters, candidate_count)
+        if candidate is None or getattr(candidate, "empty", True):
+            candidate_code_map[trade_date] = []
+            continue
+        if "bond_code" not in candidate.columns:
+            raise RuntimeError(f"candidate result missing bond_code column: trade_date={trade_date}")
+        candidate_code_map[trade_date] = candidate["bond_code"].astype(str).tolist()[: max(1, candidate_count)]
+    return candidate_code_map
+
+
+def _derive_leaderboard_metrics_payload(*, stats: dict[str, Any], window_name: WindowName) -> dict[str, float]:
+    total_return_pct = CbQuantService._to_float(stats.get("total_return_pct"), 0.0)
+    max_drawdown_pct = CbQuantService._to_float(stats.get("max_drawdown_pct"), 0.0)
+    win_rate_pct = CbQuantService._to_float(stats.get("win_rate_pct"), 0.0)
+    trade_count = CbQuantService._to_float(stats.get("trade_count"), 0.0)
+    sample_days = max(1.0, CbQuantService._to_float(stats.get("sample_days"), 1.0))
+    rebalanced_days = max(1.0, CbQuantService._to_float(stats.get("rebalanced_days"), sample_days))
+
+    total_return = total_return_pct / 100.0
+    mdd = max(0.0, max_drawdown_pct / 100.0)
+    years = max(0.1, sample_days / 244.0)
+    cagr = (1 + total_return) ** (1 / years) - 1 if total_return > -0.999 else -0.999
+    calmar = cagr / mdd if mdd > 0 else max(0.0, cagr)
+    turnover = min(2.0, max(0.0, trade_count / rebalanced_days))
+    recent_1y = total_return if window_name in {"1y", "1w"} else cagr
+    robust_score = CbQuantService._calculate_robust_score(
+        cagr=cagr,
+        mdd=mdd,
+        calmar=calmar,
+        win_rate_pct=win_rate_pct,
+        turnover=turnover,
+        window_name=window_name,
+    )
+    return {
+        "cagr": round(cagr, 6),
+        "mdd": round(mdd, 6),
+        "calmar": round(calmar, 6),
+        "win_rate": round(win_rate_pct, 4),
+        "turnover": round(turnover, 6),
+        "recent_1y": round(recent_1y, 6),
+        "robust_score": robust_score,
+    }
+
+
+def _apply_task_config_to_setting_payload(
+    *,
+    setting: dict[str, Any],
+    task_config: BacktestTaskConfig | dict[str, Any] | None,
+) -> dict[str, Any]:
+    config = CbQuantService._normalize_task_config(task_config)
+    merged = dict(setting)
+    merged["initial_capital_wan"] = config.initial_capital_wan
+    merged["benchmark_name"] = config.benchmark_name
+    merged["rebalance_interval_type"] = config.rebalance_interval_type
+    merged["rebalance_interval_value"] = config.rebalance_interval_value
+    merged["max_position_pct"] = config.max_position_pct
+    merged["max_hold_count"] = config.max_hold_count
+    merged["exclude_redeem_days_below"] = config.exclude_redeem_days_below
+    merged["take_profit_pct"] = config.take_profit_pct
+    merged["stop_loss_pct"] = config.stop_loss_pct
+    merged["candidate_count"] = max(
+        int(round(CbQuantService._to_float(merged.get("candidate_count"), float(config.max_hold_count)))),
+        config.max_hold_count,
+    )
+    return merged
+
+
+def _evaluate_combo_payload(
+    *,
+    task_id: str,
+    template_id: str,
+    template_name: str,
+    dataset: list[tuple[str, Any]],
+    combo_id: str,
+    windows: list[WindowName],
+    start_date: date | None,
+    end_date: date | None,
+    setting: dict[str, Any],
+    window_dataset_map: dict[WindowName, list[tuple[str, Any]]] | None,
+    prepared_pool_map: dict[str, cb_backtest.PreparedCandidatePool] | None,
+    task_config: BacktestTaskConfig | dict[str, Any] | None,
+) -> dict[str, Any]:
+    merged_setting = _apply_task_config_to_setting_payload(setting=setting, task_config=task_config)
+    candidate_count = max(1, int(round(CbQuantService._to_float(merged_setting.get("candidate_count"), 10.0))))
+    strategy_parameters = cb_backtest.build_strategy_parameters(merged_setting)
+    base_dataset = CbQuantService._resolve_base_dataset_for_windows(
+        dataset=dataset,
+        windows=windows,
+        window_dataset_map=window_dataset_map,
+    )
+    candidate_code_map = _build_candidate_code_map_payload(
+        dataset=base_dataset,
+        strategy_parameters=strategy_parameters,
+        candidate_count=candidate_count,
+        prepared_pool_map=prepared_pool_map,
+    )
+
+    all_metrics: list[dict[str, float]] = []
+    all_returns: list[float] = []
+    for window_name in windows:
+        sliced = None if window_dataset_map is None else window_dataset_map.get(window_name)
+        if sliced is None:
+            sliced = CbBacktestService.slice_dataset(
+                dataset=dataset,
+                window_name=window_name,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        if not sliced:
+            continue
+        stats = cb_backtest.run_backtest_from_candidates(
+            dataset=sliced,
+            candidate_code_map=candidate_code_map,
+            runtime_config=cb_backtest.build_runtime_config(merged_setting),
+        )
+        stats["sample_days"] = len(sliced)
+        metrics = _derive_leaderboard_metrics_payload(stats=stats, window_name=window_name)
+        all_metrics.append(metrics)
+        all_returns.append(CbQuantService._to_float(stats.get("total_return_pct"), 0.0))
+
+    if not all_metrics:
+        raise RuntimeError("No market snapshots available for selected window")
+
+    cagr = sum(item["cagr"] for item in all_metrics) / len(all_metrics)
+    mdd = max(item["mdd"] for item in all_metrics)
+    calmar = cagr / mdd if mdd > 0 else cagr
+    win_rate = sum(item["win_rate"] for item in all_metrics) / len(all_metrics)
+    turnover = sum(item["turnover"] for item in all_metrics) / len(all_metrics)
+    recent_1y = next((item["recent_1y"] for item, w in zip(all_metrics, windows) if w in {"1y", "1w"}), cagr)
+    robust_score = sum(item["robust_score"] for item in all_metrics) / len(all_metrics)
+    total_return_pct = sum(all_returns) / len(all_returns)
+
+    row = StrategyOptimizeResultRow(
+        rank=0,
+        task_id=task_id,
+        template_id=template_id,
+        template_name=template_name,
+        combo_id=combo_id,
+        robust_score=round(robust_score, 4),
+        cagr=round(cagr, 6),
+        mdd=round(mdd, 6),
+        calmar=round(calmar, 6),
+        win_rate=round(win_rate, 4),
+        turnover=round(turnover, 6),
+        recent_1y=round(recent_1y, 6),
+        total_return_pct=round(total_return_pct, 4),
+        params=CbQuantService._serialize_setting(merged_setting),
+    )
+    return row.model_dump()
+
+
+def _init_optimize_process_context(context: dict[str, Any]) -> None:
+    global _OPTIMIZE_PROCESS_CONTEXT
+    _OPTIMIZE_PROCESS_CONTEXT = dict(context)
+
+
+def _evaluate_combo_in_process(combo_id: str, setting: dict[str, Any]) -> dict[str, Any]:
+    context = _OPTIMIZE_PROCESS_CONTEXT
+    return _evaluate_combo_payload(
+        task_id=str(context["task_id"]),
+        template_id=str(context["template_id"]),
+        template_name=str(context["template_name"]),
+        dataset=context["dataset"],
+        combo_id=combo_id,
+        windows=list(context["windows"]),
+        start_date=context.get("start_date"),
+        end_date=context.get("end_date"),
+        setting=setting,
+        window_dataset_map=context.get("window_dataset_map"),
+        prepared_pool_map=context.get("prepared_pool_map"),
+        task_config=context.get("task_config"),
+    )
+
 
 class CbQuantService:
     """CB Quant 主服务。
@@ -147,9 +346,10 @@ class CbQuantService:
     - 线程池负责执行回测和参数优化
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, recover_runtime_state: bool = True) -> None:
         """初始化全部运行态缓存，并从本地存储恢复历史状态。"""
         self._lock: Lock = Lock()
+        self._runtime_config: CbQuantRuntimeConfig = load_cb_quant_runtime_config()
         self._job_executor: ThreadPoolExecutor = ThreadPoolExecutor(
             max_workers=self._job_worker_count(),
             thread_name_prefix="cbq-job",
@@ -187,7 +387,8 @@ class CbQuantService:
         self._jobs, self._job_context = self._load_jobs_and_context()
         self._seq = self._derive_job_seq(self._jobs)
         self._leaderboard, self._leaderboard_business_dates = self._load_leaderboard_rows()
-        self._recover_unfinished_jobs_after_restart()
+        if recover_runtime_state:
+            self._recover_unfinished_jobs_after_restart()
         self._compare: list[BacktestCompareRow] = []
         self._refresh_compare_rows()
 
@@ -202,9 +403,10 @@ class CbQuantService:
             self._load_optimize_state()
         )
         self._opt_task_seq = self._derive_opt_task_seq(self._optimize_tasks)
-        self._recover_unfinished_optimize_tasks_after_restart()
-        self._refresh_all_optimize_task_shard_counters()
-        self._refresh_all_optimize_batches()
+        if recover_runtime_state:
+            self._recover_unfinished_optimize_tasks_after_restart()
+            self._refresh_all_optimize_task_shard_counters()
+            self._refresh_all_optimize_batches()
         self._optimize_analysis_cache: dict[tuple[str, str, float, str], StrategyOptimizeTaskAnalysisResponse] = {}
         self._optimize_ai_cache: dict[tuple[str, str, float, str], StrategyOptimizeTaskAiInsightResponse] = {}
         self._optimize_ai_compare_cache: dict[tuple[str, tuple[str, str], float, str], StrategyOptimizeTaskAiCompareResponse] = {}
@@ -824,147 +1026,244 @@ class CbQuantService:
         self,
         request: StrategyOptimizeTaskCreateRequest,
     ) -> StrategyOptimizeTaskCreateResponse | None:
-        """创建参数优化任务并提交到线程池。
-
-        这个方法本身只负责“准备任务”，不负责真正执行优化计算。
-
-        它做的事情主要有四步：
-        1. 根据 template_id 找到模板和参数空间配置
-        2. 计算这次任务理论上需要评估多少个参数组合
-        3. 生成一条 queued 状态的任务记录并持久化
-        4. 把真正的执行入口 `_run_optimize_task(...)` 提交给线程池
-
-        真正的计算链路在这里：
-        - `create_optimize_task(...)`
-        - `_run_optimize_task(...)`
-        - `_iter_combo_results_parallel(...)`
-        - `_evaluate_combo(...)`
-        - `_run_backtest_from_candidate_map(...)`
-
-        这条链路里几个最容易问到的问题是：
-        - 历史数据在哪查：
-          `_run_optimize_task` 里通过 `self._backtest_service.load_market_data()` 读取，
-          `CbBacktestService` 优先从 `CbHistoryStore.load_market_dataset()` 的本地快照库读取，
-          读不到时返回空数据集，由上层决定是否提示同步
-        - 配置在哪读：
-          这里的 `config = self._template_configs.get(template.id)` 读取模板配置，
-          里面包含 factor_keys 和 parameter_space，决定参数组合总数；
-          任务级临时配置来自 `request.task_config`
-        - 历史数据在哪加工成结果：
-          `_prepare_window_dataset_map(...)` 先按窗口切历史切片，
-          `_evaluate_combo(...)` 对单个组合构造候选池并按窗口回测，
-          `_run_backtest_from_candidate_map(...)` 把日级快照回放成收益、回撤、胜率等结果
-
-        所以“创建成功”只表示任务已入队，不代表优化已经开始执行或执行成功。
-        """
-        template = self._find_template(request.template_id)
-        if not template:
+        """创建参数优化任务并提交到执行队列。"""
+        batch_request = StrategyOptimizeTaskBatchCreateRequest(
+            template_ids=[request.template_id],
+            batch_id=request.batch_id,
+            windows=request.windows,
+            start_date=request.start_date,
+            end_date=request.end_date,
+            top_n=request.top_n,
+            max_combinations=request.max_combinations,
+            current_top_n=request.current_top_n,
+            task_config=request.task_config,
+        )
+        response = self.create_optimize_tasks_batch(batch_request)
+        if not response.tasks:
             return None
+        response_task = response.tasks[0]
+        return StrategyOptimizeTaskCreateResponse(task=response_task, message=response.message)
 
-        # 模板配置来自内存态/持久化恢复的 `_template_configs`。
-        # 这里决定了这次优化能枚举出哪些参数组合，是“参数空间”的源头。
-        config = self._require_template_config(template.id)
+    def create_optimize_tasks_batch(
+        self,
+        request: StrategyOptimizeTaskBatchCreateRequest,
+    ) -> StrategyOptimizeTaskBatchCreateResponse:
+        """批量创建优化任务，并把小任务合并成更少的 bundle 提交。"""
+        batch_id = str(request.batch_id or _generate_optimize_batch_id())
+        prepared = self._prepare_optimize_task_rows(request=request, batch_id=batch_id)
+        created_tasks = prepared["tasks"]
+        failed_template_ids = prepared["failed_template_ids"]
+        failed_template_names = prepared["failed_template_names"]
 
-        # windows 只是回测窗口定义，不在这里切数据；真正切片在 `_run_optimize_task`
-        # -> `_prepare_window_dataset_map` -> `CbBacktestService.slice_dataset(...)`。
+        if not created_tasks:
+            return StrategyOptimizeTaskBatchCreateResponse(
+                batch_id=batch_id,
+                created_count=0,
+                bundle_count=0,
+                tasks=[],
+                failed_template_ids=failed_template_ids,
+                failed_template_names=failed_template_names,
+                message="任务创建失败，请检查策略模板、参数空间和历史数据。",
+            )
+
+        self._persist_created_optimize_tasks(created_tasks)
+        bundle_count, submit_error = self._submit_optimize_task_bundles(created_tasks)
+        response_tasks = [self._get_optimize_task(task.task_id) or task for task in created_tasks]
+
+        if submit_error:
+            message = (
+                f"已创建 {len(response_tasks)} 个优化任务（批次 {batch_id}），"
+                f"但 bundle 提交失败：{submit_error}"
+            )
+        else:
+            message = (
+                f"已创建 {len(response_tasks)} 个优化任务（批次 {batch_id}），"
+                f"合并提交为 {bundle_count} 个执行 bundle。"
+            )
+        if failed_template_names:
+            message += f" 失败 {len(failed_template_names)} 个策略：{'、'.join(failed_template_names)}"
+
+        return StrategyOptimizeTaskBatchCreateResponse(
+            batch_id=batch_id,
+            created_count=len(response_tasks),
+            bundle_count=bundle_count,
+            tasks=response_tasks,
+            failed_template_ids=failed_template_ids,
+            failed_template_names=failed_template_names,
+            message=message,
+        )
+
+    def _prepare_optimize_task_rows(
+        self,
+        *,
+        request: StrategyOptimizeTaskBatchCreateRequest,
+        batch_id: str,
+    ) -> dict[str, Any]:
+        """根据模板列表创建 queued 任务行，但不做提交。"""
         windows = self._normalize_windows(request.windows)
         if not windows:
             windows = ["full", "3y", "1y"]
-
-        # 根据模板里的 factor_keys / parameter_space 计算组合总数。
-        # 这一步还没有真正跑回测，只是在估算参数空间大小，用来创建任务和控制上限。
-        combo_size = max(
-            1,
-            self._calculate_combo_size(
-                factor_keys=config.factor_keys,
-                parameter_space=config.parameter_space,
-            ),
-        )
-        capped_total = combo_size if request.max_combinations is None else min(combo_size, request.max_combinations)
-
-        # task_config 是“本次任务附加到策略 setting 上的运行时配置”，
-        # 比如仓位、调仓、止盈止损之类；真正生效在 `_evaluate_combo` 里通过
-        # `_apply_task_config_to_setting(...)` 写回 setting。
         task_config = self._normalize_task_config(request.task_config)
+        created_at = _now_readable()
+        created_tasks: list[StrategyOptimizeTaskRow] = []
+        failed_template_ids: list[str] = []
+        failed_template_names: list[str] = []
 
         with self._lock:
-            # 先持久化一份 queued 状态，确保进程中途退出后仍能恢复任务记录。
-            # 到这里仍然没有开始计算，只是把“待执行任务”注册到内存和 SQLite。
-            self._opt_task_seq += 1
-            task_id = f"OPT-{_now_yyyymmdd()}-{self._opt_task_seq:04d}"
-            task = StrategyOptimizeTaskRow(
-                task_id=task_id,
-                batch_id=str(request.batch_id or _generate_optimize_batch_id()),
-                template_id=template.id,
-                template_name=template.name,
-                status="queued",
-                progress=0,
-                total_combinations=capped_total,
-                evaluated_combinations=0,
-                windows=windows,
-                start_date=request.start_date.isoformat() if request.start_date else None,
-                end_date=request.end_date.isoformat() if request.end_date else None,
-                eta="--",
-                message="任务已入队",
-                created_at=_now_readable(),
-                shard_count=0,
-                queued_shards=0,
-                running_shards=0,
-                finished_shards=0,
-                failed_shards=0,
-                top_n=request.top_n,
-                current_top_n=request.current_top_n,
-                task_config=task_config,
-            )
-            self._optimize_tasks = [task, *self._optimize_tasks]
-            self._optimize_results[task_id] = []
-            self._optimize_top_bonds[task_id] = []
-            self._optimize_shards[task_id] = []
-        self._store.upsert_optimize_task(row=task.model_dump())
-        self._refresh_optimize_batch(task.batch_id)
-        self._sync_optimize_task_as_backtest_job(task)
+            for template_id in request.template_ids:
+                safe_template_id = str(template_id or "").strip()
+                if not safe_template_id:
+                    continue
+                template = self._find_template(safe_template_id)
+                if not template:
+                    failed_template_ids.append(safe_template_id)
+                    failed_template_names.append(safe_template_id)
+                    continue
+                try:
+                    config = self._require_template_config(template.id)
+                    combo_size = max(
+                        1,
+                        self._calculate_combo_size(
+                            factor_keys=config.factor_keys,
+                            parameter_space=config.parameter_space,
+                        ),
+                    )
+                except Exception:
+                    failed_template_ids.append(template.id)
+                    failed_template_names.append(template.name)
+                    continue
 
+                capped_total = combo_size if request.max_combinations is None else min(combo_size, request.max_combinations)
+                self._opt_task_seq += 1
+                task_id = f"OPT-{_now_yyyymmdd()}-{self._opt_task_seq:04d}"
+                task = StrategyOptimizeTaskRow(
+                    task_id=task_id,
+                    batch_id=batch_id,
+                    template_id=template.id,
+                    template_name=template.name,
+                    status="queued",
+                    progress=0,
+                    total_combinations=capped_total,
+                    evaluated_combinations=0,
+                    windows=windows,
+                    start_date=request.start_date.isoformat() if request.start_date else None,
+                    end_date=request.end_date.isoformat() if request.end_date else None,
+                    eta="--",
+                    message="任务已入队",
+                    created_at=created_at,
+                    shard_count=0,
+                    queued_shards=0,
+                    running_shards=0,
+                    finished_shards=0,
+                    failed_shards=0,
+                    top_n=request.top_n,
+                    current_top_n=request.current_top_n,
+                    task_config=task_config,
+                )
+                self._optimize_tasks = [task, *self._optimize_tasks]
+                self._optimize_results[task_id] = []
+                self._optimize_top_bonds[task_id] = []
+                self._optimize_shards[task_id] = []
+                created_tasks.append(task)
+
+        return {
+            "tasks": created_tasks,
+            "failed_template_ids": failed_template_ids,
+            "failed_template_names": failed_template_names,
+        }
+
+    def _persist_created_optimize_tasks(self, tasks: list[StrategyOptimizeTaskRow]) -> None:
+        if not tasks:
+            return
+        for task in tasks:
+            self._store.upsert_optimize_task(row=task.model_dump())
+            self._sync_optimize_task_as_backtest_job(task)
+        self._refresh_optimize_batch(tasks[0].batch_id)
+
+    def _submit_optimize_task_bundles(self, tasks: list[StrategyOptimizeTaskRow]) -> tuple[int, str | None]:
+        if not tasks:
+            return 0, None
+        task_groups = self._group_optimize_tasks_for_submission(tasks)
         submit_error: str | None = None
-        try:
-            # 真正的优化计算从这里开始异步提交。
-            # 当前请求返回后，后台线程才会进入 `_run_optimize_task(...)`：
-            # 1. `self._backtest_service.load_market_data()` 读取历史快照
-            # 2. `_prepare_window_dataset_map(...)` 按 full/3y/1y/1w 等窗口切片
-            # 3. `_iter_combo_results_parallel(...)` 并行遍历参数组合
-            # 4. `_evaluate_combo(...)` 评估单个组合
-            # 5. `_run_backtest_from_candidate_map(...)` 产出收益/回撤/胜率等指标
-            self._optimize_executor.submit(
-                self._run_optimize_task,
-                task_id,
-                request.top_n,
-                request.current_top_n,
-                request.start_date,
-                request.end_date,
-                task_config,
-            )
-        except Exception as exc:
-            submit_error = str(exc)[:120]
-            # 只有线程池提交失败，才会在这里直接把任务标成 failed。
-            # 如果是后续执行时失败，会在 `_run_optimize_task` 里更新状态。
-            self._update_optimize_task(
-                task_id,
-                status="failed",
-                progress=0,
-                eta="submit-failed",
-                finished_at=_now_readable(),
-                message=f"任务提交失败: {submit_error}",
-            )
+        submitted = 0
+        for task_group in task_groups:
+            try:
+                self._optimize_executor.submit(
+                    self._run_optimize_task_bundle,
+                    [task.task_id for task in task_group],
+                )
+                submitted += 1
+            except Exception as exc:
+                submit_error = str(exc)[:120]
+                for task in task_group:
+                    self._update_optimize_task(
+                        task.task_id,
+                        status="failed",
+                        progress=0,
+                        eta="submit-failed",
+                        finished_at=_now_readable(),
+                        message=f"任务提交失败: {submit_error}",
+                    )
+                break
+        return submitted, submit_error
 
-        response_task = self._get_optimize_task(task_id) or task
-        response_message = (
-            f"已创建优化任务 {task_id}（批次 {response_task.batch_id or '--'}），但提交执行失败：{submit_error}"
-            if submit_error
-            else f"已创建优化任务 {task_id}（批次 {response_task.batch_id or '--'}），待评估参数组合数={capped_total}"
-        )
-        return StrategyOptimizeTaskCreateResponse(
-            task=response_task,
-            message=response_message,
-        )
+    def _group_optimize_tasks_for_submission(
+        self,
+        tasks: list[StrategyOptimizeTaskRow],
+    ) -> list[list[StrategyOptimizeTaskRow]]:
+        if not tasks:
+            return []
+        runtime_config = getattr(self, "_runtime_config", None)
+        threshold = int(runtime_config.bundling.small_task_threshold) if runtime_config is not None else 400
+        target = int(runtime_config.bundling.target_combinations) if runtime_config is not None else 1_200
+        max_tasks = int(runtime_config.bundling.max_tasks_per_bundle) if runtime_config is not None else 6
+
+        grouped: dict[tuple[Any, ...], list[StrategyOptimizeTaskRow]] = {}
+        for task in tasks:
+            key = (
+                task.batch_id or "",
+                tuple(task.windows),
+                task.start_date or "",
+                task.end_date or "",
+                task.top_n,
+                task.current_top_n,
+                json.dumps(task.task_config.model_dump(), sort_keys=True, ensure_ascii=False),
+            )
+            grouped.setdefault(key, []).append(task)
+
+        bundles: list[list[StrategyOptimizeTaskRow]] = []
+        for rows in grouped.values():
+            big_rows = [row for row in rows if row.total_combinations > threshold]
+            small_rows = [row for row in rows if row.total_combinations <= threshold]
+            for row in sorted(big_rows, key=lambda item: item.total_combinations, reverse=True):
+                bundles.append([row])
+
+            current: list[StrategyOptimizeTaskRow] = []
+            current_total = 0
+            for row in sorted(small_rows, key=lambda item: item.total_combinations, reverse=True):
+                if current and (len(current) >= max_tasks or current_total + row.total_combinations > target):
+                    bundles.append(current)
+                    current = []
+                    current_total = 0
+                current.append(row)
+                current_total += row.total_combinations
+            if current:
+                bundles.append(current)
+        return bundles or [[task] for task in tasks]
+
+    def _run_optimize_task_bundle(self, task_ids: list[str]) -> None:
+        for task_id in task_ids:
+            task = self._get_optimize_task(task_id)
+            if not task:
+                continue
+            self._run_optimize_task(
+                task_id,
+                task.top_n,
+                task.current_top_n,
+                self._parse_iso_date(task.start_date),
+                self._parse_iso_date(task.end_date),
+                self._normalize_task_config(task.task_config),
+            )
 
     def list_optimize_tasks(
         self,
@@ -3253,24 +3552,66 @@ class CbQuantService:
             return default
         return max(low, min(high, value))
 
+    @staticmethod
+    def _cpu_count() -> int:
+        return max(1, int(os.cpu_count() or 8))
+
     def _optimize_worker_count(self) -> int:
-        return self._env_int("CBQ_OPT_WORKERS", 1, low=1, high=32)
+        runtime_config = getattr(self, "_runtime_config", None)
+        if runtime_config is not None:
+            return int(runtime_config.parallel.optimize_eval_workers)
+        cpu_count = self._cpu_count()
+        default = max(1, min(2, cpu_count // 6 or 1))
+        return self._env_int("CBQ_OPT_WORKERS", default, low=1, high=32)
 
     def _job_worker_count(self) -> int:
-        return self._env_int("CBQ_JOB_WORKERS", 4, low=1, high=64)
+        runtime_config = getattr(self, "_runtime_config", None)
+        if runtime_config is not None:
+            return int(runtime_config.parallel.job_workers)
+        cpu_count = self._cpu_count()
+        default = max(4, min(12, cpu_count))
+        return self._env_int("CBQ_JOB_WORKERS", default, low=1, high=64)
 
     def _optimize_task_pool_size(self) -> int:
-        return self._env_int("CBQ_OPT_TASK_WORKERS", 4, low=1, high=64)
+        runtime_config = getattr(self, "_runtime_config", None)
+        if runtime_config is not None:
+            return int(runtime_config.parallel.optimize_task_workers)
+        cpu_count = self._cpu_count()
+        default = max(4, min(8, cpu_count))
+        return self._env_int("CBQ_OPT_TASK_WORKERS", default, low=1, high=64)
 
     def _optimize_shard_pool_size(self) -> int:
-        default = max(4, min(16, os.cpu_count() or 8))
+        runtime_config = getattr(self, "_runtime_config", None)
+        if runtime_config is not None:
+            return int(runtime_config.parallel.optimize_shard_workers)
+        cpu_count = self._cpu_count()
+        default = max(8, min(16, cpu_count + max(2, cpu_count // 3)))
         return self._env_int("CBQ_OPT_SHARD_WORKERS", default, low=1, high=128)
 
+    def _optimize_eval_mode(self) -> str:
+        runtime_config = getattr(self, "_runtime_config", None)
+        if runtime_config is not None:
+            return str(runtime_config.parallel.optimize_eval_mode)
+        raw = os.getenv("CBQ_OPT_EVAL_MODE", "").strip().lower()
+        if raw in {"thread", "threads"}:
+            return "thread"
+        if raw in {"process", "processes", "proc"}:
+            return "process"
+        return "process"
+
     def _optimize_shard_size(self) -> int:
-        return self._env_int("CBQ_OPT_SHARD_SIZE", 200, low=20, high=100_000)
+        runtime_config = getattr(self, "_runtime_config", None)
+        if runtime_config is not None:
+            return int(runtime_config.parallel.optimize_shard_size)
+        return self._env_int("CBQ_OPT_SHARD_SIZE", 120, low=20, high=100_000)
 
     def _optimize_min_shards_per_task(self) -> int:
-        return self._env_int("CBQ_OPT_MIN_SHARDS_PER_TASK", 4, low=1, high=64)
+        runtime_config = getattr(self, "_runtime_config", None)
+        if runtime_config is not None:
+            return int(runtime_config.parallel.optimize_min_shards_per_task)
+        cpu_count = self._cpu_count()
+        default = max(4, min(8, cpu_count))
+        return self._env_int("CBQ_OPT_MIN_SHARDS_PER_TASK", default, low=1, high=64)
 
     def _effective_optimize_shard_size(self, *, total: int) -> int:
         safe_total = max(1, int(total))
@@ -3282,11 +3623,23 @@ class CbQuantService:
         return max(20, min(base_size, adaptive_size))
 
     def _should_enable_stage1_screening(self, *, total: int, windows: list[WindowName]) -> bool:
+        runtime_config = getattr(self, "_runtime_config", None)
+        if runtime_config is not None:
+            threshold = int(runtime_config.screening.stage1_threshold)
+            min_windows = int(runtime_config.screening.stage1_min_windows)
+            return total >= threshold and len(windows) >= min_windows
         threshold = self._env_int("CBQ_OPT_STAGE1_THRESHOLD", 500, low=10, high=5_000_000)
         min_windows = self._env_int("CBQ_OPT_STAGE1_MIN_WINDOWS", 1, low=1, high=16)
         return total >= threshold and len(windows) >= min_windows
 
     def _stage1_sample_limit(self, *, total: int, top_n: int) -> int:
+        runtime_config = getattr(self, "_runtime_config", None)
+        if runtime_config is not None:
+            ratio = float(runtime_config.screening.stage1_ratio)
+            min_sample = int(runtime_config.screening.stage1_min)
+            max_sample = int(runtime_config.screening.stage1_max)
+            base = max(min_sample, int(total * ratio), max(20, top_n * 20))
+            return max(1, min(total, min(max_sample, base)))
         ratio = self._env_float("CBQ_OPT_STAGE1_RATIO", 0.1, low=0.01, high=1.0)
         min_sample = self._env_int("CBQ_OPT_STAGE1_MIN", 400, low=20, high=1_000_000)
         max_sample = self._env_int("CBQ_OPT_STAGE1_MAX", 12_000, low=50, high=2_000_000)
@@ -3294,11 +3647,54 @@ class CbQuantService:
         return max(1, min(total, min(max_sample, base)))
 
     def _stage2_shortlist_limit(self, *, total: int, top_n: int, current_top_n: int) -> int:
+        runtime_config = getattr(self, "_runtime_config", None)
+        if runtime_config is not None:
+            multiplier = int(runtime_config.screening.shortlist_multiplier)
+            min_shortlist = int(runtime_config.screening.shortlist_min)
+            max_shortlist = int(runtime_config.screening.shortlist_max)
+            base = max(min_shortlist, max(top_n, current_top_n) * multiplier)
+            return max(1, min(total, min(max_shortlist, base)))
         multiplier = self._env_int("CBQ_OPT_SHORTLIST_MULTIPLIER", 8, low=2, high=50)
         min_shortlist = self._env_int("CBQ_OPT_SHORTLIST_MIN", 120, low=20, high=20_000)
         max_shortlist = self._env_int("CBQ_OPT_SHORTLIST_MAX", 3_000, low=50, high=100_000)
         base = max(min_shortlist, max(top_n, current_top_n) * multiplier)
         return max(1, min(total, min(max_shortlist, base)))
+
+    def _open_optimize_eval_executor(
+        self,
+        *,
+        task: StrategyOptimizeTaskRow,
+        dataset: list[tuple[str, Any]],
+        windows: list[WindowName],
+        start_date: date | None,
+        end_date: date | None,
+        window_dataset_map: dict[WindowName, list[tuple[str, Any]]] | None,
+        prepared_pool_map: dict[str, cb_backtest.PreparedCandidatePool] | None,
+        task_config: BacktestTaskConfig,
+    ) -> ProcessPoolExecutor | None:
+        if self._optimize_eval_mode() != "process":
+            return None
+        workers = self._optimize_worker_count()
+        if workers <= 1:
+            return None
+        context = {
+            "task_id": task.task_id,
+            "template_id": task.template_id,
+            "template_name": task.template_name,
+            "dataset": dataset,
+            "windows": list(windows),
+            "start_date": start_date,
+            "end_date": end_date,
+            "window_dataset_map": window_dataset_map,
+            "prepared_pool_map": prepared_pool_map,
+            "task_config": self._normalize_task_config(task_config).model_dump(),
+        }
+        return ProcessPoolExecutor(
+            max_workers=workers,
+            mp_context=get_context("spawn"),
+            initializer=_init_optimize_process_context,
+            initargs=(context,),
+        )
 
     @staticmethod
     def _chunk_list(values: list[Any], chunk_size: int) -> list[list[Any]]:
@@ -3390,6 +3786,7 @@ class CbQuantService:
         prepared_pool_map: dict[str, cb_backtest.PreparedCandidatePool] | None,
         task_config: BacktestTaskConfig,
         result_limit: int,
+        eval_executor: ProcessPoolExecutor | None = None,
     ) -> dict[str, Any]:
         self._replace_optimize_shard_results(task_id=task.task_id, shard_id=shard.shard_id, rows=[])
         self._update_optimize_shard(
@@ -3427,6 +3824,7 @@ class CbQuantService:
                 prepared_pool_map=prepared_pool_map,
                 workers=self._optimize_worker_count(),
                 task_config=task_config,
+                eval_executor=eval_executor,
             ):
                 evaluated += 1
                 if abs(row.total_return_pct) < 1e-9 and row.turnover <= 1e-9:
@@ -3510,54 +3908,66 @@ class CbQuantService:
         evaluated = 0
         skipped_no_trade = 0
         inflight: dict[Any, StrategyOptimizeShardRow] = {}
-        for shard in shards:
-            future = self._optimize_shard_executor.submit(
-                self._run_optimize_shard,
-                shard=shard,
-                task=task,
-                dataset=dataset,
-                windows=windows,
-                start_date=start_date,
-                end_date=end_date,
-                window_dataset_map=window_dataset_map,
-                prepared_pool_map=prepared_pool_map,
-                task_config=task_config,
-                result_limit=result_limit,
-            )
-            inflight[future] = shard
+        eval_executor = self._open_optimize_eval_executor(
+            task=task,
+            dataset=dataset,
+            windows=windows,
+            start_date=start_date,
+            end_date=end_date,
+            window_dataset_map=window_dataset_map,
+            prepared_pool_map=prepared_pool_map,
+            task_config=task_config,
+        )
+        with (eval_executor if eval_executor is not None else nullcontext()):
+            for shard in shards:
+                future = self._optimize_shard_executor.submit(
+                    self._run_optimize_shard,
+                    shard=shard,
+                    task=task,
+                    dataset=dataset,
+                    windows=windows,
+                    start_date=start_date,
+                    end_date=end_date,
+                    window_dataset_map=window_dataset_map,
+                    prepared_pool_map=prepared_pool_map,
+                    task_config=task_config,
+                    result_limit=result_limit,
+                    eval_executor=eval_executor,
+                )
+                inflight[future] = shard
 
-        stage_total = max(1, total_stage_combinations)
-        stage_error: Exception | None = None
-        while inflight:
-            done, _ = wait(set(inflight.keys()), return_when=FIRST_COMPLETED)
-            for future in done:
-                inflight.pop(future, None)
-                try:
-                    payload = future.result()
-                except Exception as exc:  # pragma: no cover - failure path exercised via task status assertions
-                    if stage_error is None:
-                        stage_error = exc
-                    continue
-                evaluated += int(payload.get("evaluated") or 0)
-                skipped_no_trade += int(payload.get("skipped_no_trade") or 0)
-                combined_rows.extend(payload.get("rows") or [])
-                combined_rows.sort(
-                    key=lambda item: (item.robust_score, item.cagr, -item.mdd),
-                    reverse=True,
-                )
-                combined_rows = combined_rows[:result_limit]
-                self._optimize_results[task.task_id] = self._rank_optimize_rows(combined_rows[:top_n])
-                progress_ratio = min(1.0, evaluated / stage_total)
-                progress = progress_start + ceil(progress_ratio * max(1, progress_end - progress_start))
-                self._update_optimize_task(
-                    task.task_id,
-                    evaluated_combinations=min(task.total_combinations, evaluated),
-                    progress=max(progress_start, min(progress_end, progress)),
-                    eta=f"{max(0, stage_total - evaluated)} combos",
-                    message=f"{stage_label} {min(stage_total, evaluated)}/{stage_total}",
-                )
-        if stage_error is not None:
-            raise stage_error
+            stage_total = max(1, total_stage_combinations)
+            stage_error: Exception | None = None
+            while inflight:
+                done, _ = wait(set(inflight.keys()), return_when=FIRST_COMPLETED)
+                for future in done:
+                    inflight.pop(future, None)
+                    try:
+                        payload = future.result()
+                    except Exception as exc:  # pragma: no cover - failure path exercised via task status assertions
+                        if stage_error is None:
+                            stage_error = exc
+                        continue
+                    evaluated += int(payload.get("evaluated") or 0)
+                    skipped_no_trade += int(payload.get("skipped_no_trade") or 0)
+                    combined_rows.extend(payload.get("rows") or [])
+                    combined_rows.sort(
+                        key=lambda item: (item.robust_score, item.cagr, -item.mdd),
+                        reverse=True,
+                    )
+                    combined_rows = combined_rows[:result_limit]
+                    self._optimize_results[task.task_id] = self._rank_optimize_rows(combined_rows[:top_n])
+                    progress_ratio = min(1.0, evaluated / stage_total)
+                    progress = progress_start + ceil(progress_ratio * max(1, progress_end - progress_start))
+                    self._update_optimize_task(
+                        task.task_id,
+                        evaluated_combinations=min(task.total_combinations, evaluated),
+                        progress=max(progress_start, min(progress_end, progress)),
+                        eta=f"{max(0, stage_total - evaluated)} combos",
+                        message=f"{stage_label} {min(stage_total, evaluated)}/{stage_total}",
+                    )
+            if stage_error is not None:
+                raise stage_error
         return combined_rows, evaluated, skipped_no_trade
 
     @staticmethod
@@ -3662,6 +4072,7 @@ class CbQuantService:
         prepared_pool_map: dict[str, cb_backtest.PreparedCandidatePool] | None,
         workers: int,
         task_config: BacktestTaskConfig,
+        eval_executor: ProcessPoolExecutor | None = None,
     ) -> Iterable[StrategyOptimizeResultRow]:
         """按给定参数组合迭代器，逐个产出组合评估结果。
 
@@ -3694,6 +4105,30 @@ class CbQuantService:
                     prepared_pool_map=prepared_pool_map,
                     task_config=task_config,
                 )
+            return
+
+        if eval_executor is not None and self._optimize_eval_mode() == "process":
+            inflight: dict[Any, str] = {}
+
+            def submit_next() -> bool:
+                try:
+                    combo_id, setting = next(combo_iterator)
+                except StopIteration:
+                    return False
+                future = eval_executor.submit(_evaluate_combo_in_process, combo_id, setting)
+                inflight[future] = combo_id
+                return True
+
+            for _ in range(max(1, workers * 2)):
+                if not submit_next():
+                    break
+
+            while inflight:
+                done, _ = wait(set(inflight.keys()), return_when=FIRST_COMPLETED)
+                for future in done:
+                    inflight.pop(future, None)
+                    yield StrategyOptimizeResultRow.model_validate(future.result())
+                    submit_next()
             return
 
         # workers > 1 时启用线程池并行评估。
@@ -3765,30 +4200,13 @@ class CbQuantService:
         candidate_count: int,
         prepared_pool_map: dict[str, cb_backtest.PreparedCandidatePool] | None = None,
     ) -> dict[str, list[str]]:
-        """预先为每个交易日构建候选代码列表。
-
-        这样后续在多窗口评估时，不必重复执行同一轮候选筛选逻辑。
-        """
-        candidate_code_map: dict[str, list[str]] = {}
-        for trade_date, frame in dataset:
-            prepared = (prepared_pool_map or {}).get(trade_date)
-            if prepared is not None:
-                codes = cb_backtest.build_candidate_codes(
-                    prepared,
-                    strategy_parameters=strategy_parameters,
-                    candidate_count=candidate_count,
-                )
-                candidate_code_map[trade_date] = codes[: max(1, candidate_count)]
-                continue
-            candidate = cb_backtest.build_candidates(frame, trade_date, strategy_parameters, candidate_count)
-            if candidate is None or getattr(candidate, "empty", True):
-                candidate_code_map[trade_date] = []
-                continue
-            if "bond_code" not in candidate.columns:
-                raise RuntimeError(f"candidate result missing bond_code column: trade_date={trade_date}")
-            codes = candidate["bond_code"].astype(str).tolist()
-            candidate_code_map[trade_date] = codes[: max(1, candidate_count)]
-        return candidate_code_map
+        """预先为每个交易日构建候选代码列表。"""
+        return _build_candidate_code_map_payload(
+            dataset=dataset,
+            strategy_parameters=strategy_parameters,
+            candidate_count=candidate_count,
+            prepared_pool_map=prepared_pool_map,
+        )
 
     def _prepare_candidate_pool_map(
         self,
@@ -3838,116 +4256,21 @@ class CbQuantService:
         prepared_pool_map: dict[str, cb_backtest.PreparedCandidatePool] | None = None,
         task_config: BacktestTaskConfig,
     ) -> StrategyOptimizeResultRow:
-        """评估单个参数组合在多个窗口下的综合表现。
-
-        这是优化链路里的“单组合评估核心”。
-
-        输入是一组已经展开好的参数 setting，输出是一条可直接参与排行榜排序的
-        `StrategyOptimizeResultRow`。它本身不负责模板展开，也不负责任务调度，只负责：
-
-        1. 把任务级配置覆盖到当前组合 setting 上
-        2. 构造策略模块能识别的 cfg
-        3. 预先生成每日候选池代码映射 `candidate_code_map`
-        4. 按每个 window 执行轻量回测
-        5. 把多窗口结果聚合成 CAGR / MDD / Calmar / 稳健分等指标
-        6. 返回一条最终结果行给 `_run_optimize_task(...)`
-
-        这里的结果是“优化排序用结果”，不是分析页那种带净值曲线和轮动明细的结果。
-        """
-        # 先把任务级运行配置叠加到参数组合 setting 上。
-        # 例如调仓频率、仓位、止盈止损等，最终都要以这里的 setting 为准。
-        setting = self._apply_task_config_to_setting(setting, task_config)
-        candidate_count = max(1, int(round(self._to_float(setting.get("candidate_count"), 10.0))))
-        max_hold_count = max(1, int(round(self._to_float(setting.get("max_hold_count"), 12.0))))
-        hold_until_profit = bool(setting.get("hold_until_profit", False))
-
-        # 把通用 setting 转成 cb_backtest 真正用于筛债的 cfg。
-        # 后面 `build_candidates(...)` 会直接使用这个 cfg。
-        strategy_parameters = cb_backtest.build_strategy_parameters(setting)
-        base_dataset = self._resolve_base_dataset_for_windows(
-            dataset=dataset,
-            windows=windows,
-            window_dataset_map=window_dataset_map,
-        )
-        # 候选池基于“可用范围最大的一份数据集”预计算一次，避免多窗口重复生成。
-        candidate_code_map = self._build_candidate_code_map(
-            dataset=base_dataset,
-            strategy_parameters=strategy_parameters,
-            candidate_count=candidate_count,
-            prepared_pool_map=prepared_pool_map or self._prepare_candidate_pool_map(dataset=base_dataset),
-        )
-
-        all_metrics: list[dict[str, float]] = []
-        all_returns: list[float] = []
-
-        # 逐个窗口执行轻量回测。
-        # 这里不会直接生成详细曲线，而是只提取优化排序需要的核心指标。
-        for window_name in windows:
-            sliced = None
-            if window_dataset_map is not None:
-                # 优先复用上层提前切好的窗口数据，减少重复切片开销。
-                sliced = window_dataset_map.get(window_name)
-            if sliced is None:
-                # 如果调用方没提供该窗口数据，这里再现场切一遍。
-                sliced = self._backtest_service.slice_dataset(
-                    dataset=dataset,
-                    window_name=window_name,
-                    start_date=start_date,
-                    end_date=end_date,
-                )
-            if not sliced:
-                # 当前窗口没有可用样本时，直接跳过该窗口；不会再静默改用其他区间。
-                continue
-
-            # 轻量回测会基于 candidate_code_map 逐日回放，产出收益、回撤、胜率、换手等统计。
-            stats = self._run_backtest_from_candidate_map(
-                dataset=sliced,
-                candidate_code_map=candidate_code_map,
-                setting=setting,
-            )
-            stats["sample_days"] = len(sliced)
-
-            # 不同窗口下的原始回测结果会先统一转换成排行榜口径的 metrics。
-            metrics = self._derive_leaderboard_metrics(stats=stats, window_name=window_name)
-            all_metrics.append(metrics)
-            all_returns.append(self._to_float(stats.get("total_return_pct"), 0.0))
-
-        if not all_metrics:
-            # 用户指定的窗口/日期范围没有可用样本时，直接失败，不再自动改用其他范围。
-            raise RuntimeError("No market snapshots available for selected window")
-
-        # 下面开始把多个窗口结果聚合成一条总结果：
-        # - CAGR / win_rate / turnover 取均值
-        # - MDD 取最差窗口（最大回撤最大）
-        # - Calmar 用聚合后的 CAGR / MDD 计算
-        cagr = sum(item["cagr"] for item in all_metrics) / len(all_metrics)
-        mdd = max(item["mdd"] for item in all_metrics)
-        calmar = cagr / mdd if mdd > 0 else cagr
-        win_rate = sum(item["win_rate"] for item in all_metrics) / len(all_metrics)
-        turnover = sum(item["turnover"] for item in all_metrics) / len(all_metrics)
-
-        # recent_1y 优先拿 1y / 1w 这样的“近期窗口”结果；如果没有近期窗口，就退回 CAGR。
-        recent_1y = next((item["recent_1y"] for item, w in zip(all_metrics, windows) if w in {"1y", "1w"}), cagr)
-        robust_score = sum(item["robust_score"] for item in all_metrics) / len(all_metrics)
-        total_return_pct = sum(all_returns) / len(all_returns)
-
-        # params 只保留可序列化字段，便于后续写入结果表和前端展示。
-        return StrategyOptimizeResultRow(
-            rank=0,
+        payload = _evaluate_combo_payload(
             task_id=task_id,
             template_id=template_id,
             template_name=template_name,
+            dataset=dataset,
             combo_id=combo_id,
-            robust_score=round(robust_score, 4),
-            cagr=round(cagr, 6),
-            mdd=round(mdd, 6),
-            calmar=round(calmar, 6),
-            win_rate=round(win_rate, 4),
-            turnover=round(turnover, 6),
-            recent_1y=round(recent_1y, 6),
-            total_return_pct=round(total_return_pct, 4),
-            params=self._serialize_setting(setting),
+            windows=windows,
+            start_date=start_date,
+            end_date=end_date,
+            setting=setting,
+            window_dataset_map=window_dataset_map,
+            prepared_pool_map=prepared_pool_map,
+            task_config=task_config,
         )
+        return StrategyOptimizeResultRow.model_validate(payload)
 
     def _iter_template_settings(self, *, template_id: str, limit: int) -> Iterable[tuple[str, dict[str, Any]]]:
         cfg = self._require_template_config(template_id)
@@ -4854,37 +5177,7 @@ class CbQuantService:
 
     def _derive_leaderboard_metrics(self, *, stats: dict[str, Any], window_name: WindowName) -> dict[str, float]:
         """把原始回测统计值映射成排行榜使用的指标。"""
-        total_return_pct = self._to_float(stats.get("total_return_pct"), 0.0)
-        max_drawdown_pct = self._to_float(stats.get("max_drawdown_pct"), 0.0)
-        win_rate_pct = self._to_float(stats.get("win_rate_pct"), 0.0)
-        trade_count = self._to_float(stats.get("trade_count"), 0.0)
-        sample_days = max(1.0, self._to_float(stats.get("sample_days"), 1.0))
-        rebalanced_days = max(1.0, self._to_float(stats.get("rebalanced_days"), sample_days))
-
-        total_return = total_return_pct / 100.0
-        mdd = max(0.0, max_drawdown_pct / 100.0)
-        years = max(0.1, sample_days / 244.0)
-        cagr = (1 + total_return) ** (1 / years) - 1 if total_return > -0.999 else -0.999
-        calmar = cagr / mdd if mdd > 0 else max(0.0, cagr)
-        turnover = min(2.0, max(0.0, trade_count / rebalanced_days))
-        recent_1y = total_return if window_name in {"1y", "1w"} else cagr
-        robust_score = self._calculate_robust_score(
-            cagr=cagr,
-            mdd=mdd,
-            calmar=calmar,
-            win_rate_pct=win_rate_pct,
-            turnover=turnover,
-            window_name=window_name,
-        )
-        return {
-            "cagr": round(cagr, 6),
-            "mdd": round(mdd, 6),
-            "calmar": round(calmar, 6),
-            "win_rate": round(win_rate_pct, 4),
-            "turnover": round(turnover, 6),
-            "recent_1y": round(recent_1y, 6),
-            "robust_score": robust_score,
-        }
+        return _derive_leaderboard_metrics_payload(stats=stats, window_name=window_name)
 
     @staticmethod
     def _calculate_robust_score(

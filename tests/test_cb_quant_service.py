@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from threading import Lock
+from types import SimpleNamespace
 from typing import Any
 
 import pandas as pd
@@ -19,6 +20,7 @@ from vnpy.web.contracts.cb_quant import (
     StrategyOptimizeResultRow,
     StrategyOptimizeShardRow,
     StrategyOptimizeTaskAnalysisResponse,
+    StrategyOptimizeTaskBatchCreateRequest,
     StrategyOptimizeTaskCreateRequest,
     StrategyTemplateConfigRequest,
     StrategyTemplateConfigResponse,
@@ -328,6 +330,26 @@ class TestBacktestCreateJobsStrictCandidate:
 
 
 class TestOptimizeSamplingHelpers:
+    def test_optimize_default_parallelism_should_scale_with_cpu(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        service = _build_service()
+        monkeypatch.setattr(CbQuantService, "_cpu_count", staticmethod(lambda: 12))
+        for env_name in [
+            "CBQ_OPT_WORKERS",
+            "CBQ_JOB_WORKERS",
+            "CBQ_OPT_TASK_WORKERS",
+            "CBQ_OPT_SHARD_WORKERS",
+            "CBQ_OPT_SHARD_SIZE",
+            "CBQ_OPT_MIN_SHARDS_PER_TASK",
+        ]:
+            monkeypatch.delenv(env_name, raising=False)
+
+        assert service._optimize_worker_count() == 2
+        assert service._job_worker_count() == 12
+        assert service._optimize_task_pool_size() == 8
+        assert service._optimize_shard_pool_size() == 16
+        assert service._optimize_shard_size() == 120
+        assert service._optimize_min_shards_per_task() == 8
+
     def test_sample_combo_indices_should_be_unique_and_cover_range(self) -> None:
         indices = CbQuantService._sample_combo_indices(total=1000, sample_limit=11)
         assert len(indices) == 11
@@ -976,7 +998,7 @@ class TestOptimizeTaskSubmit:
 
         assert payload is not None
         assert payload.task.status == "failed"
-        assert "提交执行失败" in payload.message
+        assert "bundle 提交失败" in payload.message
 
     def test_create_optimize_task_should_submit_to_optimize_executor(self) -> None:
         service = _build_service()
@@ -992,7 +1014,7 @@ class TestOptimizeTaskSubmit:
 
         assert payload is not None
         assert len(service._optimize_executor.submitted) == 1
-        assert service._optimize_executor.submitted[0][0] == service._run_optimize_task
+        assert service._optimize_executor.submitted[0][0] == service._run_optimize_task_bundle
         assert service._job_executor.submitted == []
 
     def test_create_optimize_task_should_refresh_batch_summary(self) -> None:
@@ -1015,6 +1037,93 @@ class TestOptimizeTaskSubmit:
         assert batch.batch.task_count == 1
         assert batch.batch.queued_tasks == 1
         assert batch.tasks[0].task_id == payload.task.task_id
+
+    def test_create_optimize_tasks_batch_should_bundle_small_tasks(self) -> None:
+        service = _build_service()
+        service._templates = [
+            service._templates[0],
+            service._templates[0].model_copy(update={"id": "TPL-002", "name": "模板2"}),
+            service._templates[0].model_copy(update={"id": "TPL-003", "name": "模板3"}),
+        ]
+        service._template_configs = {
+            "TPL-001": StrategyTemplateConfigResponse(
+                template_id="TPL-001",
+                factor_keys=["dblow"],
+                expression_draft="",
+                parameter_space=[
+                    StrategyParamSpaceRow(
+                        factor_key="dblow",
+                        value_type="number",
+                        enabled=True,
+                        min_value=100.0,
+                        max_value=180.0,
+                        step=5.0,
+                        enum_values=[],
+                    )
+                ],
+                combo_size=17,
+                updated_at="2026-02-25 12:00",
+            ),
+            "TPL-002": StrategyTemplateConfigResponse(
+                template_id="TPL-002",
+                factor_keys=["dblow"],
+                expression_draft="",
+                parameter_space=[
+                    StrategyParamSpaceRow(
+                        factor_key="dblow",
+                        value_type="number",
+                        enabled=True,
+                        min_value=100.0,
+                        max_value=145.0,
+                        step=5.0,
+                        enum_values=[],
+                    )
+                ],
+                combo_size=10,
+                updated_at="2026-02-25 12:00",
+            ),
+            "TPL-003": StrategyTemplateConfigResponse(
+                template_id="TPL-003",
+                factor_keys=["dblow"],
+                expression_draft="",
+                parameter_space=[
+                    StrategyParamSpaceRow(
+                        factor_key="dblow",
+                        value_type="number",
+                        enabled=True,
+                        min_value=100.0,
+                        max_value=155.0,
+                        step=5.0,
+                        enum_values=[],
+                    )
+                ],
+                combo_size=12,
+                updated_at="2026-02-25 12:00",
+            ),
+        }
+        service._runtime_config = SimpleNamespace(
+            bundling=SimpleNamespace(
+                small_task_threshold=100,
+                target_combinations=30,
+                max_tasks_per_bundle=3,
+            )
+        )
+
+        payload = service.create_optimize_tasks_batch(
+            StrategyOptimizeTaskBatchCreateRequest(
+                template_ids=["TPL-001", "TPL-002", "TPL-003"],
+                batch_id="OPB-202603120001",
+                windows=["1y"],
+                top_n=5,
+                current_top_n=5,
+            )
+        )
+
+        assert payload.created_count == 3
+        assert payload.bundle_count == 2
+        assert len(service._optimize_executor.submitted) == 2
+        submitted_task_ids = [task_id for _, args, _ in service._optimize_executor.submitted for task_id in args[0]]
+        assert len(submitted_task_ids) == 3
 
 
 class TestOptimizeTaskSharding:
@@ -1098,10 +1207,10 @@ class TestOptimizeTaskSharding:
 
         updated = service._get_optimize_task(task.task_id)
         assert updated is not None
-        assert captured["full"] == [113, 113, 113, 111]
+        assert captured["full"] == [57, 57, 57, 57, 57, 57, 57, 51]
         assert updated.status == "finished"
-        assert updated.shard_count == 4
-        assert updated.finished_shards == 4
+        assert updated.shard_count == 8
+        assert updated.finished_shards == 8
         assert service._optimize_results[task.task_id][0].combo_id == "CMB-000321"
 
     def test_run_optimize_task_should_create_stage1_and_stage2_shards_for_single_window(
@@ -1156,18 +1265,18 @@ class TestOptimizeTaskSharding:
 
         updated = service._get_optimize_task(task.task_id)
         assert updated is not None
-        assert stages["stage1"] == [100, 100, 100, 100]
+        assert stages["stage1"] == [50, 50, 50, 50, 50, 50, 50, 50]
         assert stages["stage2"] == [3]
         assert updated.status == "finished"
-        assert updated.finished_shards == 5
+        assert updated.finished_shards == 9
         assert service._optimize_results[task.task_id][0].combo_id == "CMB-000399"
 
     def test_effective_optimize_shard_size_should_split_small_tasks_for_parallelism(self) -> None:
         service = _build_service()
 
-        assert service._effective_optimize_shard_size(total=180) == 45
-        assert service._effective_optimize_shard_size(total=150) == 38
-        assert service._effective_optimize_shard_size(total=3000) == 200
+        assert service._effective_optimize_shard_size(total=180) == 23
+        assert service._effective_optimize_shard_size(total=150) == 20
+        assert service._effective_optimize_shard_size(total=3000) == 120
 
     def test_refresh_optimize_task_from_shards_should_roll_up_running_progress_and_eta(self) -> None:
         service = _build_service()

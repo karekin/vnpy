@@ -364,6 +364,18 @@ class StrategyOptimizeTaskCreateRequest(BaseModel):
     task_config: BacktestTaskConfig = Field(default_factory=BacktestTaskConfig)
 
 
+class StrategyOptimizeTaskBatchCreateRequest(BaseModel):
+    template_ids: list[str] = Field(min_length=1)
+    batch_id: str | None = None
+    windows: list[WindowName] = Field(default_factory=lambda: ["full", "3y", "1y"])
+    start_date: date | None = None
+    end_date: date | None = None
+    top_n: int = Field(default=20, ge=1, le=200)
+    max_combinations: int | None = Field(default=None, ge=1)
+    current_top_n: int = Field(default=20, ge=1, le=200)
+    task_config: BacktestTaskConfig = Field(default_factory=BacktestTaskConfig)
+
+
 class StrategyOptimizeTaskRow(BaseModel):
     task_id: str
     batch_id: str | None = None
@@ -485,6 +497,16 @@ class StrategyOptimizeBatchDetailResponse(BaseModel):
 
 class StrategyOptimizeTaskCreateResponse(BaseModel):
     task: StrategyOptimizeTaskRow
+    message: str
+
+
+class StrategyOptimizeTaskBatchCreateResponse(BaseModel):
+    batch_id: str
+    created_count: int = 0
+    bundle_count: int = 0
+    tasks: list[StrategyOptimizeTaskRow] = Field(default_factory=list)
+    failed_template_ids: list[str] = Field(default_factory=list)
+    failed_template_names: list[str] = Field(default_factory=list)
     message: str
 
 

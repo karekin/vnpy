@@ -258,6 +258,16 @@ export type StrategyOptimizeTask = {
   taskConfig: BacktestTaskConfig;
 };
 
+export type StrategyOptimizeTaskBatchCreateResult = {
+  batchId: string;
+  createdCount: number;
+  bundleCount: number;
+  tasks: StrategyOptimizeTask[];
+  failedTemplateIds: string[];
+  failedTemplateNames: string[];
+  message: string;
+};
+
 export type StrategyOptimizeBatch = {
   batchId: string;
   status: StrategyOptimizeBatchStatus;
@@ -1821,6 +1831,71 @@ export async function createStrategyOptimizeTask(payload: {
   });
   return {
     task: mapOptimizeTask(response.task),
+    message: response.message,
+  };
+}
+
+export async function createStrategyOptimizeTasksBatch(payload: {
+  templateIds: string[];
+  batchId?: string;
+  windows: WindowName[];
+  startDate?: string;
+  endDate?: string;
+  topN?: number;
+  maxCombinations?: number;
+  currentTopN?: number;
+  taskConfig?: BacktestTaskConfig;
+}): Promise<StrategyOptimizeTaskBatchCreateResult> {
+  const taskConfig = payload.taskConfig ?? {
+    initialCapitalWan: 100,
+    benchmarkName: "转债等权",
+    rebalanceIntervalType: "trade_day",
+    rebalanceIntervalValue: 1,
+    maxPositionPct: 20,
+    maxHoldCount: 12,
+    excludeRedeemDaysBelow: null,
+    takeProfitPct: null,
+    stopLossPct: null,
+  };
+  const response = await requestJson<{
+    batch_id: string;
+    created_count: number;
+    bundle_count: number;
+    tasks: StrategyOptimizeTaskApi[];
+    failed_template_ids: string[];
+    failed_template_names: string[];
+    message: string;
+  }>(buildUrl("/api/v1/cb-quant/strategy/optimize-tasks/batch"), {
+    method: "POST",
+    body: JSON.stringify({
+      template_ids: payload.templateIds,
+      batch_id: payload.batchId,
+      windows: payload.windows,
+      start_date: payload.startDate,
+      end_date: payload.endDate,
+      top_n: payload.topN ?? 20,
+      max_combinations: payload.maxCombinations,
+      current_top_n: payload.currentTopN ?? 20,
+      task_config: {
+        initial_capital_wan: taskConfig.initialCapitalWan,
+        benchmark_name: taskConfig.benchmarkName,
+        rebalance_interval_type: taskConfig.rebalanceIntervalType,
+        rebalance_interval_value: taskConfig.rebalanceIntervalValue,
+        max_position_pct: taskConfig.maxPositionPct,
+        max_hold_count: taskConfig.maxHoldCount,
+        exclude_redeem_days_below: taskConfig.excludeRedeemDaysBelow,
+        take_profit_pct: taskConfig.takeProfitPct,
+        stop_loss_pct: taskConfig.stopLossPct,
+      },
+    }),
+  });
+  return {
+    batchId: response.batch_id,
+    createdCount: response.created_count,
+    bundleCount: response.bundle_count,
+    tasks: response.tasks.map(mapOptimizeTask),
+    failedTemplateIds: response.failed_template_ids,
+    failedTemplateNames: response.failed_template_names,
     message: response.message,
   };
 }

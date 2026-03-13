@@ -3,7 +3,7 @@
 import {
   batchDeleteBacktestJobs,
   cancelBacktestJob,
-  createStrategyOptimizeTask,
+  createStrategyOptimizeTasksBatch,
   deleteBacktestJob,
   getHistoryDataSummary,
   listBacktestJobs,
@@ -747,46 +747,37 @@ export default function CbQuantBacktestEvaluationPage() {
     setError("");
     setHint("");
     try {
-      const createdTaskIds: string[] = [];
-      const failedStrategyNames: string[] = [];
       const batchId = createOptimizeBatchId();
+      const result = await createStrategyOptimizeTasksBatch({
+        templateIds: enabledStrategies.map((strategy) => strategy.id),
+        batchId,
+        windows: activeWindows,
+        startDate,
+        endDate,
+        topN,
+        currentTopN,
+        taskConfig,
+      });
 
-      for (const strategy of enabledStrategies) {
-        try {
-          const strategyData = strategyById.get(strategy.id);
-          const result = await createStrategyOptimizeTask({
-            templateId: strategy.id,
-            batchId,
-            windows: activeWindows,
-            startDate,
-            endDate,
-            topN,
-            maxCombinations: strategyData?.comboSize ?? undefined,
-            currentTopN,
-            taskConfig,
-          });
-          createdTaskIds.push(result.task.taskId);
-        } catch {
-          failedStrategyNames.push(strategy.name);
-        }
-      }
-
-      const createdCount = createdTaskIds.length;
-      if (!createdCount) {
+      if (!result.createdCount) {
         setError("任务创建失败，请检查策略配置与历史数据。");
         return;
       }
 
       setHint(
-        `已为 ${createdCount} 个启用策略创建优化任务，窗口 ${activeWindows.join("/")}，批次 ${batchId}。${
-          failedStrategyNames.length ? `失败 ${failedStrategyNames.length} 个策略：${failedStrategyNames.join("、")}` : ""
+        `已为 ${result.createdCount} 个启用策略创建优化任务，窗口 ${activeWindows.join("/")}，批次 ${result.batchId}，合并提交 ${result.bundleCount} 个执行 bundle。${
+          result.failedTemplateNames.length
+            ? `失败 ${result.failedTemplateNames.length} 个策略：${result.failedTemplateNames.join("、")}`
+            : ""
         }`,
       );
-      setSelectedTaskId(createdTaskIds[0]);
+      setSelectedTaskId(result.tasks[0]?.taskId ?? "");
       setResultMode("task");
       setTasksPage(1);
       await loadTasks();
-      await loadTaskDetailById(createdTaskIds[0]);
+      if (result.tasks[0]?.taskId) {
+        await loadTaskDetailById(result.tasks[0].taskId);
+      }
       await loadSummary();
     } catch (err) {
       setError(err instanceof Error ? err.message : "创建优化任务失败");
