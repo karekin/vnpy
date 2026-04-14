@@ -48,7 +48,7 @@ from vnpy.web.contracts.cb_quant import (
     StrategyTemplateUpdateRequest,
 )
 from vnpy.web.contracts.system import OperationResponse
-from vnpy.web.services import cb_catalog_service, cb_history_service, cb_market_service, cb_quant_service, cb_tushare_service
+import vnpy.web.services as services
 
 router = APIRouter(prefix="/cb-quant", tags=["cb-quant"])
 
@@ -60,7 +60,7 @@ def list_factor_catalog(
     enabled_only: bool = Query(default=False),
     template_only: bool = Query(default=False),
 ) -> FactorCatalogResponse:
-    return cb_catalog_service.list_factors(
+    return services.catalog_service.list_factors(
         category=category,
         keyword=keyword,
         enabled_only=enabled_only,
@@ -73,7 +73,7 @@ def list_function_catalog(
     category: str = Query(default="all"),
     keyword: str = Query(default=""),
 ) -> FunctionCatalogResponse:
-    return cb_catalog_service.list_functions(
+    return services.catalog_service.list_functions(
         category=category,
         keyword=keyword,
     )
@@ -86,7 +86,7 @@ def list_strategy_templates(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=500),
 ) -> StrategyTemplateListResponse:
-    return cb_quant_service.list_templates(
+    return services.quant_service.list_templates(
         keyword=keyword,
         status=status,
         page=page,
@@ -98,14 +98,14 @@ def list_strategy_templates(
 def create_strategy_template(
     request: StrategyTemplateCreateRequest,
 ) -> StrategyTemplateRow:
-    return cb_quant_service.create_template(request)
+    return services.quant_service.create_template(request)
 
 
 @router.post("/strategy/templates/batch/enable", response_model=StrategyTemplateBatchResponse)
 def batch_enable_strategy_templates(
     request: StrategyTemplateBatchEnableRequest,
 ) -> StrategyTemplateBatchResponse:
-    affected, missing = cb_quant_service.batch_enable_templates(
+    affected, missing = services.quant_service.batch_enable_templates(
         request.template_ids,
         status=request.status,
     )
@@ -121,7 +121,7 @@ def batch_enable_strategy_templates(
 def batch_delete_strategy_templates(
     request: StrategyTemplateBatchDeleteRequest,
 ) -> StrategyTemplateBatchResponse:
-    affected, missing = cb_quant_service.batch_delete_templates(request.template_ids)
+    affected, missing = services.quant_service.batch_delete_templates(request.template_ids)
     return StrategyTemplateBatchResponse(
         ok=True,
         affected=affected,
@@ -132,7 +132,7 @@ def batch_delete_strategy_templates(
 
 @router.get("/strategy/templates/{template_id}", response_model=StrategyTemplateDetailResponse)
 def get_strategy_template(template_id: str) -> StrategyTemplateDetailResponse:
-    detail = cb_quant_service.get_template_detail(template_id)
+    detail = services.quant_service.get_template_detail(template_id)
     if not detail:
         raise HTTPException(status_code=404, detail=f"template not found: {template_id}")
     return detail
@@ -143,7 +143,7 @@ def update_strategy_template(
     template_id: str,
     request: StrategyTemplateUpdateRequest,
 ) -> StrategyTemplateRow:
-    updated = cb_quant_service.update_template(template_id, request)
+    updated = services.quant_service.update_template(template_id, request)
     if not updated:
         raise HTTPException(status_code=404, detail=f"template not found: {template_id}")
     return updated
@@ -157,7 +157,7 @@ def expand_strategy_factor_combos(
     template_id: str,
     request: StrategyExpandFactorCombosRequest,
 ) -> StrategyExpandFactorCombosResponse:
-    expanded = cb_quant_service.expand_template_factor_combos(template_id, request)
+    expanded = services.quant_service.expand_template_factor_combos(template_id, request)
     if not expanded:
         raise HTTPException(status_code=404, detail=f"template not found: {template_id}")
     return expanded
@@ -165,12 +165,12 @@ def expand_strategy_factor_combos(
 
 @router.post("/strategy/templates/generate-strong-pairs", response_model=StrategyGenerateStrongPairsResponse)
 def generate_strong_factor_pairs() -> StrategyGenerateStrongPairsResponse:
-    return cb_quant_service.generate_strong_factor_pairs()
+    return services.quant_service.generate_strong_factor_pairs()
 
 
 @router.delete("/strategy/templates/{template_id}", response_model=OperationResponse)
 def delete_strategy_template(template_id: str) -> OperationResponse:
-    deleted = cb_quant_service.delete_template(template_id)
+    deleted = services.quant_service.delete_template(template_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"template not found: {template_id}")
     return OperationResponse(ok=True, message=f"deleted template: {template_id}")
@@ -178,7 +178,7 @@ def delete_strategy_template(template_id: str) -> OperationResponse:
 
 @router.get("/strategy/templates/{template_id}/config", response_model=StrategyTemplateConfigResponse)
 def get_strategy_template_config(template_id: str) -> StrategyTemplateConfigResponse:
-    detail = cb_quant_service.get_template_detail(template_id)
+    detail = services.quant_service.get_template_detail(template_id)
     if not detail:
         raise HTTPException(status_code=404, detail=f"template not found: {template_id}")
     return detail.config
@@ -189,7 +189,7 @@ def update_strategy_template_config(
     template_id: str,
     request: StrategyTemplateConfigRequest,
 ) -> StrategyTemplateConfigResponse:
-    updated = cb_quant_service.update_template_config(template_id, request)
+    updated = services.quant_service.update_template_config(template_id, request)
     if not updated:
         raise HTTPException(status_code=404, detail=f"template not found: {template_id}")
     return updated
@@ -197,13 +197,13 @@ def update_strategy_template_config(
 
 @router.get("/strategy/history-summary", response_model=HistoryDataSummaryResponse)
 def get_history_data_summary() -> HistoryDataSummaryResponse:
-    return cb_quant_service.get_history_data_summary()
+    return services.quant_service.get_history_data_summary()
 
 
 @router.post("/strategy/history-sync", response_model=HistorySyncResponse)
 def trigger_history_sync() -> HistorySyncResponse:
-    upserted = cb_history_service.sync_today_from_market(mode="manual")
-    summary = cb_history_service.get_summary()
+    upserted = services.history_service.sync_today_from_market(mode="manual")
+    summary = services.history_service.get_summary()
     return HistorySyncResponse(
         ok=True,
         mode="manual",
@@ -216,7 +216,7 @@ def trigger_history_sync() -> HistorySyncResponse:
 
 @router.get("/strategy/history-sync/status", response_model=HistorySyncStatusResponse)
 def get_history_sync_status() -> HistorySyncStatusResponse:
-    log = cb_history_service.latest_sync_log()
+    log = services.history_service.latest_sync_log()
     if not log:
         return HistorySyncStatusResponse(has_log=False)
     return HistorySyncStatusResponse(
@@ -237,14 +237,14 @@ def trigger_tushare_history_sync(
 ) -> TushareSyncResponse:
     try:
         if request.incremental:
-            payload = cb_tushare_service.sync_incremental(
+            payload = services.tushare_service.sync_incremental(
                 start_date=request.start_date,
                 end_date=request.end_date,
                 mode="manual",
                 max_trade_days=request.max_trade_days,
             )
         else:
-            payload = cb_tushare_service.sync_range(
+            payload = services.tushare_service.sync_range(
                 start_date=request.start_date,
                 end_date=request.end_date,
                 mode="manual",
@@ -259,7 +259,7 @@ def trigger_tushare_history_sync(
 
 @router.get("/strategy/history-sync/tushare/status", response_model=TushareSyncStatusResponse)
 def get_tushare_history_sync_status() -> TushareSyncStatusResponse:
-    log = cb_tushare_service.latest_sync_log()
+    log = services.tushare_service.latest_sync_log()
     if not log:
         return TushareSyncStatusResponse(has_log=False)
     return TushareSyncStatusResponse(
@@ -282,7 +282,7 @@ def get_tushare_history_sync_status() -> TushareSyncStatusResponse:
 
 @router.get("/strategy/history-sync/tushare/summary", response_model=TushareDataSummaryResponse)
 def get_tushare_history_summary() -> TushareDataSummaryResponse:
-    summary = cb_tushare_service.get_summary()
+    summary = services.tushare_service.get_summary()
     return TushareDataSummaryResponse(
         cb_trade_days=summary.cb_trade_days,
         cb_date_start=summary.cb_date_start,
@@ -299,7 +299,7 @@ def get_tushare_history_summary() -> TushareDataSummaryResponse:
 def create_optimize_task(
     request: StrategyOptimizeTaskCreateRequest,
 ) -> StrategyOptimizeTaskCreateResponse:
-    created = cb_quant_service.create_optimize_task(request)
+    created = services.quant_service.create_optimize_task(request)
     if not created:
         raise HTTPException(status_code=404, detail=f"template not found: {request.template_id}")
     return created
@@ -309,7 +309,7 @@ def create_optimize_task(
 def create_optimize_tasks_batch(
     request: StrategyOptimizeTaskBatchCreateRequest,
 ) -> StrategyOptimizeTaskBatchCreateResponse:
-    return cb_quant_service.create_optimize_tasks_batch(request)
+    return services.quant_service.create_optimize_tasks_batch(request)
 
 
 @router.get("/strategy/optimize-tasks", response_model=StrategyOptimizeTaskListResponse)
@@ -319,7 +319,7 @@ def list_optimize_tasks(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
 ) -> StrategyOptimizeTaskListResponse:
-    return cb_quant_service.list_optimize_tasks(
+    return services.quant_service.list_optimize_tasks(
         template_id=template_id,
         status=status,
         page=page,
@@ -333,7 +333,7 @@ def list_optimize_batches(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
 ) -> StrategyOptimizeBatchListResponse:
-    return cb_quant_service.list_optimize_batches(
+    return services.quant_service.list_optimize_batches(
         status=status,
         page=page,
         page_size=page_size,
@@ -342,7 +342,7 @@ def list_optimize_batches(
 
 @router.get("/strategy/optimize-batches/{batch_id}", response_model=StrategyOptimizeBatchDetailResponse)
 def get_optimize_batch_detail(batch_id: str) -> StrategyOptimizeBatchDetailResponse:
-    detail = cb_quant_service.get_optimize_batch_detail(batch_id)
+    detail = services.quant_service.get_optimize_batch_detail(batch_id)
     if not detail:
         raise HTTPException(status_code=404, detail=f"optimize batch not found: {batch_id}")
     return detail
@@ -350,7 +350,7 @@ def get_optimize_batch_detail(batch_id: str) -> StrategyOptimizeBatchDetailRespo
 
 @router.get("/strategy/optimize-tasks/{task_id}", response_model=StrategyOptimizeTaskDetailResponse)
 def get_optimize_task_detail(task_id: str) -> StrategyOptimizeTaskDetailResponse:
-    detail = cb_quant_service.get_optimize_task_detail(task_id)
+    detail = services.quant_service.get_optimize_task_detail(task_id)
     if not detail:
         raise HTTPException(status_code=404, detail=f"optimize task not found: {task_id}")
     return detail
@@ -362,7 +362,7 @@ def get_optimize_task_analysis(
     combo_id: str | None = Query(default=None),
     initial_capital_wan: float | None = Query(default=None, gt=0),
 ) -> StrategyOptimizeTaskAnalysisResponse:
-    detail = cb_quant_service.get_optimize_task_analysis(
+    detail = services.quant_service.get_optimize_task_analysis(
         task_id=task_id,
         combo_id=combo_id,
         initial_capital_wan=initial_capital_wan,
@@ -377,7 +377,7 @@ def get_optimize_task_ai_insight(
     task_id: str,
     request: StrategyOptimizeTaskAiInsightRequest,
 ) -> StrategyOptimizeTaskAiInsightResponse:
-    detail = cb_quant_service.get_optimize_task_ai_insight(
+    detail = services.quant_service.get_optimize_task_ai_insight(
         task_id=task_id,
         combo_id=request.combo_id,
         initial_capital_wan=request.initial_capital_wan,
@@ -392,7 +392,7 @@ def compare_optimize_task_ai_insight(
     task_id: str,
     request: StrategyOptimizeTaskAiCompareRequest,
 ) -> StrategyOptimizeTaskAiCompareResponse:
-    detail = cb_quant_service.compare_optimize_task_ai_insight(
+    detail = services.quant_service.compare_optimize_task_ai_insight(
         task_id=task_id,
         combo_ids=request.combo_ids,
         initial_capital_wan=request.initial_capital_wan,
@@ -407,7 +407,7 @@ def get_optimize_summary(
     top_n: int = Query(default=20, ge=1, le=200),
     current_top_n: int = Query(default=20, ge=1, le=200),
 ) -> StrategyOptimizeSummaryResponse:
-    return cb_quant_service.get_optimize_summary(top_n=top_n, current_top_n=current_top_n)
+    return services.quant_service.get_optimize_summary(top_n=top_n, current_top_n=current_top_n)
 
 
 @router.get("/backtest/jobs", response_model=BacktestJobListResponse)
@@ -420,7 +420,7 @@ def list_backtest_jobs(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
 ) -> BacktestJobListResponse:
-    return cb_quant_service.list_jobs(
+    return services.quant_service.list_jobs(
         keyword=keyword,
         status=status,
         business_date=business_date,
@@ -436,14 +436,14 @@ def create_backtest_jobs(
     request: BacktestCreateJobsRequest,
 ) -> BacktestCreateJobsResponse:
     try:
-        return cb_quant_service.create_jobs(request)
+        return services.quant_service.create_jobs(request)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/backtest/jobs/{job_id}/cancel", response_model=OperationResponse)
 def cancel_backtest_job(job_id: str) -> OperationResponse:
-    job = cb_quant_service.cancel_job(job_id)
+    job = services.quant_service.cancel_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail=f"backtest job not found: {job_id}")
     return OperationResponse(ok=True, message=f"job {job_id} -> {job.status}")
@@ -451,7 +451,7 @@ def cancel_backtest_job(job_id: str) -> OperationResponse:
 
 @router.delete("/backtest/jobs/{job_id}", response_model=OperationResponse)
 def delete_backtest_job(job_id: str) -> OperationResponse:
-    affected, missing, blocked = cb_quant_service.batch_delete_backtest_jobs([job_id])
+    affected, missing, blocked = services.quant_service.batch_delete_backtest_jobs([job_id])
     if missing:
         raise HTTPException(status_code=404, detail=f"backtest job not found: {job_id}")
     if blocked:
@@ -463,7 +463,7 @@ def delete_backtest_job(job_id: str) -> OperationResponse:
 def batch_delete_backtest_jobs(
     request: BacktestJobBatchDeleteRequest,
 ) -> BacktestJobBatchDeleteResponse:
-    affected, missing, blocked = cb_quant_service.batch_delete_backtest_jobs(request.job_ids)
+    affected, missing, blocked = services.quant_service.batch_delete_backtest_jobs(request.job_ids)
     return BacktestJobBatchDeleteResponse(
         ok=True,
         affected=affected,
@@ -484,7 +484,7 @@ def list_backtest_leaderboard(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
 ) -> BacktestLeaderboardResponse:
-    return cb_quant_service.list_leaderboard(
+    return services.quant_service.list_leaderboard(
         keyword=keyword,
         window=window,
         page=page,
@@ -497,16 +497,16 @@ def list_backtest_compare(
     keyword: str = Query(default=""),
     category: str = Query(default="all"),
 ) -> BacktestCompareResponse:
-    return cb_quant_service.list_compare(keyword=keyword, category=category)
+    return services.quant_service.list_compare(keyword=keyword, category=category)
 
 
 @router.get("/backtest/stats", response_model=BacktestStatsResponse)
 def get_backtest_stats() -> BacktestStatsResponse:
-    return cb_quant_service.get_stats()
+    return services.quant_service.get_stats()
 
 
 @router.get("/market/bonds", response_model=BondMarketResponse)
 def list_market_bonds(
     min_volume_wan: float = Query(default=0, ge=0),
 ) -> BondMarketResponse:
-    return cb_market_service.list_bonds(min_volume_wan=min_volume_wan)
+    return services.market_service.list_bonds(min_volume_wan=min_volume_wan)

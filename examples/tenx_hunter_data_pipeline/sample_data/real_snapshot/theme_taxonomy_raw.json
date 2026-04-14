@@ -1,0 +1,74 @@
+[
+  {
+    "theme_id": "ai_infra",
+    "source_vendor": "theme-taxonomy",
+    "raw_payload": {
+      "theme_id": "ai_infra",
+      "theme_name": "AI Infra",
+      "parent_theme": "Growth Tech",
+      "keywords": [
+        "accelerator",
+        "ai",
+        "compute",
+        "data center",
+        "gpu",
+        "inference",
+        "sovereign ai",
+        "training"
+      ]
+    }
+  },
+  {
+    "theme_id": "cloud",
+    "source_vendor": "theme-taxonomy",
+    "raw_payload": {
+      "theme_id": "cloud",
+      "theme_name": "Cloud",
+      "parent_theme": "Growth Tech",
+      "keywords": [
+        "cloud",
+        "consumption",
+        "data cloud",
+        "data platform",
+        "lakehouse",
+        "warehouse"
+      ]
+    }
+  },
+  {
+    "theme_id": "cybersecurity",
+    "source_vendor": "theme-taxonomy",
+    "raw_payload": {
+      "theme_id": "cybersecurity",
+      "theme_name": "Cybersecurity",
+      "parent_theme": "Growth Tech",
+      "keywords": [
+        "breach",
+        "endpoint",
+        "identity",
+        "security",
+        "threat",
+        "zero trust"
+      ]
+    }
+  },
+  {
+    "theme_id": "semis",
+    "source_vendor": "theme-taxonomy",
+    "raw_payload": {
+      "theme_id": "semis",
+      "theme_name": "Semiconductors",
+      "parent_theme": "Growth Tech",
+      "keywords": [
+        "chip",
+        "cpu",
+        "gpu",
+        "hbm",
+        "ip",
+        "semiconductor",
+        "silicon",
+        "wafer"
+      ]
+    }
+  }
+]

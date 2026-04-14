@@ -1,0 +1,38 @@
+[
+  {
+    "filing_id": "filing-nvda-8k-20260410",
+    "symbol": "NVDA",
+    "filing_type": "8-K",
+    "filing_time": "2026-04-10T20:15:00Z",
+    "title": "NVIDIA expands sovereign AI infrastructure partnerships",
+    "source_vendor": "sec-edgar",
+    "content": "NVIDIA reported strong demand for AI training and inference platforms. Management highlighted record data center demand, expanded sovereign AI partnerships, and upside from next-generation GPU shipments."
+  },
+  {
+    "filing_id": "filing-snow-8k-20260410",
+    "symbol": "SNOW",
+    "filing_type": "8-K",
+    "filing_time": "2026-04-10T20:20:00Z",
+    "title": "Snowflake sees improving cloud consumption trends",
+    "source_vendor": "sec-edgar",
+    "content": "Snowflake highlighted strong cloud consumption, better large-customer expansion, and a new partnership around AI data products. Management sees demand acceleration in enterprise cloud workloads."
+  },
+  {
+    "filing_id": "filing-crwd-8k-20260410",
+    "symbol": "CRWD",
+    "filing_type": "8-K",
+    "filing_time": "2026-04-10T20:25:00Z",
+    "title": "CrowdStrike discloses elevated support pressure after outage review",
+    "source_vendor": "sec-edgar",
+    "content": "CrowdStrike said demand remains healthy, but the company disclosed support pressure after a customer outage review. Management noted execution risk, regulatory questions, and a slower expansion motion in part of the installed base."
+  },
+  {
+    "filing_id": "filing-arm-8k-20260410",
+    "symbol": "ARM",
+    "filing_type": "8-K",
+    "filing_time": "2026-04-10T20:30:00Z",
+    "title": "Arm launches new CPU roadmap for AI edge and data center devices",
+    "source_vendor": "sec-edgar",
+    "content": "Arm announced a new CPU roadmap for AI edge devices and data center platforms. The launch expands semiconductor demand and strengthens its role in efficient AI compute."
+  }
+]

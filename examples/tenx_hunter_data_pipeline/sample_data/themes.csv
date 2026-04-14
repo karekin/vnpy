@@ -1,0 +1,5 @@
+theme_id,theme_name,parent_theme,active_flag
+ai_infra,AI Infra,Growth Tech,true
+cloud,Cloud,Growth Tech,true
+cybersecurity,Cybersecurity,Growth Tech,true
+semis,Semiconductors,Growth Tech,true

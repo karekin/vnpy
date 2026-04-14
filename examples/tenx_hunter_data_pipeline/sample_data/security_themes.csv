@@ -1,0 +1,7 @@
+security_id,theme_id,source_note
+1,ai_infra,NVIDIA serves AI training and inference demand
+1,semis,NVIDIA is a leading semiconductor platform
+2,cloud,Snowflake is a cloud data platform
+3,cybersecurity,CrowdStrike is an endpoint security leader
+4,semis,Arm is central to CPU IP ecosystem
+4,ai_infra,Arm benefits from AI device and datacenter roadmap

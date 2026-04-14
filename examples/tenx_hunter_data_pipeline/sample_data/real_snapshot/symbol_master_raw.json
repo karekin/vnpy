@@ -1,0 +1,62 @@
+[
+  {
+    "symbol": "NVDA",
+    "source_vendor": "symbol-master",
+    "raw_payload": {
+      "symbol": "NVDA",
+      "company_name": "Nvidia Corp",
+      "exchange_name": "XNAS",
+      "cik": "0001045810",
+      "currency": "usd",
+      "listing_status": "active",
+      "market": "stocks",
+      "locale": "us",
+      "type": "CS"
+    }
+  },
+  {
+    "symbol": "SNOW",
+    "source_vendor": "symbol-master",
+    "raw_payload": {
+      "symbol": "SNOW",
+      "company_name": "Snowflake Inc.",
+      "exchange_name": "XNYS",
+      "cik": "0001640147",
+      "currency": "usd",
+      "listing_status": "active",
+      "market": "stocks",
+      "locale": "us",
+      "type": "CS"
+    }
+  },
+  {
+    "symbol": "CRWD",
+    "source_vendor": "symbol-master",
+    "raw_payload": {
+      "symbol": "CRWD",
+      "company_name": "CrowdStrike Holdings, Inc. Class A Common Stock",
+      "exchange_name": "XNAS",
+      "cik": "0001535527",
+      "currency": "usd",
+      "listing_status": "active",
+      "market": "stocks",
+      "locale": "us",
+      "type": "CS"
+    }
+  },
+  {
+    "symbol": "ARM",
+    "source_vendor": "symbol-master",
+    "raw_payload": {
+      "symbol": "ARM",
+      "company_name": "Arm Holdings plc American Depositary Shares",
+      "exchange_name": "XNAS",
+      "cik": "0001973239",
+      "currency": "usd",
+      "listing_status": "active",
+      "market": "stocks",
+      "locale": "us",
+      "type": "ADRC"
+    }
+  }
+]

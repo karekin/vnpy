@@ -1,0 +1,1037 @@
+[
+  {
+    "news_id": "417ecaa6abef40ce21694ae9df3d41fdae144fdae747ad9f45eec6d7f02e72c9",
+    "symbol": "NVDA",
+    "published_time": "2026-04-12T05:25:00Z",
+    "source_vendor": "polygon-news",
+    "raw_payload": {
+      "id": "417ecaa6abef40ce21694ae9df3d41fdae144fdae747ad9f45eec6d7f02e72c9",
+      "publisher": {
+        "name": "The Motley Fool",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico"
+      },
+      "title": "3 AI Stocks to Hold No Matter What Happens in the Economy",
+      "author": "Will Healy",
+      "published_utc": "2026-04-12T05:25:00Z",
+      "article_url": "https://www.fool.com/investing/2026/04/12/3-ai-stocks-to-hold-no-matter-what-happens-in-the/?source=iedfolrf0000001",
+      "tickers": [
+        "NVDA",
+        "AMZN",
+        "AAPL",
+        "BRK.A",
+        "BRK.B"
+      ],
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F864385%2Fartificial-intelligence-ai.jpg&w=1200&op=resize",
+      "description": "The article recommends holding three AI stocks—Nvidia, Amazon, and Apple—as defensive positions during economic uncertainty. Despite elevated market valuations (Shiller P/E at 38), these companies possess strong balance sheets, market leadership, and solid fundamentals that should help them weather potential downturns. Nvidia leads in AI chips with 65% revenue growth, Amazon dominates e-commerce and cloud computing with 31% profit growth, and Apple is benefiting from an iPhone upgrade cycle with 16% revenue growth.",
+      "keywords": [
+        "AI stocks",
+        "economic downturn",
+        "market valuation",
+        "balance sheet strength",
+        "cloud computing",
+        "iPhone upgrade cycle",
+        "defensive investing"
+      ],
+      "insights": [
+        {
+          "ticker": "NVDA",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Dominant position in AI accelerator market with 65% revenue and net income growth. Strong liquidity of $63 billion, P/E ratio of 37 considered cheap relative to profit growth rate, and essential role in AI advancement support long-term capital preservation."
+        },
+        {
+          "ticker": "AMZN",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Dual revenue streams (e-commerce and AWS cloud) provide stability across economic cycles. Cloud industry expected to grow 16% CAGR through 2033, 31% net income growth, $127 billion liquidity, and P/E ratio near multi-year lows indicate strong defensive positioning."
+        },
+        {
+          "ticker": "AAPL",
+          "sentiment": "positive",
+          "sentiment_reasoning": "iPhone upgrade cycle driving 16% revenue growth and 23% iPhone sales increase. Strong liquidity of $132 billion, 16% profit growth, and market leadership in smartphone ecosystem support resilience. Warren Buffett's recent regret at reducing holdings validates long-term appeal."
+        },
+        {
+          "ticker": "BRK.A",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as context for Warren Buffett's investment philosophy of maintaining stock holdings while raising cash reserves. Used as reference point for prudent investing approach rather than being recommended as a primary holding."
+        },
+        {
+          "ticker": "BRK.B",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as context for Warren Buffett's investment philosophy of maintaining stock holdings while raising cash reserves. Used as reference point for prudent investing approach rather than being recommended as a primary holding."
+        }
+      ]
+    }
+  },
+  {
+    "news_id": "8ffa224b5032f4075a27a000b3d5242767aca37741262a0282ef151b8c4602b8",
+    "symbol": "NVDA",
+    "published_time": "2026-04-12T01:01:14Z",
+    "source_vendor": "polygon-news",
+    "raw_payload": {
+      "id": "8ffa224b5032f4075a27a000b3d5242767aca37741262a0282ef151b8c4602b8",
+      "publisher": {
+        "name": "The Motley Fool",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico"
+      },
+      "title": "The Secret to Out-Innovating the Competition: Inside the Tesla Playbook",
+      "author": "Motley Fool Staff",
+      "published_utc": "2026-04-12T01:01:14Z",
+      "article_url": "https://www.fool.com/investing/2026/04/11/the-secret-to-out-innovating-the-competition-inside-the-tesla-playbook/?source=iedfolrf0000001",
+      "tickers": [
+        "TSLA",
+        "GM",
+        "LULU",
+        "NVDA",
+        "AMZN",
+        "TM"
+      ],
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fcdn.content.foolcdn.com%2Fimages%2F1umn9qeh%2Fproduction%2Fcab4fa24ff521c80af3fc3061513523a505402f9-480x270.jpg%3Fw%3D800%26q%3D75%26fit%3Dmax%26auto%3Dformat&w=1200&op=resize",
+      "description": "Former Tesla President Jon McNeill discusses his new book outlining a five-step innovation framework (question everything, simplify, run manually, speed up, automate last) that drove Tesla's hypergrowth and can be applied across industries. McNeill emphasizes that cash velocity and cycle time are critical metrics for evaluating company health, and highlights opportunities for disruption in wealth management and AI-driven white-collar sectors.",
+      "keywords": [
+        "innovation framework",
+        "hypergrowth formula",
+        "cash velocity",
+        "cycle time",
+        "operational efficiency",
+        "AI infrastructure",
+        "wealth management disruption"
+      ],
+      "insights": [
+        {
+          "ticker": "TSLA",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Tesla is presented as a successful case study of the algorithm framework, demonstrating exceptional innovation capabilities and operational excellence that transformed the company from struggling with Model 3 production to becoming a cash flow machine."
+        },
+        {
+          "ticker": "GM",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "GM is mentioned as a board company where McNeill applies the algorithm framework, but no specific performance metrics or outcomes are discussed, making it a neutral reference point for potential disruption opportunities."
+        },
+        {
+          "ticker": "LULU",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Lululemon is cited as one of the companies that successfully applied the algorithm framework for hypergrowth, indicating strong operational execution and innovation capabilities."
+        },
+        {
+          "ticker": "NVDA",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Nvidia is highlighted as an exemplary company demonstrating industry-leading top-line growth, exceptional gross margins (~80%), and strong operating leverage, making it a model investment case."
+        },
+        {
+          "ticker": "AMZN",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Amazon is referenced as a successful example of applying the manual-first approach before automation, demonstrating the effectiveness of the algorithm framework in building a scalable business."
+        },
+        {
+          "ticker": "TM",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Toyota is praised for pioneering the cash velocity metric and demonstrating superior operational efficiency with faster cycle times, serving as a benchmark for business excellence."
+        }
+      ]
+    }
+  },
+  {
+    "news_id": "7f4159565a3f4c1e81aaf9ca67b9fa7165118169c71bda8b190fa5fb2d88378e",
+    "symbol": "NVDA",
+    "published_time": "2026-04-11T23:31:00Z",
+    "source_vendor": "polygon-news",
+    "raw_payload": {
+      "id": "7f4159565a3f4c1e81aaf9ca67b9fa7165118169c71bda8b190fa5fb2d88378e",
+      "publisher": {
+        "name": "The Motley Fool",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico"
+      },
+      "title": "Agentic AI Is the Next Big Thing in AI. Here Are the 5 Best Stocks to Capitalize on It.",
+      "author": "Keithen Drury",
+      "published_utc": "2026-04-11T23:31:00Z",
+      "article_url": "https://www.fool.com/investing/2026/04/11/agentic-ai-is-the-next-big-thing-for-ai-here-are-t/?source=iedfolrf0000001",
+      "tickers": [
+        "NVDA",
+        "AVGO",
+        "AMZN",
+        "MSFT",
+        "GOOG",
+        "GOOGL"
+      ],
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F863872%2Fperson-looking-at-wall-street-suit-stocks-finance.jpg&w=1200&op=resize",
+      "description": "As agentic AI—software that can independently perform complex tasks—expands beyond coding into broader economy applications, demand for AI computing power will surge. The article identifies five stocks positioned to benefit: chipmakers Nvidia and Broadcom for hardware, and cloud infrastructure leaders Amazon Web Services, Microsoft Azure, and Google Cloud for computing capacity. All five stocks are currently down at least 10% from all-time highs, presenting potential buying opportunities.",
+      "keywords": [
+        "agentic AI",
+        "AI computing hardware",
+        "cloud infrastructure",
+        "GPUs",
+        "ASICs",
+        "data centers",
+        "AI demand"
+      ],
+      "insights": [
+        {
+          "ticker": "NVDA",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Described as 'probably the most obvious pick' with GPUs being the primary computing units for AI workloads. Expected to deliver massive revenue growth and be among the best-performing investments over the next five years."
+        },
+        {
+          "ticker": "AVGO",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Praised for its custom ASIC approach that excels at specific tasks at lower costs. Expected to put up massive revenue growth and be among the best-performing investments over the next five years."
+        },
+        {
+          "ticker": "AMZN",
+          "sentiment": "positive",
+          "sentiment_reasoning": "AWS showed strong growth of 24% year-over-year (best quarter in over three years) with massive backlogs of AI computing capacity demand. Positioned as a leader in cloud infrastructure for agentic AI expansion."
+        },
+        {
+          "ticker": "MSFT",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Azure grew revenue by 39% with huge backlogs of business for AI computing capacity. Identified as one of the big three cloud providers seeing massive success and future growth."
+        },
+        {
+          "ticker": "GOOG",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Google Cloud achieved impressive 48% revenue growth with massive backlogs of AI computing demand. Positioned as a leader in cloud infrastructure benefiting from agentic AI expansion."
+        },
+        {
+          "ticker": "GOOGL",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Google Cloud achieved impressive 48% revenue growth with massive backlogs of AI computing demand. Positioned as a leader in cloud infrastructure benefiting from agentic AI expansion."
+        }
+      ]
+    }
+  },
+  {
+    "news_id": "7444aa479d7f6502bf48d7217c516f2cdd1fefde51381fe10ad5ab61594cb2c2",
+    "symbol": "NVDA",
+    "published_time": "2026-04-11T22:02:00Z",
+    "source_vendor": "polygon-news",
+    "raw_payload": {
+      "id": "7444aa479d7f6502bf48d7217c516f2cdd1fefde51381fe10ad5ab61594cb2c2",
+      "publisher": {
+        "name": "GlobeNewswire Inc.",
+        "homepage_url": "https://www.globenewswire.com",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/globenewswire.svg",
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/globenewswire.ico"
+      },
+      "title": "Trillion Dollar Robot Under Investigation: New 2026 Report Highlights Nvidia AI Expansion, Autonomous Trucking Breakthroughs, and Rapid Expansion of Robotics Infrastructure",
+      "author": "Michael Robinson (Disruptors & Dominators/Weiss Ratings)",
+      "published_utc": "2026-04-11T22:02:00Z",
+      "article_url": "https://www.globenewswire.com/news-release/2026/04/11/3272128/0/en/Trillion-Dollar-Robot-Under-Investigation-New-2026-Report-Highlights-Nvidia-AI-Expansion-Autonomous-Trucking-Breakthroughs-and-Rapid-Expansion-of-Robotics-Infrastructure.html",
+      "tickers": [
+        "NVDA",
+        "FDX",
+        "TM",
+        "R",
+        "TSLA",
+        "VLVLY"
+      ],
+      "image_url": "https://ml.globenewswire.com/Resource/Download/7b54c346-1880-440e-9477-fb12d826bcfd",
+      "description": "A Disruptors & Dominators research report identifies emerging opportunities in AI infrastructure, autonomous trucking, and robotics. The analysis highlights a small-cap company (~$7/share) positioned as a critical Nvidia partner in autonomous vehicle development, with 100+ patents, 2M+ commercial testing miles, and partnerships with FedEx, Volvo, Toyota, and Peterbilt. The report frames autonomous trucking within a broader robotics economy shift, citing the $1 trillion U.S. trucking sector, 60,000+ driver shortage, and projected 44% freight volume increase over two decades.",
+      "keywords": [
+        "artificial intelligence infrastructure",
+        "autonomous trucking",
+        "robotics",
+        "small-cap technology",
+        "Nvidia ecosystem",
+        "autonomous vehicles",
+        "AI-driven logistics",
+        "commercial deployment"
+      ],
+      "insights": [
+        {
+          "ticker": "NVDA",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Positioned as the infrastructure backbone of AI-driven automation with DriveThor chip platform powering autonomous vehicle systems; ecosystem partners historically showed exceptional gains (Applied Materials +550%, ASML +640%, Super Micro Computer +6,446%)"
+        },
+        {
+          "ticker": "FDX",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Cited as an established commercial partner with the featured autonomous trucking company, indicating adoption of autonomous vehicle technology"
+        },
+        {
+          "ticker": "TM",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Identified as an established industry partner in autonomous vehicle technology deployment"
+        },
+        {
+          "ticker": "R",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Listed as an established commercial partner with the featured autonomous trucking company"
+        },
+        {
+          "ticker": "TSLA",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Referenced as having ~500,000 drivers using full self-driving system, demonstrating consumer autonomous vehicle adoption"
+        },
+        {
+          "ticker": "VLVLY",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Listed as an active commercial partner in autonomous trucking development"
+        }
+      ]
+    }
+  },
+  {
+    "news_id": "974ba2dc96ef74caee6ab43a343631619c076df13686ddf23143d79bf4bd916e",
+    "symbol": "NVDA",
+    "published_time": "2026-04-11T21:19:00Z",
+    "source_vendor": "polygon-news",
+    "raw_payload": {
+      "id": "974ba2dc96ef74caee6ab43a343631619c076df13686ddf23143d79bf4bd916e",
+      "publisher": {
+        "name": "The Motley Fool",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico"
+      },
+      "title": "2.5 Billion Reasons Apple Might Be the Best Artificial Intelligence (AI) Stock to Buy Today",
+      "author": "Jennifer Saibil",
+      "published_utc": "2026-04-11T21:19:00Z",
+      "article_url": "https://www.fool.com/investing/2026/04/11/25-billion-reasons-apple-might-be-the-best-ai-buy/?source=iedfolrf0000001",
+      "tickers": [
+        "AAPL",
+        "GOOG",
+        "GOOGL",
+        "AMZN",
+        "MSFT",
+        "META",
+        "NVDA"
+      ],
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F862001%2Fapple-sainte-catherine-montreal-canada-opening-day-team-members-assisting-customers.jpg&w=1200&op=resize",
+      "description": "Apple's 2.5 billion active devices provide massive exposure to AI users. Rather than developing its own LLM, Apple partnered with Alphabet to use Gemini for Apple Intelligence, paying $1 billion annually—a fraction of competitors' AI investments. With iPhone sales up 23% year-over-year and strong ecosystem integration, Apple may be better positioned than competitors to benefit from AI advances despite initial market concerns about its AI lag.",
+      "keywords": [
+        "Apple Intelligence",
+        "AI partnership",
+        "installed user base",
+        "Gemini LLM",
+        "iPhone sales growth",
+        "AI investment strategy"
+      ],
+      "insights": [
+        {
+          "ticker": "AAPL",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Strong 2.5 billion active device base provides unmatched AI distribution platform; iPhone sales grew 23% YoY; strategic partnership with Alphabet reduces AI development costs while maintaining competitive positioning; ecosystem integration provides differentiation advantage."
+        },
+        {
+          "ticker": "GOOG",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Secured $1 billion annual deal with Apple to provide Gemini LLM; demonstrates market validation of its AI technology and creates recurring revenue stream from major tech competitor."
+        },
+        {
+          "ticker": "GOOGL",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Secured $1 billion annual deal with Apple to provide Gemini LLM; demonstrates market validation of its AI technology and creates recurring revenue stream from major tech competitor."
+        },
+        {
+          "ticker": "AMZN",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as AI competitor with massive $200 billion capex investment in 2026; article suggests Apple's lower-cost partnership approach may be wiser, implying Amazon's heavy spending may not be optimal strategy."
+        },
+        {
+          "ticker": "MSFT",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as AI peer developing its own LLM; no specific positive or negative commentary provided about its AI strategy or performance."
+        },
+        {
+          "ticker": "META",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as AI competitor developing its own LLM; no specific positive or negative commentary provided about its AI strategy or performance."
+        },
+        {
+          "ticker": "NVDA",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Noted as currently the most valuable company in the world, displacing Apple; mentioned as context for market dynamics but no specific sentiment regarding its business or strategy."
+        }
+      ]
+    }
+  },
+  {
+    "news_id": "c8f8ba99fefbd44e66dd75d67b4ad8eb02abc57a05ab48d9e4d9172db22daeda",
+    "symbol": "SNOW",
+    "published_time": "2026-04-12T02:31:00Z",
+    "source_vendor": "polygon-news",
+    "raw_payload": {
+      "id": "c8f8ba99fefbd44e66dd75d67b4ad8eb02abc57a05ab48d9e4d9172db22daeda",
+      "publisher": {
+        "name": "The Motley Fool",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico"
+      },
+      "title": "2 AI Stocks I Don't Like (Including Palantir) and 1 I Love",
+      "author": "Daniel Sparks",
+      "published_utc": "2026-04-12T02:31:00Z",
+      "article_url": "https://www.fool.com/investing/2026/04/11/2-ai-stocks-i-dont-like-and-1-i-love/?source=iedfolrf0000001",
+      "tickers": [
+        "PLTR",
+        "SNOW",
+        "AMZN"
+      ],
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F865293%2Fcomparing-palantir-snowflake-amazon.jpg&w=1200&op=resize",
+      "description": "Despite recent software stock declines, analyst Daniel Sparks argues that popular AI stocks Palantir and Snowflake remain overvalued with stretched valuations. He favors Amazon instead, citing its massive cloud computing business growing at its fastest pace in years, reasonable valuation at 33x earnings, and strong operational cash flow of $139.5 billion, making it better positioned to capitalize on AI opportunities.",
+      "keywords": [
+        "AI stocks",
+        "valuation",
+        "software stocks",
+        "cloud computing",
+        "profitability",
+        "capital expenditures"
+      ],
+      "insights": [
+        {
+          "ticker": "PLTR",
+          "sentiment": "negative",
+          "sentiment_reasoning": "Despite exceptional 70% YoY revenue growth and strong business performance, the stock's valuation is unjustifiable with a P/E ratio over 200 and forward P/E near 100. The market is pricing in flawless execution, leaving significant downside risk if customer growth decelerates."
+        },
+        {
+          "ticker": "SNOW",
+          "sentiment": "negative",
+          "sentiment_reasoning": "While the company shows strong revenue growth of 30% YoY, it remains unprofitable with a $1.44 billion operating loss in fiscal 2026. Heavy stock-based compensation continues to weigh on profitability, yet the $42 billion market cap has already priced in a swing to substantial profitability that could be years away."
+        },
+        {
+          "ticker": "AMZN",
+          "sentiment": "positive",
+          "sentiment_reasoning": "AWS cloud computing segment grew 24% YoY to $35.6 billion with a $142.4 billion run rate. The company trades at a sensible 33x earnings with $139.5 billion in trailing twelve-month operating cash flow (up 20% YoY), providing a resilient, diversified business well-positioned for AI opportunities despite high capital expenditure requirements."
+        }
+      ]
+    }
+  },
+  {
+    "news_id": "478aedbab0f8e9668ca228c4b3f8570fb566fc38eefcb5908a297ce7d1c638d4",
+    "symbol": "SNOW",
+    "published_time": "2026-04-10T21:21:16Z",
+    "source_vendor": "polygon-news",
+    "raw_payload": {
+      "id": "478aedbab0f8e9668ca228c4b3f8570fb566fc38eefcb5908a297ce7d1c638d4",
+      "publisher": {
+        "name": "The Motley Fool",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico"
+      },
+      "title": "Stock Market Today, April 10: Markets Flat as Investors Watch Iran Peace Negotiations",
+      "author": "Emma Newbery",
+      "published_utc": "2026-04-10T21:21:16Z",
+      "article_url": "https://www.fool.com/coverage/stock-market-today/2026/04/10/stock-market-today-april-10-markets-flat-as-investors-watch-iran-peace-negotiations/?source=iedfolrf0000001",
+      "tickers": [
+        "NOW",
+        "SNOW",
+        "CRWV",
+        "QCOM",
+        "FICO"
+      ],
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fcdn.content.foolcdn.com%2Fimages%2F1umn9qeh%2Fproduction%2Fe3bcbb36c955ac33b4d67641805fcca8e9fca941-1401x1251.png%3Fw%3D800%26q%3D75%26fit%3Dmax%26auto%3Dformat&w=1200&op=resize",
+      "description": "Markets remained flat on April 10, 2026, as investors monitored Iran peace negotiations and inflation data. The S&P 500 slipped 0.11% while the Nasdaq rose 0.35%. Software stocks weakened amid AI disruption concerns, while chip and AI hardware stocks showed resilience. March CPI rose 3.3% annually, driven by energy costs, potentially delaying Federal Reserve rate cuts.",
+      "keywords": [
+        "stock market",
+        "Iran negotiations",
+        "inflation",
+        "CPI",
+        "AI stocks",
+        "software weakness",
+        "chip stocks",
+        "oil prices"
+      ],
+      "insights": [
+        {
+          "ticker": "NOW",
+          "sentiment": "negative",
+          "sentiment_reasoning": "Stock dropped sharply following a UBS downgrade and slashed price target"
+        },
+        {
+          "ticker": "SNOW",
+          "sentiment": "negative",
+          "sentiment_reasoning": "Tumbled over 8% due to concerns about AI disruption in its business model"
+        },
+        {
+          "ticker": "CRWV",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Soared 11% after announcing a multi-year agreement with Anthropic"
+        },
+        {
+          "ticker": "QCOM",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Edged higher, potentially benefiting from a new augmented eyewear partnership"
+        },
+        {
+          "ticker": "FICO",
+          "sentiment": "negative",
+          "sentiment_reasoning": "Plummeted 14% amid potential regulatory scrutiny concerns"
+        }
+      ]
+    }
+  },
+  {
+    "news_id": "47da4c4d6002e5fad04b98dbb78ca9faf7a15ef774fdd001e8bfab33706ded4e",
+    "symbol": "SNOW",
+    "published_time": "2026-04-08T02:29:00Z",
+    "source_vendor": "polygon-news",
+    "raw_payload": {
+      "id": "47da4c4d6002e5fad04b98dbb78ca9faf7a15ef774fdd001e8bfab33706ded4e",
+      "publisher": {
+        "name": "GlobeNewswire Inc.",
+        "homepage_url": "https://www.globenewswire.com",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/globenewswire.svg",
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/globenewswire.ico"
+      },
+      "title": "ROSEN, RECOGNIZED INVESTOR COUNSEL, Encourages Snowflake Inc. Investors to Secure Counsel Before Important Deadline in Securities Class Action - SNOW",
+      "author": "Rosen Law Firm",
+      "published_utc": "2026-04-08T02:29:00Z",
+      "article_url": "https://www.globenewswire.com/news-release/2026/04/08/3269782/673/en/ROSEN-RECOGNIZED-INVESTOR-COUNSEL-Encourages-Snowflake-Inc-Investors-to-Secure-Counsel-Before-Important-Deadline-in-Securities-Class-Action-SNOW.html",
+      "tickers": [
+        "SNOW"
+      ],
+      "image_url": "https://ml.globenewswire.com/Resource/Download/745335af-3a3a-4fb5-84c0-fdedc9adf092",
+      "description": "A securities class action lawsuit has been filed against Snowflake Inc. for allegedly making positive statements about business performance while failing to disclose that product efficiency gains, Iceberg Tables, and tiered storage pricing would materially negatively impact consumption and revenues. Investors who purchased Class A common stock between June 27, 2023 and February 28, 2024 may be entitled to compensation. The lead plaintiff deadline is April 27, 2026.",
+      "keywords": [
+        "securities class action",
+        "Snowflake",
+        "investor fraud",
+        "misleading statements",
+        "product efficiency",
+        "revenue impact",
+        "lead plaintiff deadline"
+      ],
+      "insights": [
+        {
+          "ticker": "SNOW",
+          "sentiment": "negative",
+          "sentiment_reasoning": "The company is the subject of a securities class action lawsuit alleging that management made materially misleading positive statements about business performance while concealing known negative impacts from product changes on consumption and revenues. This represents alleged fraud and breach of fiduciary duty to investors."
+        }
+      ]
+    }
+  },
+  {
+    "news_id": "e745fb18025e5eb9d5b1d3cae3ef898303b8c259b6737110769ed9748f9c5946",
+    "symbol": "SNOW",
+    "published_time": "2026-04-04T21:19:00Z",
+    "source_vendor": "polygon-news",
+    "raw_payload": {
+      "id": "e745fb18025e5eb9d5b1d3cae3ef898303b8c259b6737110769ed9748f9c5946",
+      "publisher": {
+        "name": "GlobeNewswire Inc.",
+        "homepage_url": "https://www.globenewswire.com",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/globenewswire.svg",
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/globenewswire.ico"
+      },
+      "title": "ROSEN, A RANKED AND LEADING LAW FIRM, Encourages Snowflake Inc. Investors to Secure Counsel Before Important Deadline in Securities Class Action - SNOW",
+      "author": "Rosen Law Firm",
+      "published_utc": "2026-04-04T21:19:00Z",
+      "article_url": "https://www.globenewswire.com/news-release/2026/04/04/3268209/673/en/ROSEN-A-RANKED-AND-LEADING-LAW-FIRM-Encourages-Snowflake-Inc-Investors-to-Secure-Counsel-Before-Important-Deadline-in-Securities-Class-Action-SNOW.html",
+      "tickers": [
+        "SNOW",
+        "PINS",
+        "IBRX"
+      ],
+      "image_url": "https://ml.globenewswire.com/Resource/Download/745335af-3a3a-4fb5-84c0-fdedc9adf092",
+      "description": "Rosen Law Firm has filed securities class action lawsuits against Snowflake Inc., Pinterest Inc., and ImmunityBio Inc. The Snowflake lawsuit alleges that defendants made positive statements about business performance while failing to disclose that product efficiency gains and pricing changes would materially impact consumption and revenues. Investors who purchased securities during specified class periods are encouraged to secure counsel before upcoming deadlines.",
+      "keywords": [
+        "securities class action",
+        "investor lawsuit",
+        "Snowflake",
+        "Pinterest",
+        "ImmunityBio",
+        "disclosure violations",
+        "lead plaintiff deadline"
+      ],
+      "insights": [
+        {
+          "ticker": "SNOW",
+          "sentiment": "negative",
+          "sentiment_reasoning": "Company is defendant in securities class action lawsuit alleging material misstatements about business performance and failure to disclose negative impacts of product changes on revenues and consumption."
+        },
+        {
+          "ticker": "PINS",
+          "sentiment": "negative",
+          "sentiment_reasoning": "Company is defendant in securities class action lawsuit, though specific allegations are not detailed in the provided excerpt."
+        },
+        {
+          "ticker": "IBRX",
+          "sentiment": "negative",
+          "sentiment_reasoning": "Company is defendant in securities class action lawsuit, though specific allegations are not detailed in the provided excerpt."
+        }
+      ]
+    }
+  },
+  {
+    "news_id": "d62e7f150daa53d4b4dcf453083c8619a6aca27fecbba988a46d21de1b79e3ea",
+    "symbol": "SNOW",
+    "published_time": "2026-04-04T15:12:00Z",
+    "source_vendor": "polygon-news",
+    "raw_payload": {
+      "id": "d62e7f150daa53d4b4dcf453083c8619a6aca27fecbba988a46d21de1b79e3ea",
+      "publisher": {
+        "name": "GlobeNewswire Inc.",
+        "homepage_url": "https://www.globenewswire.com",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/globenewswire.svg",
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/globenewswire.ico"
+      },
+      "title": "INVESTOR DEADLINE: Robbins Geller Rudman & Dowd LLP Announces that Snowflake Inc. (SNOW) Investors with Substantial Losses Have Opportunity to Lead Investor Class Action Lawsuit",
+      "author": "Robbins Geller Rudman & Dowd Llp",
+      "published_utc": "2026-04-04T15:12:00Z",
+      "article_url": "https://www.globenewswire.com/news-release/2026/04/04/3268185/0/en/INVESTOR-DEADLINE-Robbins-Geller-Rudman-Dowd-LLP-Announces-that-Snowflake-Inc-SNOW-Investors-with-Substantial-Losses-Have-Opportunity-to-Lead-Investor-Class-Action-Lawsuit.html",
+      "tickers": [
+        "SNOW"
+      ],
+      "image_url": "https://ml.globenewswire.com/Resource/Download/a2879a30-a9fa-457e-97f6-7e2cd2528b7b",
+      "description": "A class action lawsuit has been filed against Snowflake Inc. for allegedly making false statements about product efficiency gains, Iceberg Tables, and tiered storage pricing that would negatively impact revenue. The lawsuit covers investors who purchased shares between June 27, 2023 and February 28, 2024. Snowflake's stock fell over 18% when the company disclosed increased revenue headwinds on February 28, 2024. Investors with substantial losses have until April 27, 2026 to seek appointment as lead plaintiff.",
+      "keywords": [
+        "class action lawsuit",
+        "securities fraud",
+        "false statements",
+        "revenue headwinds",
+        "product efficiency",
+        "lead plaintiff",
+        "investor losses"
+      ],
+      "insights": [
+        {
+          "ticker": "SNOW",
+          "sentiment": "negative",
+          "sentiment_reasoning": "The company is accused of making false and misleading statements about product efficiency gains and their impact on revenue. The stock experienced an 18% decline following disclosure of revenue headwinds, and a securities class action lawsuit has been filed against the company and its former executives for alleged violations of the Securities Exchange Act of 1934."
+        }
+      ]
+    }
+  },
+  {
+    "news_id": "5a8ff9421089d7831d9e11bf467dfb27b372b84f3ecd047d138e4af38d7794d6",
+    "symbol": "CRWD",
+    "published_time": "2026-04-10T03:15:00Z",
+    "source_vendor": "polygon-news",
+    "raw_payload": {
+      "id": "5a8ff9421089d7831d9e11bf467dfb27b372b84f3ecd047d138e4af38d7794d6",
+      "publisher": {
+        "name": "The Motley Fool",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico"
+      },
+      "title": "Prediction: Cybersecurity Spending Will Be Recession-Proof in 2026. Here Are 2 Stocks to Buy.",
+      "author": "Reuben Gregg Brewer",
+      "published_utc": "2026-04-10T03:15:00Z",
+      "article_url": "https://www.fool.com/investing/2026/04/09/prediction-cybersecurity-spending-will-be-recessio/?source=iedfolrf0000001",
+      "tickers": [
+        "CRWD",
+        "MSFT"
+      ],
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F860352%2F23_08_15-a-frustrated-investor-looking-at-a-computer-_mf-dload.jpg&w=1200&op=resize",
+      "description": "Anthropic's Project Glasswing demonstrates that cybersecurity will remain essential alongside AI development, as criminals will also leverage AI. The article recommends CrowdStrike and Microsoft as well-positioned cybersecurity plays, noting both stocks have declined significantly from their 52-week highs and offer attractive valuations for long-term growth investors.",
+      "keywords": [
+        "cybersecurity",
+        "artificial intelligence",
+        "Project Glasswing",
+        "endpoint security",
+        "recession-proof spending",
+        "stock recommendations"
+      ],
+      "insights": [
+        {
+          "ticker": "CRWD",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Positioned as a key cybersecurity partner in Project Glasswing with strong fundamentals including 97% retention rate, subscription-based recurring revenue model, and attractive valuation metrics following a 20% decline from 52-week high."
+        },
+        {
+          "ticker": "MSFT",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Recognized as vital cybersecurity partner in Project Glasswing with diversified tech portfolio. Stock has fallen 30% from 52-week high, offering below-average price-to-sales, price-to-earnings, and price-to-book ratios, making it attractive for long-term AI and cybersecurity exposure."
+        }
+      ]
+    }
+  },
+  {
+    "news_id": "5b16fa82fe472569b7e91761f706a1b557c1d97705fec4b1cb7a4b4352eae78e",
+    "symbol": "CRWD",
+    "published_time": "2026-04-08T03:10:38Z",
+    "source_vendor": "polygon-news",
+    "raw_payload": {
+      "id": "5b16fa82fe472569b7e91761f706a1b557c1d97705fec4b1cb7a4b4352eae78e",
+      "publisher": {
+        "name": "Benzinga",
+        "homepage_url": "https://www.benzinga.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/benzinga.svg",
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/benzinga.ico"
+      },
+      "title": "Palo Alto (PANW) Stock Is Trending Overnight: Here's What Is Happening",
+      "author": "Mohd Haider",
+      "published_utc": "2026-04-08T03:10:38Z",
+      "article_url": "https://www.benzinga.com/markets/equities/26/04/51695787/palo-alto-panw-stock-is-trending-overnight-heres-what-is-happening?utm_source=benzinga_taxonomy&utm_medium=rss_feed_free&utm_content=taxonomy_rss&utm_campaign=channel",
+      "tickers": [
+        "PANW",
+        "AMZN",
+        "MSFT",
+        "GOOG",
+        "GOOGL",
+        "CSCO",
+        "CRWD",
+        "AAPL",
+        "AVGO",
+        "NVDA",
+        "AMJB",
+        "JPM",
+        "JPMpC",
+        "JPMpD",
+        "JPMpJ",
+        "JPMpK",
+        "JPMpL",
+        "JPMpM",
+        "VYLD"
+      ],
+      "image_url": "https://cdn.benzinga.com/files/images/story/2026/04/07/Palo-Alto-Networks-Inc-.jpeg?width=1200&height=800&fit=crop",
+      "description": "Palo Alto Networks (PANW) shares rose 2.42% in after-hours trading following Anthropic's announcement of Project Glasswing, a cybersecurity initiative with PANW as a launch partner. The initiative includes Claude Mythos Preview, an AI model identifying thousands of vulnerabilities, and commits up to $100 million in usage credits for defensive security work. Meanwhile, former PANW director Mary Pat McCarthy filed to sell approximately $2 million worth of shares.",
+      "keywords": [
+        "cybersecurity",
+        "AI-powered attacks",
+        "Project Glasswing",
+        "vulnerability detection",
+        "insider trading",
+        "after-hours trading"
+      ],
+      "insights": [
+        {
+          "ticker": "PANW",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Stock rose 2.42% in after-hours trading on news of partnership with Anthropic's Project Glasswing, positioning the company as a key player in AI-powered cybersecurity solutions. The initiative aligns with CEO's prior warnings about AI-powered attacks."
+        },
+        {
+          "ticker": "AMZN",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Listed as a launch partner for Project Glasswing, but no specific impact or sentiment drivers mentioned in the article."
+        },
+        {
+          "ticker": "MSFT",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Listed as a launch partner for Project Glasswing, but no specific impact or sentiment drivers mentioned in the article."
+        },
+        {
+          "ticker": "GOOG",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Listed as a launch partner for Project Glasswing, but no specific impact or sentiment drivers mentioned in the article."
+        },
+        {
+          "ticker": "GOOGL",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Listed as a launch partner for Project Glasswing, but no specific impact or sentiment drivers mentioned in the article."
+        },
+        {
+          "ticker": "CSCO",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Listed as a launch partner for Project Glasswing, but no specific impact or sentiment drivers mentioned in the article."
+        },
+        {
+          "ticker": "CRWD",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Listed as a launch partner for Project Glasswing, but no specific impact or sentiment drivers mentioned in the article."
+        },
+        {
+          "ticker": "AAPL",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Listed as a launch partner for Project Glasswing, but no specific impact or sentiment drivers mentioned in the article."
+        },
+        {
+          "ticker": "AVGO",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Listed as a launch partner for Project Glasswing, but no specific impact or sentiment drivers mentioned in the article."
+        },
+        {
+          "ticker": "NVDA",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Listed as a launch partner for Project Glasswing, but no specific impact or sentiment drivers mentioned in the article."
+        },
+        {
+          "ticker": "AMJB",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Listed as a launch partner for Project Glasswing, but no specific impact or sentiment drivers mentioned in the article."
+        },
+        {
+          "ticker": "JPM",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Listed as a launch partner for Project Glasswing, but no specific impact or sentiment drivers mentioned in the article."
+        },
+        {
+          "ticker": "JPMpC",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Listed as a launch partner for Project Glasswing, but no specific impact or sentiment drivers mentioned in the article."
+        },
+        {
+          "ticker": "JPMpD",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Listed as a launch partner for Project Glasswing, but no specific impact or sentiment drivers mentioned in the article."
+        },
+        {
+          "ticker": "JPMpJ",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Listed as a launch partner for Project Glasswing, but no specific impact or sentiment drivers mentioned in the article."
+        },
+        {
+          "ticker": "JPMpK",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Listed as a launch partner for Project Glasswing, but no specific impact or sentiment drivers mentioned in the article."
+        },
+        {
+          "ticker": "JPMpL",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Listed as a launch partner for Project Glasswing, but no specific impact or sentiment drivers mentioned in the article."
+        },
+        {
+          "ticker": "JPMpM",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Listed as a launch partner for Project Glasswing, but no specific impact or sentiment drivers mentioned in the article."
+        },
+        {
+          "ticker": "VYLD",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Listed as a launch partner for Project Glasswing, but no specific impact or sentiment drivers mentioned in the article."
+        }
+      ]
+    }
+  },
+  {
+    "news_id": "5694115ab53352d17c14887593fda6a2996f2867235c93e45c035935fedb4c2f",
+    "symbol": "CRWD",
+    "published_time": "2026-04-07T19:06:00Z",
+    "source_vendor": "polygon-news",
+    "raw_payload": {
+      "id": "5694115ab53352d17c14887593fda6a2996f2867235c93e45c035935fedb4c2f",
+      "publisher": {
+        "name": "The Motley Fool",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico"
+      },
+      "title": "Got $5,000? These 2 AI Security Growth Stocks Wall Street Says Could Surge 58% or More",
+      "author": "Dave Kovaleski",
+      "published_utc": "2026-04-07T19:06:00Z",
+      "article_url": "https://www.fool.com/investing/2026/04/07/got-5000-2-ai-security-growth-stocks-wall-street-s/?source=iedfolrf0000001",
+      "tickers": [
+        "ZS",
+        "TEAM",
+        "CRWD",
+        "AMJB",
+        "JPM",
+        "JPMpC",
+        "JPMpD",
+        "JPMpJ",
+        "JPMpK",
+        "JPMpL",
+        "JPMpM",
+        "VYLD"
+      ],
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F862717%2Fgettyimages-949581004.jpg&w=1200&op=resize",
+      "description": "Wall Street analysts are bullish on cybersecurity stocks Zscaler and Atlassian, with projected gains of 58% and 120% respectively over the next 12 months. A JPMorgan report forecasts $240 billion in cybersecurity spending in 2026, growing to $320 billion by 2029, driven by AI infrastructure protection needs and geopolitical tensions. Both stocks have fallen significantly year-to-date but analysts believe they offer strong recovery potential.",
+      "keywords": [
+        "cybersecurity stocks",
+        "AI security",
+        "Zscaler",
+        "Atlassian",
+        "Wall Street analyst ratings",
+        "cybersecurity spending forecast",
+        "AI infrastructure protection"
+      ],
+      "insights": [
+        {
+          "ticker": "ZS",
+          "sentiment": "positive",
+          "sentiment_reasoning": "86% of analysts rate it as a buy with a median price target of $220 indicating 58% upside. Strong revenue and ARR growth guidance of 24%, though valuation at 30x forward earnings remains elevated. Stock has fallen 40% YTD but positioned to benefit from rising cybersecurity spending."
+        },
+        {
+          "ticker": "TEAM",
+          "sentiment": "positive",
+          "sentiment_reasoning": "79% of analysts rate it as a buy with median price target of $150 indicating 120% upside. Lower valuation at 12x forward P/E compared to peers, strong revenue growth guidance of 22%, and moving toward profitability through restructuring. Despite 58% YTD decline, positioned well for recovery."
+        },
+        {
+          "ticker": "CRWD",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as a competitor in the endpoint protection niche. No specific analyst ratings or price targets provided in the article, only referenced as an example of a different cybersecurity specialization."
+        },
+        {
+          "ticker": "AMJB",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as the source of the cybersecurity spending forecast report. No investment recommendation or sentiment expressed regarding the company itself."
+        },
+        {
+          "ticker": "JPM",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as the source of the cybersecurity spending forecast report. No investment recommendation or sentiment expressed regarding the company itself."
+        },
+        {
+          "ticker": "JPMpC",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as the source of the cybersecurity spending forecast report. No investment recommendation or sentiment expressed regarding the company itself."
+        },
+        {
+          "ticker": "JPMpD",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as the source of the cybersecurity spending forecast report. No investment recommendation or sentiment expressed regarding the company itself."
+        },
+        {
+          "ticker": "JPMpJ",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as the source of the cybersecurity spending forecast report. No investment recommendation or sentiment expressed regarding the company itself."
+        },
+        {
+          "ticker": "JPMpK",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as the source of the cybersecurity spending forecast report. No investment recommendation or sentiment expressed regarding the company itself."
+        },
+        {
+          "ticker": "JPMpL",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as the source of the cybersecurity spending forecast report. No investment recommendation or sentiment expressed regarding the company itself."
+        },
+        {
+          "ticker": "JPMpM",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as the source of the cybersecurity spending forecast report. No investment recommendation or sentiment expressed regarding the company itself."
+        },
+        {
+          "ticker": "VYLD",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as the source of the cybersecurity spending forecast report. No investment recommendation or sentiment expressed regarding the company itself."
+        }
+      ]
+    }
+  },
+  {
+    "news_id": "4a5a49da75350461e94ca0648c8416659a033936ea8059967aed393249078594",
+    "symbol": "CRWD",
+    "published_time": "2026-04-07T17:30:00Z",
+    "source_vendor": "polygon-news",
+    "raw_payload": {
+      "id": "4a5a49da75350461e94ca0648c8416659a033936ea8059967aed393249078594",
+      "publisher": {
+        "name": "The Motley Fool",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico"
+      },
+      "title": "The Market Just Crashed. Should You Be Buying SoFi, Meta, and Cybersecurity Stocks Right Now?",
+      "author": "Neil Rozenbaum",
+      "published_utc": "2026-04-07T17:30:00Z",
+      "article_url": "https://www.fool.com/investing/2026/04/07/the-market-just-crashed-should-you-be-buying-sofi/?source=iedfolrf0000001",
+      "tickers": [
+        "SOFI",
+        "META",
+        "CRWD",
+        "RBRK"
+      ],
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F864278%2Fgettyimages-1067591998.jpg&w=1200&op=resize",
+      "description": "Following a market downturn, the article examines whether it's a good time to buy SoFi and Meta, which are caught in the sell-off. It also discusses how Anthropic's Claude Mythos AI model is reshaping the cybersecurity sector.",
+      "keywords": [
+        "market crash",
+        "buying opportunity",
+        "SoFi",
+        "Meta",
+        "cybersecurity stocks",
+        "AI model",
+        "Claude Mythos"
+      ],
+      "insights": [
+        {
+          "ticker": "SOFI",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Stock is caught in a market sell-off with a -0.52% decline. The article presents it as a potential buying opportunity during the downturn, but without strong conviction either way."
+        },
+        {
+          "ticker": "META",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Stock is experiencing a pullback (-0.51%) amid the market crash. Multiple related articles suggest it could be a gift/buying opportunity, but the article itself doesn't provide strong directional guidance."
+        },
+        {
+          "ticker": "CRWD",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Cybersecurity stock showing positive performance (+0.93%) while the broader market declines. Implied positive sentiment as the article discusses cybersecurity sector being reshaped by new AI developments."
+        },
+        {
+          "ticker": "RBRK",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Cybersecurity-related stock showing positive performance (+1.81%) amid market downturn. Implied positive sentiment as part of the cybersecurity sector discussion."
+        }
+      ]
+    }
+  },
+  {
+    "news_id": "a22014718e845d913acf57fc1e2f37939651d43a1d01dad3b4fc319ff4bd2cf5",
+    "symbol": "CRWD",
+    "published_time": "2026-04-07T13:10:00Z",
+    "source_vendor": "polygon-news",
+    "raw_payload": {
+      "id": "a22014718e845d913acf57fc1e2f37939651d43a1d01dad3b4fc319ff4bd2cf5",
+      "publisher": {
+        "name": "The Motley Fool",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico"
+      },
+      "title": "The AI Supercycle's Biggest Blind Spot: Why Cybersecurity Growth Stocks Could Outperform in 2026",
+      "author": "Dave Kovaleski",
+      "published_utc": "2026-04-07T13:10:00Z",
+      "article_url": "https://www.fool.com/investing/2026/04/07/the-ai-supercycles-biggest-blind-spot-why-cybersec/?source=iedfolrf0000001",
+      "tickers": [
+        "CRWD",
+        "PANW",
+        "ZS",
+        "NET",
+        "NVDA",
+        "AVGO",
+        "MU",
+        "PLTR"
+      ],
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F862714%2Fgettyimages-2226632985.jpg&w=1200&op=resize",
+      "description": "Cybersecurity stocks have lagged during the AI boom but are poised for a breakout in 2026. JPMorgan Chase projects global cybersecurity spending will reach $240 billion in 2026 and $320 billion by 2029, with AI-related cybersecurity spending growing 3-4x faster. Rising geopolitical tensions and the need to protect AI infrastructure investments are key drivers. Analysts identify CrowdStrike, Palo Alto Networks, and Zscaler as likely winners, though valuations remain a concern.",
+      "keywords": [
+        "cybersecurity stocks",
+        "AI spending",
+        "geopolitical tensions",
+        "AI infrastructure protection",
+        "cybersecurity growth",
+        "enterprise security"
+      ],
+      "insights": [
+        {
+          "ticker": "CRWD",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Identified as a key winner in cybersecurity space by JPMorgan Chase and Wedbush; 71% of analysts rate it a buy with 26% upside potential; recent geopolitical tensions have driven 3.3% gains in the past month."
+        },
+        {
+          "ticker": "PANW",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Recommended by both JPMorgan Chase and Wedbush as a cybersecurity winner; 83% of analysts rate it a buy with 28% upside potential; gained 6.1% in the past month following geopolitical developments."
+        },
+        {
+          "ticker": "ZS",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Highlighted by JPMorgan Chase and Wedbush as a key beneficiary of increased cybersecurity spending; 86% of analysts rate it a buy with 56% upside potential; positioned to benefit from AI-driven cybersecurity growth."
+        },
+        {
+          "ticker": "NET",
+          "sentiment": "positive",
+          "sentiment_reasoning": "Mentioned as a cybersecurity stock that has surged 15.4% in the past month following geopolitical tensions and increased focus on cybersecurity spending."
+        },
+        {
+          "ticker": "NVDA",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as a leading AI stock that has benefited from the AI supercycle; included for context but not directly related to the cybersecurity investment thesis."
+        },
+        {
+          "ticker": "AVGO",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as a leading AI stock that has benefited from the AI supercycle; included for context but not directly related to the cybersecurity investment thesis."
+        },
+        {
+          "ticker": "MU",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as a leading AI stock that has benefited from the AI supercycle; included for context but not directly related to the cybersecurity investment thesis."
+        },
+        {
+          "ticker": "PLTR",
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as a leading AI stock that has benefited from the AI supercycle; included for context but not directly related to the cybersecurity investment thesis."
+        }
+      ]
+    }
+  }
+]

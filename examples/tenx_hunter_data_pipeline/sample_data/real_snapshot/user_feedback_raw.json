@@ -1,0 +1,50 @@
+[
+  {
+    "feedback_id": "demo-feedback-001",
+    "user_id": "demo_user",
+    "symbol": "NVDA",
+    "feedback_type": "seed_feedback",
+    "feedback_time": "2026-04-12T08:16:02Z",
+    "raw_payload": {
+      "symbol": "NVDA",
+      "feedback_type": "seed_feedback",
+      "note": "Prototype placeholder feedback row for ODS completeness"
+    }
+  },
+  {
+    "feedback_id": "demo-feedback-002",
+    "user_id": "demo_user",
+    "symbol": "SNOW",
+    "feedback_type": "seed_feedback",
+    "feedback_time": "2026-04-12T08:16:24Z",
+    "raw_payload": {
+      "symbol": "SNOW",
+      "feedback_type": "seed_feedback",
+      "note": "Prototype placeholder feedback row for ODS completeness"
+    }
+  },
+  {
+    "feedback_id": "demo-feedback-003",
+    "user_id": "demo_user",
+    "symbol": "CRWD",
+    "feedback_type": "seed_feedback",
+    "feedback_time": "2026-04-12T08:16:45Z",
+    "raw_payload": {
+      "symbol": "CRWD",
+      "feedback_type": "seed_feedback",
+      "note": "Prototype placeholder feedback row for ODS completeness"
+    }
+  },
+  {
+    "feedback_id": "demo-feedback-004",
+    "user_id": "demo_user",
+    "symbol": "ARM",
+    "feedback_type": "seed_feedback",
+    "feedback_time": "2026-04-12T08:17:09Z",
+    "raw_payload": {
+      "symbol": "ARM",
+      "feedback_type": "seed_feedback",
+      "note": "Prototype placeholder feedback row for ODS completeness"
+    }
+  }
+]

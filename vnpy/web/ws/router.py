@@ -5,7 +5,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from vnpy.web.services import cb_quant_service
+import vnpy.web.services as services
 
 ws_router = APIRouter(prefix="/ws", tags=["ws"])
 
@@ -25,7 +25,7 @@ async def events(websocket: WebSocket) -> None:
 
     try:
         while True:
-            stats = cb_quant_service.get_stats().model_dump()
+            stats = services.quant_service.get_stats().model_dump()
             await websocket.send_json({"event": "cb_quant.stats", "payload": stats})
             await websocket.send_json(
                 {

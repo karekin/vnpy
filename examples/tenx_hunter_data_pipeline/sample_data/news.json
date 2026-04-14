@@ -1,0 +1,82 @@
+[
+  {
+    "news_id": "news-nvda-20260410-01",
+    "symbol": "NVDA",
+    "published_time": "2026-04-10T22:10:00Z",
+    "title": "Cloud leaders raise AI capex around NVIDIA systems",
+    "source_vendor": "news-demo",
+    "content": "Major cloud providers raised AI infrastructure capex, reinforcing strong GPU demand and positive semiconductor momentum around NVIDIA systems.",
+    "updated_time": null,
+    "summary": "Major cloud providers raised AI infrastructure capex, reinforcing strong GPU demand and positive semiconductor momentum around NVIDIA systems.",
+    "article_url": "https://example.com/tenx/news-nvda-20260410-01",
+    "language": "en",
+    "author": "TenX Demo",
+    "publisher_name": "TenX Demo Wire",
+    "publisher_homepage": "https://example.com",
+    "primary_symbol": "NVDA",
+    "related_symbols": [
+      "NVDA"
+    ],
+    "raw_payload": {}
+  },
+  {
+    "news_id": "news-snow-20260410-01",
+    "symbol": "SNOW",
+    "published_time": "2026-04-10T22:15:00Z",
+    "title": "Snowflake wins new enterprise data platform program",
+    "source_vendor": "news-demo",
+    "content": "Snowflake won a new enterprise data platform program. The deal supports cloud demand, AI product attach, and stronger consumption upside.",
+    "updated_time": null,
+    "summary": "Snowflake won a new enterprise data platform program. The deal supports cloud demand, AI product attach, and stronger consumption upside.",
+    "article_url": "https://example.com/tenx/news-snow-20260410-01",
+    "language": "en",
+    "author": "TenX Demo",
+    "publisher_name": "TenX Demo Wire",
+    "publisher_homepage": "https://example.com",
+    "primary_symbol": "SNOW",
+    "related_symbols": [
+      "SNOW"
+    ],
+    "raw_payload": {}
+  },
+  {
+    "news_id": "news-crwd-20260410-01",
+    "symbol": "CRWD",
+    "published_time": "2026-04-10T22:20:00Z",
+    "title": "CrowdStrike faces temporary pressure after outage headlines",
+    "source_vendor": "news-demo",
+    "content": "CrowdStrike remains a security leader, but fresh outage headlines created pressure, raised competitive risk, and triggered a cautious tone among some customers.",
+    "updated_time": null,
+    "summary": "CrowdStrike remains a security leader, but fresh outage headlines created pressure, raised competitive risk, and triggered a cautious tone among some customers.",
+    "article_url": "https://example.com/tenx/news-crwd-20260410-01",
+    "language": "en",
+    "author": "TenX Demo",
+    "publisher_name": "TenX Demo Wire",
+    "publisher_homepage": "https://example.com",
+    "primary_symbol": "CRWD",
+    "related_symbols": [
+      "CRWD"
+    ],
+    "raw_payload": {}
+  },
+  {
+    "news_id": "news-arm-20260410-01",
+    "symbol": "ARM",
+    "published_time": "2026-04-10T22:25:00Z",
+    "title": "Arm seen as beneficiary of next AI device cycle",
+    "source_vendor": "news-demo",
+    "content": "Analysts called Arm a beneficiary of the next AI device cycle, citing strong CPU licensing demand, expanding semiconductor content, and upside from AI edge launches.",
+    "updated_time": null,
+    "summary": "Analysts called Arm a beneficiary of the next AI device cycle, citing strong CPU licensing demand, expanding semiconductor content, and upside from AI edge launches.",
+    "article_url": "https://example.com/tenx/news-arm-20260410-01",
+    "language": "en",
+    "author": "TenX Demo",
+    "publisher_name": "TenX Demo Wire",
+    "publisher_homepage": "https://example.com",
+    "primary_symbol": "ARM",
+    "related_symbols": [
+      "ARM"
+    ],
+    "raw_payload": {}
+  }
+]

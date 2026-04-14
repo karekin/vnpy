@@ -1,0 +1,9 @@
+security_id,theme_id,source_note
+1,ai_infra,inferred from live sources for NVDA
+1,semis,inferred from live sources for NVDA
+2,ai_infra,inferred from live sources for SNOW
+2,cloud,inferred from live sources for SNOW
+3,cloud,inferred from live sources for CRWD
+3,cybersecurity,inferred from live sources for CRWD
+4,ai_infra,inferred from live sources for ARM
+4,semis,inferred from live sources for ARM

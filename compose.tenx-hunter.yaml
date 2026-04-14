@@ -1,0 +1,96 @@
+name: tenx-hunter-data-pipeline
+
+x-app-env: &app-env
+  PGHOST: postgres
+  PGPORT: 5432
+  PGDATABASE: tenx
+  PGUSER: tenx
+  PGPASSWORD: tenx
+  MINIO_ENDPOINT: http://minio:9000
+  MINIO_ACCESS_KEY: minioadmin
+  MINIO_SECRET_KEY: minioadmin
+  MINIO_BUCKET: tenx-ods
+  SAMPLE_DATA_DIR: /workspace/examples/tenx_hunter_data_pipeline/sample_data
+  PYTHONPATH: /workspace
+  PRICE_PROVIDER: ${PRICE_PROVIDER:-yfinance}
+  REAL_SYMBOLS: ${REAL_SYMBOLS:-}
+  REAL_UNIVERSE_PRESET: ${REAL_UNIVERSE_PRESET:-us_growth_hunt_v1}
+  REAL_UNIVERSE_INCLUDE: ${REAL_UNIVERSE_INCLUDE:-}
+  REAL_UNIVERSE_EXCLUDE: ${REAL_UNIVERSE_EXCLUDE:-}
+  PRICE_START_DATE: ${PRICE_START_DATE:-}
+  PRICE_END_DATE: ${PRICE_END_DATE:-}
+  SEC_USER_AGENT: ${SEC_USER_AGENT:-TenX Hunter Demo contact@tenxhunter.local}
+  POLYGON_API_KEY: ${POLYGON_API_KEY:-}
+  INCLUDE_YFINANCE_SUPPLEMENT: ${INCLUDE_YFINANCE_SUPPLEMENT:-true}
+  PIPELINE_BOOTSTRAP_MODE: ${PIPELINE_BOOTSTRAP_MODE:-real}
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: tenx
+      POSTGRES_USER: tenx
+      POSTGRES_PASSWORD: tenx
+    ports:
+      - "54329:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tenx -d tenx"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+
+  pipeline:
+    build:
+      context: .
+      dockerfile: docker/tenx_hunter/pipeline.Dockerfile
+    environment: *app-env
+    volumes:
+      - ./config:/workspace/config
+      - ./vnpy:/workspace/vnpy
+      - ./examples/tenx_hunter_data_pipeline/sample_data:/workspace/examples/tenx_hunter_data_pipeline/sample_data
+      - ./tests:/workspace/tests
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    entrypoint: ["python", "-m", "vnpy.web.tenx_hunter.cli"]
+    command: ["help"]
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: docker/tenx_hunter/pipeline.Dockerfile
+    environment:
+      <<: *app-env
+      PIPELINE_INTERVAL_SECONDS: 43200
+    volumes:
+      - ./config:/workspace/config
+      - ./vnpy:/workspace/vnpy
+      - ./examples/tenx_hunter_data_pipeline/sample_data:/workspace/examples/tenx_hunter_data_pipeline/sample_data
+      - ./tests:/workspace/tests
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    command: ["python", "-m", "vnpy.web.tenx_hunter.scheduler"]
+    profiles: ["scheduler"]
+
+volumes:
+  postgres-data:
+  minio-data:

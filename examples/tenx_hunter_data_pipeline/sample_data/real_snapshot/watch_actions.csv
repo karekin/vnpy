@@ -1,0 +1,4 @@
+action_id,user_id,symbol,action,action_time
+live-watch-001,demo_user,NVDA,watch,2026-04-12T08:17:09Z
+live-watch-002,demo_user,SNOW,watch,2026-04-12T08:17:09Z
+live-watch-003,demo_user,CRWD,watch,2026-04-12T08:17:09Z

@@ -48,6 +48,8 @@ _templates
 *.log
 .run_rpc_server.log
 .env.tushare.local
+.env.local
+.env.*.local
 
 # Alpha
 lab/
@@ -55,3 +57,9 @@ lab/
 
 # CB Quant local databases
 out/cb_quant/_cb_quant/*.db
+out/**/*.db-journal
+out/**/*.bak.json
+
+# Accidental root npm lockfile
+/package-lock.json
+.omx/

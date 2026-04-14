@@ -53,6 +53,7 @@ web = [
     "fastapi>=0.115.0",
     "uvicorn>=0.30.0",
     "pydantic>=2.9.0",
+    "psycopg[binary]>=3.2.9",
     "requests>=2.32.0",
     "tushare>=1.4.24",
 ]
@@ -60,6 +61,11 @@ dev = [
     "pandas-stubs>=2.2.3.250308",
     "hatchling>=1.27.0",
     "babel>=2.17.0",
+]
+tenx = [
+    "psycopg[binary]>=3.2.9",
+    "boto3>=1.34.131",
+    "requests>=2.32.3",
 ]
 
 [project.urls]

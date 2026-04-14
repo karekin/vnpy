@@ -1,0 +1,5 @@
+security_id,symbol,company_name,exchange_name,cik,currency,listing_status,sector,industry
+1,NVDA,Nvidia Corp,XNAS,0001045810,usd,active,SEMICONDUCTORS & RELATED DEVICES,SEMICONDUCTORS & RELATED DEVICES
+2,SNOW,Snowflake Inc.,XNYS,0001640147,usd,active,SERVICES-PREPACKAGED SOFTWARE,SERVICES-PREPACKAGED SOFTWARE
+3,CRWD,"CrowdStrike Holdings, Inc. Class A Common Stock",XNAS,0001535527,usd,active,SERVICES-PREPACKAGED SOFTWARE,SERVICES-PREPACKAGED SOFTWARE
+4,ARM,Arm Holdings plc American Depositary Shares,XNAS,0001973239,usd,active,,

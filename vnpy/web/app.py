@@ -8,14 +8,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from vnpy.web.api.router import api_router
-from vnpy.web.services import cb_history_service
+import vnpy.web.services as services
 from vnpy.web.ws.router import ws_router
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
     def _sync_on_startup() -> None:
         try:
-            cb_history_service.sync_today_from_market(mode="startup")
+            services.history_service.sync_today_from_market(mode="startup")
         except Exception:
             # Network/source failures should not block API startup.
             pass
@@ -23,11 +23,11 @@ async def _lifespan(_: FastAPI):
     # 启动时只做一次当日行情快照同步，不再保留任何 legacy Excel bootstrap 逻辑。
     Thread(target=_sync_on_startup, name="cb-history-startup-sync", daemon=True).start()
 
-    cb_history_service.start_scheduler()
+    services.history_service.start_scheduler()
     try:
         yield
     finally:
-        cb_history_service.stop_scheduler()
+        services.history_service.stop_scheduler()
 
 
 def create_app() -> FastAPI:

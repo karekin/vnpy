@@ -1,0 +1,31 @@
+{
+  "name": "US Growth Hunt",
+  "strategy": "bucketed-growth-research",
+  "description": "A bucketed research universe that balances AI infrastructure, cloud/data, security platforms, and emerging application software so the system can compare crowded megacaps against higher-upside mid-cap candidates.",
+  "buckets": [
+    {
+      "slug": "ai-infra-core",
+      "label": "AI Infra Core",
+      "rationale": "Keep the unavoidable AI infrastructure leaders in view, but treat them as benchmarks rather than automatic top picks.",
+      "symbols": ["NVDA", "AMD", "ARM", "ANET", "MRVL"]
+    },
+    {
+      "slug": "cloud-data-platforms",
+      "label": "Cloud & Data Platforms",
+      "rationale": "Look for platforms where AI demand can translate into durable revenue acceleration instead of one-off narrative spikes.",
+      "symbols": ["SNOW", "MDB", "DDOG", "ESTC", "MNDY"]
+    },
+    {
+      "slug": "security-platforms",
+      "label": "Security Platforms",
+      "rationale": "Security names can compound through platform expansion and often offer better odds than the most crowded AI hardware trades.",
+      "symbols": ["CRWD", "PANW", "ZS", "NET"]
+    },
+    {
+      "slug": "emerging-app-software",
+      "label": "Emerging App Software",
+      "rationale": "Add a smaller bucket of high-velocity application software names that may still be under-owned relative to their growth runway.",
+      "symbols": ["APP", "DUOL"]
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+[
+  {
+    "symbol": "NVDA",
+    "source_vendor": "industry-mapping",
+    "raw_payload": {
+      "symbol": "NVDA",
+      "sector": "SEMICONDUCTORS & RELATED DEVICES",
+      "industry": "SEMICONDUCTORS & RELATED DEVICES",
+      "sic_code": "3674",
+      "source": "polygon_ticker_overview"
+    }
+  },
+  {
+    "symbol": "SNOW",
+    "source_vendor": "industry-mapping",
+    "raw_payload": {
+      "symbol": "SNOW",
+      "sector": "SERVICES-PREPACKAGED SOFTWARE",
+      "industry": "SERVICES-PREPACKAGED SOFTWARE",
+      "sic_code": "7372",
+      "source": "polygon_ticker_overview"
+    }
+  },
+  {
+    "symbol": "CRWD",
+    "source_vendor": "industry-mapping",
+    "raw_payload": {
+      "symbol": "CRWD",
+      "sector": "SERVICES-PREPACKAGED SOFTWARE",
+      "industry": "SERVICES-PREPACKAGED SOFTWARE",
+      "sic_code": "7372",
+      "source": "polygon_ticker_overview"
+    }
+  },
+  {
+    "symbol": "ARM",
+    "source_vendor": "industry-mapping",
+    "raw_payload": {
+      "symbol": "ARM",
+      "sector": "",
+      "industry": "",
+      "sic_code": null,
+      "source": "polygon_ticker_overview"
+    }
+  }
+]

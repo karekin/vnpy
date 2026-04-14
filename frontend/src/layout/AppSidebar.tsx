@@ -101,6 +101,17 @@ const navItems: NavItem[] = [
     ],
   },
   {
+    name: "TenX Hunter",
+    icon: <AiIcon />,
+    new: true,
+    subItems: [
+      { name: "Today Workspace", path: "/tenx-hunter" },
+      { name: "Discover", path: "/tenx-hunter/discover" },
+      { name: "Themes", path: "/tenx-hunter/themes" },
+      { name: "Watchlist", path: "/tenx-hunter/watchlist" },
+    ],
+  },
+  {
     icon: <CalenderIcon />,
     name: "Calendar",
     path: "/calendar",

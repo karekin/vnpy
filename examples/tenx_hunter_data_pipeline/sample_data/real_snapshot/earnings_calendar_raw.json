@@ -1,0 +1,46 @@
+[
+  {
+    "symbol": "NVDA",
+    "snapshot_date": "2026-04-12",
+    "source_vendor": "polygon-benzinga",
+    "request_status": "FETCH_ERROR",
+    "raw_payload": {
+      "status": "FETCH_ERROR",
+      "message": "curl: (56) The requested URL returned error: 403\ncurl: (56) The requested URL returned error: 403\ncurl: (56) The requested URL returned error: 403\ncurl: (56) The requested URL returned error: 403\ncurl: (56) The requested URL returned error: 403",
+      "url": "https://api.polygon.io/benzinga/v1/earnings?ticker=NVDA&limit=20&apiKey=1C85h9ksC0OxnUqOPIDkLwzfy0_3Rly2"
+    }
+  },
+  {
+    "symbol": "SNOW",
+    "snapshot_date": "2026-04-12",
+    "source_vendor": "polygon-benzinga",
+    "request_status": "FETCH_ERROR",
+    "raw_payload": {
+      "status": "FETCH_ERROR",
+      "message": "curl: (56) The requested URL returned error: 403\ncurl: (56) The requested URL returned error: 403\ncurl: (56) The requested URL returned error: 403\ncurl: (56) The requested URL returned error: 403\ncurl: (56) The requested URL returned error: 403",
+      "url": "https://api.polygon.io/benzinga/v1/earnings?ticker=SNOW&limit=20&apiKey=1C85h9ksC0OxnUqOPIDkLwzfy0_3Rly2"
+    }
+  },
+  {
+    "symbol": "CRWD",
+    "snapshot_date": "2026-04-12",
+    "source_vendor": "polygon-benzinga",
+    "request_status": "FETCH_ERROR",
+    "raw_payload": {
+      "status": "FETCH_ERROR",
+      "message": "curl: (56) The requested URL returned error: 403\ncurl: (56) The requested URL returned error: 403\ncurl: (56) The requested URL returned error: 403\ncurl: (56) The requested URL returned error: 403\ncurl: (56) The requested URL returned error: 403",
+      "url": "https://api.polygon.io/benzinga/v1/earnings?ticker=CRWD&limit=20&apiKey=1C85h9ksC0OxnUqOPIDkLwzfy0_3Rly2"
+    }
+  },
+  {
+    "symbol": "ARM",
+    "snapshot_date": "2026-04-12",
+    "source_vendor": "polygon-benzinga",
+    "request_status": "FETCH_ERROR",
+    "raw_payload": {
+      "status": "FETCH_ERROR",
+      "message": "curl: (56) The requested URL returned error: 403\ncurl: (56) The requested URL returned error: 403\ncurl: (56) The requested URL returned error: 403\ncurl: (56) The requested URL returned error: 403\ncurl: (56) The requested URL returned error: 403",
+      "url": "https://api.polygon.io/benzinga/v1/earnings?ticker=ARM&limit=20&apiKey=1C85h9ksC0OxnUqOPIDkLwzfy0_3Rly2"
+    }
+  }
+]

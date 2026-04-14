@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from pathlib import Path
 
 import pandas as pd
@@ -219,26 +220,13 @@ def test_app_lifespan_should_not_call_legacy_bootstrap(monkeypatch) -> None:
             self._target()
 
     monkeypatch.setattr(web_app, "Thread", ImmediateThread)
-    monkeypatch.setattr(
-        web_app.cb_history_service,
-        "sync_today_from_market",
-        lambda *, mode="manual": calls.append(f"sync:{mode}") or 0,
+    fake_history_service = SimpleNamespace(
+        sync_today_from_market=lambda *, mode="manual": calls.append(f"sync:{mode}") or 0,
+        start_scheduler=lambda: calls.append("start_scheduler"),
+        stop_scheduler=lambda: calls.append("stop_scheduler"),
+        bootstrap_from_crawler_snapshots=lambda: calls.append("bootstrap"),
     )
-    monkeypatch.setattr(
-        web_app.cb_history_service,
-        "start_scheduler",
-        lambda: calls.append("start_scheduler"),
-    )
-    monkeypatch.setattr(
-        web_app.cb_history_service,
-        "stop_scheduler",
-        lambda: calls.append("stop_scheduler"),
-    )
-    monkeypatch.setattr(
-        web_app.cb_history_service,
-        "bootstrap_from_crawler_snapshots",
-        lambda: calls.append("bootstrap"),
-    )
+    monkeypatch.setattr(web_app.services, "history_service", fake_history_service, raising=False)
 
     async def run_lifespan() -> None:
         async with web_app._lifespan(None):

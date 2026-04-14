@@ -1,0 +1,5 @@
+symbol,report_period,fiscal_quarter,fiscal_year,period_type,filed_date,revenue,gross_margin,op_margin,fcf_margin,cash,debt,shares_outstanding,revenue_yoy,source_filing_id,form_type,currency,data_quality_flag,restatement_flag,source_vendor
+NVDA,2025-12-31,FQ4-2025,2025,quarterly,2025-11-20,39331.00,0.76,0.53,0.42,41200.00,9800.00,24600.00,0.78,0001045810-25-000101,10-Q,USD,parsed,,sec-companyfacts
+SNOW,2025-12-31,FQ4-2025,2025,quarterly,2025-11-27,980.00,0.69,0.08,0.16,5260.00,2150.00,334.00,0.29,0001640147-25-000088,10-Q,USD,parsed,,sec-companyfacts
+CRWD,2025-12-31,FQ4-2025,2025,quarterly,2025-11-26,1120.00,0.75,0.20,0.24,4320.00,780.00,256.00,0.32,0001535527-25-000091,10-Q,USD,parsed,,sec-companyfacts
+ARM,2025-12-31,FQ4-2025,2025,quarterly,2025-11-21,975.00,0.96,0.31,0.27,2680.00,120.00,1010.00,0.35,0001973239-25-000072,6-K,USD,parsed,,sec-companyfacts

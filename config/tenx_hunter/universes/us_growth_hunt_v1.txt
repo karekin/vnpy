@@ -1,0 +1,8 @@
+# TenX Hunter default research universe (v1)
+# Focus: growth software + AI infra + cybersecurity + infrastructure.
+# This is a research preset, not an investment recommendation.
+
+NVDA, AMD, ARM, ANET, MRVL
+SNOW, DDOG, MDB, ESTC, MNDY
+CRWD, PANW, ZS, NET
+APP, DUOL

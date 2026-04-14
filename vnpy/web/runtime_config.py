@@ -3,8 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
-import tomllib
 from typing import Any, Literal
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python <3.11 fallback
+    import tomli as tomllib
 
 
 OptimizeEvalMode = Literal["thread", "process"]
