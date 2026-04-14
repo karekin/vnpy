@@ -1,0 +1,9 @@
+{
+  "feeds": [
+    "https://feeds.reuters.com/reuters/worldNews",
+    "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
+    "https://www.aljazeera.com/xml/rss/all.xml"
+  ],
+  "interval": 120,
+  "output": "pretty"
+}
