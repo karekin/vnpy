@@ -11,6 +11,7 @@ export function getRiskTone(level: TenxRiskLevel) {
 export function getStageTone(stage: TenxStage) {
   if (stage === "acceleration") return "green" as const;
   if (stage === "validation") return "blue" as const;
+  if (stage === "falsified") return "red" as const;
   if (stage === "crowded") return "yellow" as const;
   return "slate" as const;
 }
@@ -63,7 +64,7 @@ export function CopilotPanel({ context, prompts }: CopilotPanelProps) {
     <TenxSectionCard
       title="Research Copilot"
       description="工作台先行，对话补充。围绕当前候选、主题和观察池追问，不做开放域泛聊。"
-      action={<StatusTag label="Research workflow" tone="blue" />}
+      action={<div className="whitespace-nowrap"><StatusTag label="Copilot" tone="blue" /></div>}
     >
       <div className="space-y-4">
         <div>

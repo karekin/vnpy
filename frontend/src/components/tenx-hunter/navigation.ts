@@ -1,11 +1,22 @@
+import type { TenxMarket } from "@/components/tenx-hunter/types";
+
 export type TenxNavItem = {
   name: string;
   path: string;
 };
 
-export const tenxNavItems: TenxNavItem[] = [
-  { name: "Today Workspace", path: "/tenx-hunter" },
-  { name: "Discover", path: "/tenx-hunter/discover" },
-  { name: "Themes", path: "/tenx-hunter/themes" },
-  { name: "Watchlist", path: "/tenx-hunter/watchlist" },
+export function tenxNavItems(market: string): TenxNavItem[] {
+  const base = `/tenx-hunter/${market.toLowerCase()}`;
+  return [
+    { name: "Workspace", path: base },
+    { name: "Discover", path: `${base}/discover` },
+    { name: "Themes", path: `${base}/themes` },
+    { name: "Watchlist", path: `${base}/watchlist` },
+    { name: "Alerts", path: `${base}/alerts` },
+  ];
+}
+
+export const tenxMarketTabs: Array<{ label: string; market: TenxMarket }> = [
+  { label: "A股", market: "CN" },
+  { label: "US", market: "US" },
 ];

@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ from uuid import uuid4
 
 from psycopg.types.json import Jsonb
 
+from .cn_sources import build_cn_stock_bundle
 from .config import Settings
 from .db import connect
 from .real_sources import SEC_ARCHIVES_URL, THEME_CATALOG, build_financial_snapshot_from_sec, build_real_bundle
@@ -26,6 +28,7 @@ CREATE SCHEMA IF NOT EXISTS ads;
 
 CREATE TABLE IF NOT EXISTS dim.security (
     security_id INTEGER PRIMARY KEY,
+    market TEXT NOT NULL DEFAULT 'US',
     symbol TEXT UNIQUE NOT NULL,
     company_name TEXT NOT NULL,
     exchange_name TEXT,
@@ -33,7 +36,8 @@ CREATE TABLE IF NOT EXISTS dim.security (
     currency TEXT,
     listing_status TEXT,
     sector TEXT,
-    industry TEXT
+    industry TEXT,
+    listed_date DATE
 );
 
 CREATE TABLE IF NOT EXISTS dim.theme (
@@ -65,6 +69,7 @@ CREATE TABLE IF NOT EXISTS dim.factor_definition (
 );
 
 CREATE TABLE IF NOT EXISTS ods.us_equity_price_daily_raw (
+    market TEXT NOT NULL DEFAULT 'US',
     symbol TEXT NOT NULL,
     trade_date DATE NOT NULL,
     open NUMERIC(18,4),
@@ -84,6 +89,7 @@ CREATE TABLE IF NOT EXISTS ods.us_equity_price_daily_raw (
 );
 
 CREATE TABLE IF NOT EXISTS ods.security_financial_statement_raw (
+    market TEXT NOT NULL DEFAULT 'US',
     symbol TEXT NOT NULL,
     report_period DATE NOT NULL,
     fiscal_quarter TEXT NOT NULL,
@@ -98,6 +104,9 @@ CREATE TABLE IF NOT EXISTS ods.security_financial_statement_raw (
     debt NUMERIC(18,2),
     shares_outstanding NUMERIC(18,2),
     revenue_yoy NUMERIC(10,4),
+    netprofit_yoy NUMERIC(10,4),
+    cfo_to_np NUMERIC(10,4),
+    rd_ratio_ttm NUMERIC(10,4),
     source_filing_id TEXT,
     form_type TEXT,
     currency TEXT,
@@ -112,6 +121,7 @@ CREATE TABLE IF NOT EXISTS ods.security_financial_statement_raw (
 
 CREATE TABLE IF NOT EXISTS ods.sec_filing_document_raw (
     filing_id TEXT PRIMARY KEY,
+    market TEXT NOT NULL DEFAULT 'US',
     symbol TEXT NOT NULL,
     cik TEXT,
     accession_number TEXT,
@@ -132,6 +142,7 @@ CREATE TABLE IF NOT EXISTS ods.sec_filing_document_raw (
 
 CREATE TABLE IF NOT EXISTS ods.security_news_article_raw (
     news_id TEXT PRIMARY KEY,
+    market TEXT NOT NULL DEFAULT 'US',
     symbol TEXT NOT NULL,
     published_time TIMESTAMPTZ NOT NULL,
     updated_time TIMESTAMPTZ,
@@ -152,9 +163,35 @@ CREATE TABLE IF NOT EXISTS ods.security_news_article_raw (
     payload_hash TEXT
 );
 
+CREATE TABLE IF NOT EXISTS ods.security_institutional_activity_raw (
+    activity_id TEXT PRIMARY KEY,
+    market TEXT NOT NULL DEFAULT 'US',
+    symbol TEXT NOT NULL,
+    activity_time TIMESTAMPTZ NOT NULL,
+    activity_type TEXT NOT NULL,
+    report_period DATE,
+    filing_date DATE,
+    title TEXT NOT NULL,
+    manager_symbol TEXT NOT NULL,
+    manager_name TEXT NOT NULL,
+    manager_cik TEXT,
+    filing_id TEXT NOT NULL,
+    filing_type TEXT NOT NULL,
+    position_value_usd NUMERIC(18,2),
+    position_shares NUMERIC(18,2),
+    source_url TEXT,
+    object_key TEXT NOT NULL,
+    content_sha256 TEXT,
+    source_vendor TEXT NOT NULL,
+    ingest_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw_payload JSONB NOT NULL,
+    payload_hash TEXT
+);
+
 CREATE TABLE IF NOT EXISTS ods.user_watch_action_raw (
     action_id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
+    market TEXT NOT NULL DEFAULT 'US',
     symbol TEXT NOT NULL,
     action TEXT NOT NULL,
     action_time TIMESTAMPTZ NOT NULL,
@@ -168,6 +205,7 @@ CREATE TABLE IF NOT EXISTS ods.user_watch_action_raw (
 
 CREATE TABLE IF NOT EXISTS dwd.security_market_daily (
     security_id INTEGER NOT NULL,
+    market TEXT NOT NULL DEFAULT 'US',
     symbol TEXT NOT NULL,
     trade_date DATE NOT NULL,
     open NUMERIC(18,4),
@@ -181,18 +219,25 @@ CREATE TABLE IF NOT EXISTS dwd.security_market_daily (
     distance_from_recent_high NUMERIC(18,6),
     market_cap NUMERIC(18,2),
     ps_ttm NUMERIC(18,4),
+    pe_ttm NUMERIC(18,4),
+    pb NUMERIC(18,4),
+    turnover_rate NUMERIC(18,4),
     PRIMARY KEY (security_id, trade_date)
 );
 
 CREATE TABLE IF NOT EXISTS dwd.security_financial_quarterly (
     security_id INTEGER NOT NULL,
+    market TEXT NOT NULL DEFAULT 'US',
     symbol TEXT NOT NULL,
     report_period DATE NOT NULL,
     revenue NUMERIC(18,2),
     revenue_yoy NUMERIC(10,4),
+    netprofit_yoy NUMERIC(10,4),
     gross_margin NUMERIC(10,4),
     op_margin NUMERIC(10,4),
     fcf_margin NUMERIC(10,4),
+    cfo_to_np NUMERIC(10,4),
+    rd_ratio_ttm NUMERIC(10,4),
     cash NUMERIC(18,2),
     debt NUMERIC(18,2),
     net_cash NUMERIC(18,2),
@@ -203,6 +248,7 @@ CREATE TABLE IF NOT EXISTS dwd.security_financial_quarterly (
 CREATE TABLE IF NOT EXISTS dwd.security_event_timeline (
     event_id TEXT PRIMARY KEY,
     security_id INTEGER NOT NULL,
+    market TEXT NOT NULL DEFAULT 'US',
     symbol TEXT NOT NULL,
     event_time TIMESTAMPTZ NOT NULL,
     event_type TEXT NOT NULL,
@@ -218,6 +264,7 @@ CREATE TABLE IF NOT EXISTS dwd.security_document_signal (
     signal_id TEXT PRIMARY KEY,
     event_id TEXT NOT NULL REFERENCES dwd.security_event_timeline(event_id),
     security_id INTEGER NOT NULL,
+    market TEXT NOT NULL DEFAULT 'US',
     symbol TEXT NOT NULL,
     source_kind TEXT NOT NULL,
     summary TEXT NOT NULL,
@@ -233,23 +280,46 @@ CREATE TABLE IF NOT EXISTS dwd.security_document_signal (
 CREATE TABLE IF NOT EXISTS dwd.user_watchlist_state_current (
     user_id TEXT NOT NULL,
     security_id INTEGER NOT NULL,
+    market TEXT NOT NULL DEFAULT 'US',
     symbol TEXT NOT NULL,
     state TEXT NOT NULL,
     latest_action_time TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (user_id, security_id)
 );
 
+CREATE TABLE IF NOT EXISTS dwd.user_alert_rule_current (
+    rule_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    market TEXT NOT NULL DEFAULT 'US',
+    symbol TEXT NOT NULL,
+    rule_type TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    title TEXT NOT NULL,
+    note TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft',
+    rule_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS dws.security_feature_daily (
     security_id INTEGER NOT NULL,
+    market TEXT NOT NULL DEFAULT 'US',
     symbol TEXT NOT NULL,
     trade_date DATE NOT NULL,
     revenue_yoy NUMERIC(10,4),
+    netprofit_yoy NUMERIC(10,4),
     op_margin NUMERIC(10,4),
     fcf_margin NUMERIC(10,4),
+    cfo_to_np NUMERIC(10,4),
+    rd_ratio_ttm NUMERIC(10,4),
     return_1d NUMERIC(18,6),
     return_5d NUMERIC(18,6),
     distance_from_recent_high NUMERIC(18,6),
     ps_ttm NUMERIC(18,4),
+    pe_ttm NUMERIC(18,4),
+    pb NUMERIC(18,4),
+    turnover_rate NUMERIC(18,4),
     risk_count INTEGER NOT NULL,
     negative_event_count INTEGER NOT NULL,
     theme_count INTEGER NOT NULL,
@@ -259,6 +329,7 @@ CREATE TABLE IF NOT EXISTS dws.security_feature_daily (
 
 CREATE TABLE IF NOT EXISTS dws.security_score_component_daily (
     security_id INTEGER NOT NULL,
+    market TEXT NOT NULL DEFAULT 'US',
     symbol TEXT NOT NULL,
     trade_date DATE NOT NULL,
     growth_score NUMERIC(10,2),
@@ -269,6 +340,12 @@ CREATE TABLE IF NOT EXISTS dws.security_score_component_daily (
     evidence_score NUMERIC(10,2),
     risk_score NUMERIC(10,2),
     theme_score NUMERIC(10,2),
+    industry_prosperity_score NUMERIC(10,2),
+    leader_position_score NUMERIC(10,2),
+    financial_acceleration_score NUMERIC(10,2),
+    cashflow_quality_score NUMERIC(10,2),
+    moat_score NUMERIC(10,2),
+    valuation_chip_score NUMERIC(10,2),
     total_score NUMERIC(10,2),
     stage TEXT NOT NULL,
     score_change_reason TEXT NOT NULL,
@@ -277,6 +354,7 @@ CREATE TABLE IF NOT EXISTS dws.security_score_component_daily (
 
 CREATE TABLE IF NOT EXISTS dws.theme_heat_daily (
     theme_id TEXT NOT NULL,
+    market TEXT NOT NULL DEFAULT 'US',
     trade_date DATE NOT NULL,
     theme_name TEXT NOT NULL,
     heat_score NUMERIC(10,2) NOT NULL,
@@ -289,6 +367,7 @@ CREATE TABLE IF NOT EXISTS dws.theme_heat_daily (
 
 CREATE TABLE IF NOT EXISTS dws.security_candidate_rank_daily (
     security_id INTEGER NOT NULL,
+    market TEXT NOT NULL DEFAULT 'US',
     symbol TEXT NOT NULL,
     trade_date DATE NOT NULL,
     total_score NUMERIC(10,2) NOT NULL,
@@ -302,6 +381,7 @@ CREATE TABLE IF NOT EXISTS dws.security_candidate_rank_daily (
 
 CREATE TABLE IF NOT EXISTS ads.candidate_pool_daily (
     security_id INTEGER NOT NULL,
+    market TEXT NOT NULL DEFAULT 'US',
     symbol TEXT NOT NULL,
     trade_date DATE NOT NULL,
     rank_no INTEGER NOT NULL,
@@ -315,6 +395,7 @@ CREATE TABLE IF NOT EXISTS ads.candidate_pool_daily (
 
 CREATE TABLE IF NOT EXISTS ads.research_card_current (
     security_id INTEGER PRIMARY KEY,
+    market TEXT NOT NULL DEFAULT 'US',
     symbol TEXT NOT NULL,
     as_of_date DATE NOT NULL,
     thesis TEXT NOT NULL,
@@ -329,6 +410,7 @@ CREATE TABLE IF NOT EXISTS ads.research_card_current (
 CREATE TABLE IF NOT EXISTS ads.watchlist_alert_daily (
     alert_id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
+    market TEXT NOT NULL DEFAULT 'US',
     symbol TEXT NOT NULL,
     trade_date DATE NOT NULL,
     alert_type TEXT NOT NULL,
@@ -340,6 +422,7 @@ CREATE TABLE IF NOT EXISTS ads.watchlist_alert_daily (
 
 CREATE TABLE IF NOT EXISTS ads.theme_radar_daily (
     theme_id TEXT NOT NULL,
+    market TEXT NOT NULL DEFAULT 'US',
     trade_date DATE NOT NULL,
     theme_name TEXT NOT NULL,
     heat_score NUMERIC(10,2) NOT NULL,
@@ -473,7 +556,7 @@ def _blank_to_none(value: Any) -> Any:
 
 
 def _json(value: Any) -> Jsonb:
-    return Jsonb(value)
+    return Jsonb(_sanitize_for_json(value))
 
 
 def _json_or_none(value: Any) -> Jsonb | None:
@@ -596,7 +679,19 @@ def _normalize_json_list(value: Any) -> list[str] | None:
 
 
 def _canonical_json_blob(value: Any) -> bytes:
-    return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+    return json.dumps(_sanitize_for_json(value), sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+
+
+def _sanitize_for_json(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _sanitize_for_json(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_for_json(item) for item in value]
+    if isinstance(value, tuple):
+        return [_sanitize_for_json(item) for item in value]
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    return value
 
 
 def _payload_hash(value: Any) -> str | None:
@@ -653,21 +748,27 @@ ALTER TABLE IF EXISTS ods.us_equity_price_daily_raw ADD COLUMN IF NOT EXISTS cur
 ALTER TABLE IF EXISTS ods.us_equity_price_daily_raw ADD COLUMN IF NOT EXISTS market_status TEXT;
 ALTER TABLE IF EXISTS ods.us_equity_price_daily_raw ADD COLUMN IF NOT EXISTS source_event_time TIMESTAMPTZ;
 ALTER TABLE IF EXISTS ods.us_equity_price_daily_raw ADD COLUMN IF NOT EXISTS payload_hash TEXT;
+ALTER TABLE IF EXISTS ods.us_equity_price_daily_raw ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
 
 ALTER TABLE IF EXISTS ods.security_financial_statement_raw ADD COLUMN IF NOT EXISTS fiscal_year INTEGER;
 ALTER TABLE IF EXISTS ods.security_financial_statement_raw ADD COLUMN IF NOT EXISTS period_type TEXT;
 ALTER TABLE IF EXISTS ods.security_financial_statement_raw ADD COLUMN IF NOT EXISTS filed_date DATE;
+ALTER TABLE IF EXISTS ods.security_financial_statement_raw ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
 ALTER TABLE IF EXISTS ods.security_financial_statement_raw ADD COLUMN IF NOT EXISTS source_filing_id TEXT;
 ALTER TABLE IF EXISTS ods.security_financial_statement_raw ADD COLUMN IF NOT EXISTS form_type TEXT;
 ALTER TABLE IF EXISTS ods.security_financial_statement_raw ADD COLUMN IF NOT EXISTS currency TEXT;
 ALTER TABLE IF EXISTS ods.security_financial_statement_raw ADD COLUMN IF NOT EXISTS data_quality_flag TEXT;
 ALTER TABLE IF EXISTS ods.security_financial_statement_raw ADD COLUMN IF NOT EXISTS restatement_flag BOOLEAN;
 ALTER TABLE IF EXISTS ods.security_financial_statement_raw ADD COLUMN IF NOT EXISTS payload_hash TEXT;
+ALTER TABLE IF EXISTS ods.security_financial_statement_raw ADD COLUMN IF NOT EXISTS netprofit_yoy NUMERIC(10,4);
+ALTER TABLE IF EXISTS ods.security_financial_statement_raw ADD COLUMN IF NOT EXISTS cfo_to_np NUMERIC(10,4);
+ALTER TABLE IF EXISTS ods.security_financial_statement_raw ADD COLUMN IF NOT EXISTS rd_ratio_ttm NUMERIC(10,4);
 
 ALTER TABLE IF EXISTS ods.sec_filing_document_raw ADD COLUMN IF NOT EXISTS cik TEXT;
 ALTER TABLE IF EXISTS ods.sec_filing_document_raw ADD COLUMN IF NOT EXISTS accession_number TEXT;
 ALTER TABLE IF EXISTS ods.sec_filing_document_raw ADD COLUMN IF NOT EXISTS filing_date DATE;
 ALTER TABLE IF EXISTS ods.sec_filing_document_raw ADD COLUMN IF NOT EXISTS report_period DATE;
+ALTER TABLE IF EXISTS ods.sec_filing_document_raw ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
 ALTER TABLE IF EXISTS ods.sec_filing_document_raw ADD COLUMN IF NOT EXISTS primary_document TEXT;
 ALTER TABLE IF EXISTS ods.sec_filing_document_raw ADD COLUMN IF NOT EXISTS filing_url TEXT;
 ALTER TABLE IF EXISTS ods.sec_filing_document_raw ADD COLUMN IF NOT EXISTS content_sha256 TEXT;
@@ -676,6 +777,7 @@ ALTER TABLE IF EXISTS ods.sec_filing_document_raw ADD COLUMN IF NOT EXISTS paylo
 ALTER TABLE IF EXISTS ods.security_news_article_raw ADD COLUMN IF NOT EXISTS updated_time TIMESTAMPTZ;
 ALTER TABLE IF EXISTS ods.security_news_article_raw ADD COLUMN IF NOT EXISTS summary TEXT;
 ALTER TABLE IF EXISTS ods.security_news_article_raw ADD COLUMN IF NOT EXISTS article_url TEXT;
+ALTER TABLE IF EXISTS ods.security_news_article_raw ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
 ALTER TABLE IF EXISTS ods.security_news_article_raw ADD COLUMN IF NOT EXISTS language TEXT;
 ALTER TABLE IF EXISTS ods.security_news_article_raw ADD COLUMN IF NOT EXISTS author TEXT;
 ALTER TABLE IF EXISTS ods.security_news_article_raw ADD COLUMN IF NOT EXISTS publisher_name TEXT;
@@ -684,12 +786,83 @@ ALTER TABLE IF EXISTS ods.security_news_article_raw ADD COLUMN IF NOT EXISTS pri
 ALTER TABLE IF EXISTS ods.security_news_article_raw ADD COLUMN IF NOT EXISTS related_symbols JSONB;
 ALTER TABLE IF EXISTS ods.security_news_article_raw ADD COLUMN IF NOT EXISTS content_sha256 TEXT;
 ALTER TABLE IF EXISTS ods.security_news_article_raw ADD COLUMN IF NOT EXISTS payload_hash TEXT;
+ALTER TABLE IF EXISTS ods.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS ods.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS report_period DATE;
+ALTER TABLE IF EXISTS ods.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS filing_date DATE;
+ALTER TABLE IF EXISTS ods.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS title TEXT;
+ALTER TABLE IF EXISTS ods.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS manager_symbol TEXT;
+ALTER TABLE IF EXISTS ods.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS manager_name TEXT;
+ALTER TABLE IF EXISTS ods.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS manager_cik TEXT;
+ALTER TABLE IF EXISTS ods.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS filing_id TEXT;
+ALTER TABLE IF EXISTS ods.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS filing_type TEXT;
+ALTER TABLE IF EXISTS ods.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS position_value_usd NUMERIC(18,2);
+ALTER TABLE IF EXISTS ods.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS position_shares NUMERIC(18,2);
+ALTER TABLE IF EXISTS ods.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS source_url TEXT;
+ALTER TABLE IF EXISTS ods.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS content_sha256 TEXT;
+ALTER TABLE IF EXISTS ods.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS payload_hash TEXT;
 
 ALTER TABLE IF EXISTS ods.user_watch_action_raw ADD COLUMN IF NOT EXISTS action_source TEXT;
 ALTER TABLE IF EXISTS ods.user_watch_action_raw ADD COLUMN IF NOT EXISTS trigger_scene TEXT;
+ALTER TABLE IF EXISTS ods.user_watch_action_raw ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
 ALTER TABLE IF EXISTS ods.user_watch_action_raw ADD COLUMN IF NOT EXISTS session_id TEXT;
 ALTER TABLE IF EXISTS ods.user_watch_action_raw ADD COLUMN IF NOT EXISTS device_id TEXT;
 ALTER TABLE IF EXISTS ods.user_watch_action_raw ADD COLUMN IF NOT EXISTS ingest_time TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+ALTER TABLE IF EXISTS dim.security ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS dim.security ADD COLUMN IF NOT EXISTS listed_date DATE;
+
+ALTER TABLE IF EXISTS dwd.security_market_daily ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS dwd.security_market_daily ADD COLUMN IF NOT EXISTS pe_ttm NUMERIC(18,4);
+ALTER TABLE IF EXISTS dwd.security_market_daily ADD COLUMN IF NOT EXISTS pb NUMERIC(18,4);
+ALTER TABLE IF EXISTS dwd.security_market_daily ADD COLUMN IF NOT EXISTS turnover_rate NUMERIC(18,4);
+
+ALTER TABLE IF EXISTS dwd.security_financial_quarterly ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS dwd.security_financial_quarterly ADD COLUMN IF NOT EXISTS netprofit_yoy NUMERIC(10,4);
+ALTER TABLE IF EXISTS dwd.security_financial_quarterly ADD COLUMN IF NOT EXISTS cfo_to_np NUMERIC(10,4);
+ALTER TABLE IF EXISTS dwd.security_financial_quarterly ADD COLUMN IF NOT EXISTS rd_ratio_ttm NUMERIC(10,4);
+
+ALTER TABLE IF EXISTS dwd.security_event_timeline ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS dwd.security_document_signal ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS dwd.user_watchlist_state_current ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+
+CREATE TABLE IF NOT EXISTS dwd.user_alert_rule_current (
+    rule_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    market TEXT NOT NULL DEFAULT 'US',
+    symbol TEXT NOT NULL,
+    rule_type TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    title TEXT NOT NULL,
+    note TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft',
+    rule_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE IF EXISTS dws.security_feature_daily ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS dws.security_feature_daily ADD COLUMN IF NOT EXISTS netprofit_yoy NUMERIC(10,4);
+ALTER TABLE IF EXISTS dws.security_feature_daily ADD COLUMN IF NOT EXISTS cfo_to_np NUMERIC(10,4);
+ALTER TABLE IF EXISTS dws.security_feature_daily ADD COLUMN IF NOT EXISTS rd_ratio_ttm NUMERIC(10,4);
+ALTER TABLE IF EXISTS dws.security_feature_daily ADD COLUMN IF NOT EXISTS pe_ttm NUMERIC(18,4);
+ALTER TABLE IF EXISTS dws.security_feature_daily ADD COLUMN IF NOT EXISTS pb NUMERIC(18,4);
+ALTER TABLE IF EXISTS dws.security_feature_daily ADD COLUMN IF NOT EXISTS turnover_rate NUMERIC(18,4);
+
+ALTER TABLE IF EXISTS dws.security_score_component_daily ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS dws.security_score_component_daily ADD COLUMN IF NOT EXISTS industry_prosperity_score NUMERIC(10,2);
+ALTER TABLE IF EXISTS dws.security_score_component_daily ADD COLUMN IF NOT EXISTS leader_position_score NUMERIC(10,2);
+ALTER TABLE IF EXISTS dws.security_score_component_daily ADD COLUMN IF NOT EXISTS financial_acceleration_score NUMERIC(10,2);
+ALTER TABLE IF EXISTS dws.security_score_component_daily ADD COLUMN IF NOT EXISTS cashflow_quality_score NUMERIC(10,2);
+ALTER TABLE IF EXISTS dws.security_score_component_daily ADD COLUMN IF NOT EXISTS moat_score NUMERIC(10,2);
+ALTER TABLE IF EXISTS dws.security_score_component_daily ADD COLUMN IF NOT EXISTS valuation_chip_score NUMERIC(10,2);
+
+ALTER TABLE IF EXISTS dws.theme_heat_daily ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS dws.security_candidate_rank_daily ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+
+ALTER TABLE IF EXISTS ads.candidate_pool_daily ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS ads.research_card_current ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS ads.watchlist_alert_daily ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS ads.theme_radar_daily ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
 """
 
 
@@ -704,6 +877,37 @@ def reset_all(settings: Settings) -> None:
     with connect(settings) as conn:
         conn.execute(DROP_AND_RECREATE_SQL)
         conn.execute(SCHEMA_SQL)
+
+
+def _clear_market_data(conn, market: str) -> None:
+    conn.execute("DELETE FROM ads.watchlist_alert_daily WHERE market = %s", (market,))
+    conn.execute("DELETE FROM ads.theme_radar_daily WHERE market = %s", (market,))
+    conn.execute("DELETE FROM ads.candidate_pool_daily WHERE market = %s", (market,))
+    conn.execute("DELETE FROM ads.research_card_current WHERE market = %s", (market,))
+    conn.execute("DELETE FROM dws.theme_heat_daily WHERE market = %s", (market,))
+    conn.execute("DELETE FROM dws.security_candidate_rank_daily WHERE market = %s", (market,))
+    conn.execute("DELETE FROM dws.security_score_component_daily WHERE market = %s", (market,))
+    conn.execute("DELETE FROM dws.security_feature_daily WHERE market = %s", (market,))
+    conn.execute("DELETE FROM dwd.user_alert_rule_current WHERE market = %s", (market,))
+    conn.execute("DELETE FROM dwd.user_watchlist_state_current WHERE market = %s", (market,))
+    conn.execute("DELETE FROM dwd.security_document_signal WHERE market = %s", (market,))
+    conn.execute("DELETE FROM dwd.security_event_timeline WHERE market = %s", (market,))
+    conn.execute("DELETE FROM dwd.security_financial_quarterly WHERE market = %s", (market,))
+    conn.execute("DELETE FROM dwd.security_market_daily WHERE market = %s", (market,))
+    conn.execute("DELETE FROM ods.user_watch_action_raw WHERE market = %s", (market,))
+    conn.execute("DELETE FROM ods.security_institutional_activity_raw WHERE market = %s", (market,))
+    conn.execute("DELETE FROM ods.security_news_article_raw WHERE market = %s", (market,))
+    conn.execute("DELETE FROM ods.sec_filing_document_raw WHERE market = %s", (market,))
+    conn.execute("DELETE FROM ods.security_financial_statement_raw WHERE market = %s", (market,))
+    conn.execute("DELETE FROM ods.us_equity_price_daily_raw WHERE market = %s", (market,))
+    conn.execute(
+        """
+        DELETE FROM dim.security_theme
+        WHERE security_id IN (SELECT security_id FROM dim.security WHERE market = %s)
+        """,
+        (market,),
+    )
+    conn.execute("DELETE FROM dim.security WHERE market = %s", (market,))
 
 
 def _seed_common_dimensions(conn, trade_dates: list[str]) -> None:
@@ -747,10 +951,26 @@ def _seed_common_dimensions(conn, trade_dates: list[str]) -> None:
         )
 
 
+def _seed_theme_dimensions(conn, themes: list[tuple[str, str]]) -> None:
+    for theme_id, theme_name in themes:
+        conn.execute(
+            """
+            INSERT INTO dim.theme (theme_id, theme_name, parent_theme, active_flag)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (theme_id) DO UPDATE SET
+                theme_name = EXCLUDED.theme_name,
+                parent_theme = EXCLUDED.parent_theme,
+                active_flag = EXCLUDED.active_flag
+            """,
+            (theme_id, theme_name, "TenX Hunter", True),
+        )
+
+
 def _insert_security_rows(conn, securities: list[dict[str, Any] | Any]) -> dict[str, int]:
     mapping: dict[str, int] = {}
     for idx, item in enumerate(securities, start=1):
         security_id = int(_coalesce(_safe_int(_row_get(item, "security_id")), idx))
+        market = _coalesce(_safe_str(_row_get(item, "market")), "US")
         symbol = _row_get(item, "symbol")
         company_name = _row_get(item, "company_name")
         exchange_name = _row_get(item, "exchange_name")
@@ -759,13 +979,15 @@ def _insert_security_rows(conn, securities: list[dict[str, Any] | Any]) -> dict[
         listing_status = _coalesce(_row_get(item, "listing_status"), "active")
         sector = _row_get(item, "sector")
         industry = _row_get(item, "industry")
+        listed_date = _normalize_date(_row_get(item, "listed_date"))
         conn.execute(
             """
             INSERT INTO dim.security (
-                security_id, symbol, company_name, exchange_name, cik, currency,
-                listing_status, sector, industry
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                security_id, market, symbol, company_name, exchange_name, cik, currency,
+                listing_status, sector, industry, listed_date
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (security_id) DO UPDATE SET
+                market = EXCLUDED.market,
                 symbol = EXCLUDED.symbol,
                 company_name = EXCLUDED.company_name,
                 exchange_name = EXCLUDED.exchange_name,
@@ -773,9 +995,10 @@ def _insert_security_rows(conn, securities: list[dict[str, Any] | Any]) -> dict[
                 currency = EXCLUDED.currency,
                 listing_status = EXCLUDED.listing_status,
                 sector = EXCLUDED.sector,
-                industry = EXCLUDED.industry
+                industry = EXCLUDED.industry,
+                listed_date = EXCLUDED.listed_date
             """,
-            (security_id, symbol, company_name, exchange_name, cik, currency, listing_status, sector, industry),
+            (security_id, market, symbol, company_name, exchange_name, cik, currency, listing_status, sector, industry, listed_date),
         )
         mapping[symbol] = security_id
     return mapping
@@ -802,10 +1025,11 @@ def _insert_price_rows(conn, prices: list[Any]) -> None:
         conn.execute(
             """
             INSERT INTO ods.us_equity_price_daily_raw (
-                symbol, trade_date, open, high, low, close, adj_close, volume,
+                market, symbol, trade_date, open, high, low, close, adj_close, volume,
                 currency, market_status, source_event_time, source_vendor, raw_payload, payload_hash
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (symbol, trade_date) DO UPDATE SET
+                market = EXCLUDED.market,
                 open = EXCLUDED.open,
                 high = EXCLUDED.high,
                 low = EXCLUDED.low,
@@ -820,6 +1044,7 @@ def _insert_price_rows(conn, prices: list[Any]) -> None:
                 payload_hash = EXCLUDED.payload_hash
             """,
             (
+                _coalesce(_safe_str(_row_get(row, "market")), "US"),
                 _row_get(row, "symbol"),
                 _row_get(row, "trade_date"),
                 _blank_to_none(_row_get(row, "open")),
@@ -846,19 +1071,20 @@ def _insert_financial_rows(conn, financials: list[Any]) -> None:
         conn.execute(
             """
             INSERT INTO ods.security_financial_statement_raw (
-                symbol, report_period, fiscal_quarter, fiscal_year, period_type,
+                market, symbol, report_period, fiscal_quarter, fiscal_year, period_type,
                 filed_date, revenue, gross_margin, op_margin, fcf_margin,
-                cash, debt, shares_outstanding, revenue_yoy, source_filing_id,
+                cash, debt, shares_outstanding, revenue_yoy, netprofit_yoy, cfo_to_np, rd_ratio_ttm, source_filing_id,
                 form_type, currency, data_quality_flag, restatement_flag,
                 source_vendor, raw_payload, payload_hash
             ) VALUES (
+                %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s,
                 %s, %s, %s
             )
             ON CONFLICT (symbol, report_period) DO UPDATE SET
+                market = EXCLUDED.market,
                 fiscal_quarter = EXCLUDED.fiscal_quarter,
                 fiscal_year = EXCLUDED.fiscal_year,
                 period_type = EXCLUDED.period_type,
@@ -871,6 +1097,9 @@ def _insert_financial_rows(conn, financials: list[Any]) -> None:
                 debt = EXCLUDED.debt,
                 shares_outstanding = EXCLUDED.shares_outstanding,
                 revenue_yoy = EXCLUDED.revenue_yoy,
+                netprofit_yoy = EXCLUDED.netprofit_yoy,
+                cfo_to_np = EXCLUDED.cfo_to_np,
+                rd_ratio_ttm = EXCLUDED.rd_ratio_ttm,
                 source_filing_id = EXCLUDED.source_filing_id,
                 form_type = EXCLUDED.form_type,
                 currency = EXCLUDED.currency,
@@ -881,6 +1110,7 @@ def _insert_financial_rows(conn, financials: list[Any]) -> None:
                 payload_hash = EXCLUDED.payload_hash
             """,
             (
+                _coalesce(_safe_str(_row_get(row, "market")), "US"),
                 _row_get(row, "symbol"),
                 _normalize_date(_row_get(row, "report_period")),
                 _row_get(row, "fiscal_quarter"),
@@ -895,6 +1125,9 @@ def _insert_financial_rows(conn, financials: list[Any]) -> None:
                 _blank_to_none(_row_get(row, "debt")),
                 _blank_to_none(_row_get(row, "shares_outstanding")),
                 _blank_to_none(_row_get(row, "revenue_yoy")),
+                _blank_to_none(_row_get(row, "netprofit_yoy")),
+                _blank_to_none(_row_get(row, "cfo_to_np")),
+                _blank_to_none(_row_get(row, "rd_ratio_ttm")),
                 _coalesce(_safe_str(_row_get(row, "source_filing_id")), _safe_str(revenue_fact.get("accn"))),
                 _coalesce(_safe_str(_row_get(row, "form_type")), _safe_str(revenue_fact.get("form"))),
                 _coalesce(_safe_str(_row_get(row, "currency")), _safe_str(revenue_fact.get("unit")), "USD"),
@@ -939,11 +1172,12 @@ def _insert_filings_rows(conn, storage: ObjectStorage | None, filings: list[Any]
         conn.execute(
             """
             INSERT INTO ods.sec_filing_document_raw (
-                filing_id, symbol, cik, accession_number, filing_type, filing_date,
+                filing_id, market, symbol, cik, accession_number, filing_type, filing_date,
                 filing_time, report_period, title, primary_document, filing_url,
                 object_key, content_sha256, source_vendor, raw_payload, payload_hash
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (filing_id) DO UPDATE SET
+                market = EXCLUDED.market,
                 symbol = EXCLUDED.symbol,
                 cik = EXCLUDED.cik,
                 accession_number = EXCLUDED.accession_number,
@@ -962,6 +1196,7 @@ def _insert_filings_rows(conn, storage: ObjectStorage | None, filings: list[Any]
             """,
             (
                 filing_id,
+                _coalesce(_safe_str(_row_get(row, "market")), "US"),
                 _row_get(row, "symbol"),
                 cik,
                 accession_number,
@@ -1000,12 +1235,13 @@ def _insert_news_rows(conn, storage: ObjectStorage | None, news_items: list[Any]
         conn.execute(
             """
             INSERT INTO ods.security_news_article_raw (
-                news_id, symbol, published_time, updated_time, title, summary,
+                news_id, market, symbol, published_time, updated_time, title, summary,
                 article_url, language, author, publisher_name, publisher_homepage,
                 primary_symbol, related_symbols, object_key, content_sha256,
                 source_vendor, raw_payload, payload_hash
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (news_id) DO UPDATE SET
+                market = EXCLUDED.market,
                 symbol = EXCLUDED.symbol,
                 published_time = EXCLUDED.published_time,
                 updated_time = EXCLUDED.updated_time,
@@ -1026,6 +1262,7 @@ def _insert_news_rows(conn, storage: ObjectStorage | None, news_items: list[Any]
             """,
             (
                 _row_get(row, "news_id"),
+                _coalesce(_safe_str(_row_get(row, "market")), "US"),
                 _row_get(row, "symbol"),
                 _normalize_timestamp(_row_get(row, "published_time")),
                 _normalize_timestamp(_coalesce(_row_get(row, "updated_time"), payload.get("updated_at"), payload.get("updated_utc"))),
@@ -1047,17 +1284,88 @@ def _insert_news_rows(conn, storage: ObjectStorage | None, news_items: list[Any]
         )
 
 
+def _insert_institutional_activity_rows(conn, storage: ObjectStorage | None, activities: list[Any]) -> None:
+    for row in activities:
+        payload = _row_get(row, "raw_payload") or {}
+        payload = payload if isinstance(payload, dict) else {}
+        content = _row_get(row, "content")
+        object_key = _row_get(row, "object_key")
+        if object_key is None and content is not None and storage is not None:
+            object_key = storage.upload_text(f"institutional/{_row_get(row, 'activity_id')}.txt", content)
+        if content is None and object_key is not None and storage is not None:
+            try:
+                content = storage.download_text(object_key)
+            except Exception:
+                content = None
+        content_sha256 = _coalesce(_safe_str(_row_get(row, "content_sha256")), _sha256_text(content))
+        conn.execute(
+            """
+            INSERT INTO ods.security_institutional_activity_raw (
+                activity_id, market, symbol, activity_time, activity_type, report_period,
+                filing_date, title, manager_symbol, manager_name, manager_cik, filing_id,
+                filing_type, position_value_usd, position_shares, source_url, object_key,
+                content_sha256, source_vendor, raw_payload, payload_hash
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (activity_id) DO UPDATE SET
+                market = EXCLUDED.market,
+                symbol = EXCLUDED.symbol,
+                activity_time = EXCLUDED.activity_time,
+                activity_type = EXCLUDED.activity_type,
+                report_period = EXCLUDED.report_period,
+                filing_date = EXCLUDED.filing_date,
+                title = EXCLUDED.title,
+                manager_symbol = EXCLUDED.manager_symbol,
+                manager_name = EXCLUDED.manager_name,
+                manager_cik = EXCLUDED.manager_cik,
+                filing_id = EXCLUDED.filing_id,
+                filing_type = EXCLUDED.filing_type,
+                position_value_usd = EXCLUDED.position_value_usd,
+                position_shares = EXCLUDED.position_shares,
+                source_url = EXCLUDED.source_url,
+                object_key = EXCLUDED.object_key,
+                content_sha256 = EXCLUDED.content_sha256,
+                source_vendor = EXCLUDED.source_vendor,
+                raw_payload = EXCLUDED.raw_payload,
+                payload_hash = EXCLUDED.payload_hash
+            """,
+            (
+                _row_get(row, "activity_id"),
+                _coalesce(_safe_str(_row_get(row, "market")), "US"),
+                _row_get(row, "symbol"),
+                _normalize_timestamp(_row_get(row, "activity_time")),
+                _coalesce(_safe_str(_row_get(row, "activity_type")), "institutional_activity"),
+                _blank_to_none(_row_get(row, "report_period")),
+                _blank_to_none(_row_get(row, "filing_date")),
+                _row_get(row, "title"),
+                _row_get(row, "manager_symbol"),
+                _row_get(row, "manager_name"),
+                _safe_str(_row_get(row, "manager_cik")),
+                _row_get(row, "filing_id"),
+                _coalesce(_safe_str(_row_get(row, "filing_type")), "13F-HR"),
+                _blank_to_none(_row_get(row, "position_value_usd")),
+                _blank_to_none(_row_get(row, "position_shares")),
+                _safe_str(_row_get(row, "source_url")),
+                object_key,
+                content_sha256,
+                _coalesce(_row_get(row, "source_vendor"), "institutional-source"),
+                _json(payload),
+                _payload_hash(payload),
+            ),
+        )
+
+
 def _insert_watch_actions(conn, watch_actions: list[dict[str, Any] | Any]) -> None:
     for action in watch_actions:
         payload = _row_get(action, "raw_payload") or (dict(action) if isinstance(action, dict) else dict(getattr(action, "__dict__", {})))
         conn.execute(
             """
             INSERT INTO ods.user_watch_action_raw (
-                action_id, user_id, symbol, action, action_time,
+                action_id, user_id, market, symbol, action, action_time,
                 action_source, trigger_scene, session_id, device_id, raw_payload
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (action_id) DO UPDATE SET
                 user_id = EXCLUDED.user_id,
+                market = EXCLUDED.market,
                 symbol = EXCLUDED.symbol,
                 action = EXCLUDED.action,
                 action_time = EXCLUDED.action_time,
@@ -1070,6 +1378,7 @@ def _insert_watch_actions(conn, watch_actions: list[dict[str, Any] | Any]) -> No
             (
                 _row_get(action, "action_id"),
                 _row_get(action, "user_id"),
+                _coalesce(_safe_str(_row_get(action, "market")), "US"),
                 _row_get(action, "symbol"),
                 _row_get(action, "action"),
                 _row_get(action, "action_time"),
@@ -1080,6 +1389,97 @@ def _insert_watch_actions(conn, watch_actions: list[dict[str, Any] | Any]) -> No
                 _json(payload),
             ),
         )
+
+
+def _upsert_synthetic_signal(
+    conn,
+    *,
+    signal_id: str,
+    event_id: str,
+    security_id: int,
+    market: str,
+    symbol: str,
+    event_time: Any,
+    event_type: str,
+    title: str,
+    summary: str,
+    sentiment: str,
+    importance: int,
+    risk_tags: list[str] | None,
+    theme_tags: list[str] | None,
+    object_key: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO dwd.security_event_timeline (
+            event_id, security_id, market, symbol, event_time, event_type, title,
+            source_kind, sentiment, importance, object_key, theme_tags
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (event_id) DO UPDATE SET
+            security_id = EXCLUDED.security_id,
+            market = EXCLUDED.market,
+            symbol = EXCLUDED.symbol,
+            event_time = EXCLUDED.event_time,
+            event_type = EXCLUDED.event_type,
+            title = EXCLUDED.title,
+            source_kind = EXCLUDED.source_kind,
+            sentiment = EXCLUDED.sentiment,
+            importance = EXCLUDED.importance,
+            object_key = EXCLUDED.object_key,
+            theme_tags = EXCLUDED.theme_tags
+        """,
+        (
+            event_id,
+            security_id,
+            market,
+            symbol,
+            event_time,
+            event_type,
+            title,
+            "synthetic",
+            sentiment,
+            importance,
+            object_key,
+            _json(theme_tags or []),
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO dwd.security_document_signal (
+            signal_id, event_id, security_id, market, symbol, source_kind, summary,
+            sentiment, risk_tags, theme_tags, evidence_path, positive_hits, negative_hits
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (signal_id) DO UPDATE SET
+            event_id = EXCLUDED.event_id,
+            security_id = EXCLUDED.security_id,
+            market = EXCLUDED.market,
+            symbol = EXCLUDED.symbol,
+            source_kind = EXCLUDED.source_kind,
+            summary = EXCLUDED.summary,
+            sentiment = EXCLUDED.sentiment,
+            risk_tags = EXCLUDED.risk_tags,
+            theme_tags = EXCLUDED.theme_tags,
+            evidence_path = EXCLUDED.evidence_path,
+            positive_hits = EXCLUDED.positive_hits,
+            negative_hits = EXCLUDED.negative_hits,
+            extracted_at = NOW()
+        """,
+        (
+            signal_id,
+            event_id,
+            security_id,
+            market,
+            symbol,
+            "synthetic",
+            summary,
+            sentiment,
+            _json(risk_tags or []),
+            _json(theme_tags or []),
+            object_key,
+            1 if sentiment == "positive" else 0,
+            1 if sentiment == "negative" else 0,
+        ),
+    )
 
 
 def _sync_existing_ods_schema(conn, settings: Settings) -> None:
@@ -1108,41 +1508,113 @@ def _sync_existing_ods_schema(conn, settings: Settings) -> None:
     if news_rows:
         _insert_news_rows(conn, storage, news_rows)
 
+    institutional_rows = conn.execute("SELECT * FROM ods.security_institutional_activity_raw").fetchall()
+    if institutional_rows:
+        _insert_institutional_activity_rows(conn, storage, institutional_rows)
 
-def bootstrap_real_data(settings: Settings, reset: bool = True) -> None:
+
+def bootstrap_real_data(settings: Settings, reset: bool = True, market: str = "US") -> None:
     ensure_schema(settings)
     if reset:
         reset_all(settings)
 
-    bundle = build_real_bundle(
-        symbols=settings.real_symbols,
-        price_provider=settings.price_provider,
-        start_date=settings.price_start_date,
-        end_date=settings.price_end_date,
-        sec_user_agent=settings.sec_user_agent,
-        polygon_api_key=settings.polygon_api_key,
-        include_yfinance_supplement=settings.include_yfinance_supplement,
-    )
+    market = market.upper()
+    if market == "CN":
+        bundle = build_cn_stock_bundle(settings)
+    else:
+        us_bundle = build_real_bundle(
+            symbols=settings.market_universes["US"].symbols,
+            price_provider=settings.price_provider,
+            start_date=settings.price_start_date,
+            end_date=settings.price_end_date,
+            sec_user_agent=settings.sec_user_agent,
+            polygon_api_key=settings.polygon_api_key,
+            include_yfinance_supplement=settings.include_yfinance_supplement,
+            institutional_manager_symbols=settings.institutional_manager_symbols,
+        )
+        bundle = {
+            "securities": [
+                {
+                    **dict(item.__dict__),
+                    "market": "US",
+                }
+                for item in us_bundle.securities
+            ],
+            "security_themes": us_bundle.security_themes,
+            "prices": [
+                {
+                    **dict(item.__dict__),
+                    "market": "US",
+                }
+                for item in us_bundle.prices
+            ],
+            "financials": [
+                {
+                    **dict(item.__dict__),
+                    "market": "US",
+                }
+                for item in us_bundle.financials
+            ],
+            "filings": [
+                {
+                    **dict(item.__dict__),
+                    "market": "US",
+                }
+                for item in us_bundle.filings
+            ],
+            "news": [
+                {
+                    **dict(item.__dict__),
+                    "market": "US",
+                }
+                for item in us_bundle.news
+            ],
+            "institutional_activity": [
+                {
+                    **dict(item.__dict__),
+                    "market": "US",
+                }
+                for item in us_bundle.institutional_activity
+            ],
+            "watch_actions": [
+                {
+                    **(dict(item.__dict__) if hasattr(item, "__dict__") else dict(item)),
+                    "market": "US",
+                }
+                for item in us_bundle.watch_actions
+            ],
+        }
 
     storage = ObjectStorage(settings)
     storage.ensure_bucket()
-    trade_dates = [row.trade_date for row in bundle.prices]
+    trade_dates = [_row_get(row, "trade_date") for row in bundle["prices"]]
     trade_dates.append(settings.price_end_date)
 
     with connect(settings) as conn:
+        if not reset:
+            _clear_market_data(conn, market)
         _seed_common_dimensions(conn, trade_dates)
-        symbol_to_id = _insert_security_rows(conn, bundle.securities)
-        if bundle.security_themes:
-            _insert_security_theme_rows(conn, bundle.security_themes, symbol_to_id)
-        _insert_price_rows(conn, bundle.prices)
-        if bundle.financials:
-            _insert_financial_rows(conn, bundle.financials)
-        if bundle.filings:
-            _insert_filings_rows(conn, storage, bundle.filings)
-        if bundle.news:
-            _insert_news_rows(conn, storage, bundle.news)
-        if bundle.watch_actions:
-            _insert_watch_actions(conn, bundle.watch_actions)
+        _seed_theme_dimensions(
+            conn,
+            [
+                (bucket.slug.replace("-", "_"), bucket.label)
+                for bucket in settings.market_universes.get(market, settings.market_universes["US"]).buckets
+            ] + [("a_share_growth", "A Share Growth"), *list(THEME_CATALOG.items())],
+        )
+        symbol_to_id = _insert_security_rows(conn, bundle["securities"])
+        if bundle["security_themes"]:
+            _insert_security_theme_rows(conn, bundle["security_themes"], symbol_to_id)
+        _insert_price_rows(conn, bundle["prices"])
+        if bundle["financials"]:
+            _insert_financial_rows(conn, bundle["financials"])
+        if bundle["filings"]:
+            _insert_filings_rows(conn, storage, bundle["filings"])
+        if bundle["news"]:
+            _insert_news_rows(conn, storage, bundle["news"])
+        if bundle.get("institutional_activity"):
+            _insert_institutional_activity_rows(conn, storage, bundle["institutional_activity"])
+        if bundle["watch_actions"]:
+            _insert_watch_actions(conn, bundle["watch_actions"])
 
 
 def bootstrap_sample_data(settings: Settings, reset: bool = True) -> None:
@@ -1161,6 +1633,7 @@ def bootstrap_sample_data(settings: Settings, reset: bool = True) -> None:
     financials = _enrich_financial_rows(data_dir, _read_csv(data_dir / "financials.csv"))
     filings = _read_json(data_dir / "filings.json")
     news_items = _enrich_news_rows(data_dir, _read_json(data_dir / "news.json"))
+    institutional_activity = _read_json(data_dir / "institutional_activity.json") if (data_dir / "institutional_activity.json").exists() else []
     watch_actions = _read_csv(data_dir / "watch_actions.csv")
 
     with connect(settings) as conn:
@@ -1217,6 +1690,8 @@ def bootstrap_sample_data(settings: Settings, reset: bool = True) -> None:
             _insert_filings_rows(conn, storage, filings)
         if news_items:
             _insert_news_rows(conn, storage, news_items)
+        if institutional_activity:
+            _insert_institutional_activity_rows(conn, storage, institutional_activity)
         if watch_actions:
             _insert_watch_actions(conn, watch_actions)
 
@@ -1253,6 +1728,7 @@ def build_dwd(settings: Settings) -> None:
             priced AS (
                 SELECT
                     s.security_id,
+                    s.market,
                     p.symbol,
                     p.trade_date,
                     p.open,
@@ -1261,6 +1737,7 @@ def build_dwd(settings: Settings) -> None:
                     p.close,
                     p.adj_close,
                     p.volume,
+                    p.raw_payload,
                     LAG(p.adj_close) OVER (PARTITION BY p.symbol ORDER BY p.trade_date) AS prev_adj_close,
                     LAG(p.adj_close, 5) OVER (PARTITION BY p.symbol ORDER BY p.trade_date) AS prev_5d_adj_close,
                     MAX(p.high) OVER (
@@ -1271,15 +1748,16 @@ def build_dwd(settings: Settings) -> None:
                     lf.shares_outstanding,
                     lf.annualized_revenue
                 FROM ods.us_equity_price_daily_raw p
-                JOIN dim.security s ON s.symbol = p.symbol
+                JOIN dim.security s ON s.symbol = p.symbol AND s.market = p.market
                 LEFT JOIN latest_financial lf ON lf.symbol = p.symbol
             )
             INSERT INTO dwd.security_market_daily (
-                security_id, symbol, trade_date, open, high, low, close, adj_close,
-                volume, return_1d, return_5d, distance_from_recent_high, market_cap, ps_ttm
+                security_id, market, symbol, trade_date, open, high, low, close, adj_close,
+                volume, return_1d, return_5d, distance_from_recent_high, market_cap, ps_ttm, pe_ttm, pb, turnover_rate
             )
             SELECT
                 security_id,
+                market,
                 symbol,
                 trade_date,
                 open,
@@ -1302,7 +1780,10 @@ def build_dwd(settings: Settings) -> None:
                 END AS market_cap,
                 CASE WHEN shares_outstanding IS NULL OR annualized_revenue IS NULL OR annualized_revenue = 0 THEN NULL
                      ELSE ROUND(((adj_close * shares_outstanding) / annualized_revenue)::numeric, 4)
-                END AS ps_ttm
+                END AS ps_ttm,
+                NULLIF((raw_payload ->> 'pe_ttm'), '')::numeric AS pe_ttm,
+                NULLIF((raw_payload ->> 'pb'), '')::numeric AS pb,
+                NULLIF((raw_payload ->> 'turnover_rate'), '')::numeric AS turnover_rate
             FROM priced;
             """
         )
@@ -1310,60 +1791,86 @@ def build_dwd(settings: Settings) -> None:
         conn.execute(
             """
             INSERT INTO dwd.security_financial_quarterly (
-                security_id, symbol, report_period, revenue, revenue_yoy, gross_margin,
-                op_margin, fcf_margin, cash, debt, net_cash, shares_outstanding
+                security_id, market, symbol, report_period, revenue, revenue_yoy, netprofit_yoy, gross_margin,
+                op_margin, fcf_margin, cfo_to_np, rd_ratio_ttm, cash, debt, net_cash, shares_outstanding
             )
             SELECT
                 s.security_id,
+                s.market,
                 f.symbol,
                 f.report_period,
                 f.revenue,
                 f.revenue_yoy,
+                f.netprofit_yoy,
                 f.gross_margin,
                 f.op_margin,
                 f.fcf_margin,
+                f.cfo_to_np,
+                f.rd_ratio_ttm,
                 f.cash,
                 f.debt,
                 COALESCE(f.cash, 0) - COALESCE(f.debt, 0) AS net_cash,
                 f.shares_outstanding
             FROM ods.security_financial_statement_raw f
-            JOIN dim.security s ON s.symbol = f.symbol;
+            JOIN dim.security s ON s.symbol = f.symbol AND s.market = f.market;
             """
         )
 
         filing_rows = conn.execute(
             """
-            SELECT s.security_id, f.filing_id AS source_id, f.symbol, f.filing_time AS event_time,
+            SELECT s.security_id, s.market, f.filing_id AS source_id, f.symbol, f.filing_time AS event_time,
                    f.title, f.object_key, 'filing' AS source_kind, f.filing_type AS event_type
             FROM ods.sec_filing_document_raw f
-            JOIN dim.security s ON s.symbol = f.symbol
+            JOIN dim.security s ON s.symbol = f.symbol AND s.market = f.market
             ORDER BY f.filing_time
             """
         ).fetchall()
 
         news_rows = conn.execute(
             """
-            SELECT s.security_id, n.news_id AS source_id, n.symbol, n.published_time AS event_time,
+            SELECT s.security_id, s.market, n.news_id AS source_id, n.symbol, n.published_time AS event_time,
                    n.title, n.object_key, 'news' AS source_kind, 'news' AS event_type
             FROM ods.security_news_article_raw n
-            JOIN dim.security s ON s.symbol = n.symbol
+            JOIN dim.security s ON s.symbol = n.symbol AND s.market = n.market
             ORDER BY n.published_time
             """
         ).fetchall()
 
-        for row in [*filing_rows, *news_rows]:
+        institutional_rows = conn.execute(
+            """
+            SELECT s.security_id, s.market, a.activity_id AS source_id, a.symbol, a.activity_time AS event_time,
+                   a.title, a.object_key, 'institutional' AS source_kind, a.filing_type AS event_type
+            FROM ods.security_institutional_activity_raw a
+            JOIN dim.security s ON s.symbol = a.symbol AND s.market = a.market
+            ORDER BY a.activity_time
+            """
+        ).fetchall()
+
+        for row in [*filing_rows, *news_rows, *institutional_rows]:
             text = storage.download_text(row["object_key"])
             signal = extract_signal(text)
             event_id = f"{row['source_kind']}::{row['source_id']}"
             conn.execute(
                 """
                 INSERT INTO dwd.security_event_timeline (
-                    event_id, security_id, symbol, event_time, event_type, title,
+                    event_id, security_id, market, symbol, event_time, event_type, title,
                     source_kind, sentiment, importance, object_key, theme_tags
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (event_id) DO UPDATE SET
+                    security_id = EXCLUDED.security_id,
+                    market = EXCLUDED.market,
+                    symbol = EXCLUDED.symbol,
+                    event_time = EXCLUDED.event_time,
+                    event_type = EXCLUDED.event_type,
+                    title = EXCLUDED.title,
+                    source_kind = EXCLUDED.source_kind,
+                    sentiment = EXCLUDED.sentiment,
+                    importance = EXCLUDED.importance,
+                    object_key = EXCLUDED.object_key,
+                    theme_tags = EXCLUDED.theme_tags
                 """,
                 (
-                    event_id, row["security_id"], row["symbol"], row["event_time"], row["event_type"],
+                    event_id, row["security_id"], row["market"], row["symbol"], row["event_time"], row["event_type"],
                     row["title"], row["source_kind"], signal.sentiment, signal.importance, row["object_key"],
                     _json(signal.theme_tags),
                 ),
@@ -1371,14 +1878,29 @@ def build_dwd(settings: Settings) -> None:
             conn.execute(
                 """
                 INSERT INTO dwd.security_document_signal (
-                    signal_id, event_id, security_id, symbol, source_kind, summary,
+                    signal_id, event_id, security_id, market, symbol, source_kind, summary,
                     sentiment, risk_tags, theme_tags, evidence_path, positive_hits, negative_hits
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (signal_id) DO UPDATE SET
+                    event_id = EXCLUDED.event_id,
+                    security_id = EXCLUDED.security_id,
+                    market = EXCLUDED.market,
+                    symbol = EXCLUDED.symbol,
+                    source_kind = EXCLUDED.source_kind,
+                    summary = EXCLUDED.summary,
+                    sentiment = EXCLUDED.sentiment,
+                    risk_tags = EXCLUDED.risk_tags,
+                    theme_tags = EXCLUDED.theme_tags,
+                    evidence_path = EXCLUDED.evidence_path,
+                    positive_hits = EXCLUDED.positive_hits,
+                    negative_hits = EXCLUDED.negative_hits,
+                    extracted_at = NOW()
                 """,
                 (
                     f"signal::{row['source_kind']}::{row['source_id']}",
                     event_id,
                     row["security_id"],
+                    row["market"],
                     row["symbol"],
                     row["source_kind"],
                     signal.summary,
@@ -1394,28 +1916,112 @@ def build_dwd(settings: Settings) -> None:
         conn.execute(
             """
             WITH latest_actions AS (
-                SELECT DISTINCT ON (user_id, symbol)
+                SELECT DISTINCT ON (user_id, market, symbol)
                     user_id,
+                    market,
                     symbol,
                     action,
                     action_time
                 FROM ods.user_watch_action_raw
-                ORDER BY user_id, symbol, action_time DESC
+                ORDER BY user_id, market, symbol, action_time DESC
             )
             INSERT INTO dwd.user_watchlist_state_current (
-                user_id, security_id, symbol, state, latest_action_time
+                user_id, security_id, market, symbol, state, latest_action_time
             )
             SELECT
                 la.user_id,
                 s.security_id,
+                la.market,
                 la.symbol,
                 CASE WHEN la.action = 'watch' THEN 'watching' ELSE 'inactive' END,
                 la.action_time
             FROM latest_actions la
-            JOIN dim.security s ON s.symbol = la.symbol
+            JOIN dim.security s ON s.symbol = la.symbol AND s.market = la.market
             WHERE la.action = 'watch';
             """
         )
+
+        cn_theme_map_rows = conn.execute(
+            """
+            SELECT st.security_id, array_agg(st.theme_id ORDER BY st.theme_id) AS theme_ids
+            FROM dim.security_theme st
+            JOIN dim.security s ON s.security_id = st.security_id
+            WHERE s.market = 'CN'
+            GROUP BY st.security_id
+            """
+        ).fetchall()
+        cn_theme_map = {row["security_id"]: row["theme_ids"] or [] for row in cn_theme_map_rows}
+
+        cn_financial_rows = conn.execute(
+            """
+            SELECT security_id, symbol, report_period, revenue_yoy, netprofit_yoy, op_margin
+            FROM dwd.security_financial_quarterly
+            WHERE market = 'CN'
+            AND report_period = (
+                SELECT MAX(report_period) FROM dwd.security_financial_quarterly f2 WHERE f2.security_id = dwd.security_financial_quarterly.security_id
+            )
+            """
+        ).fetchall()
+        for row in cn_financial_rows:
+            theme_tags = cn_theme_map.get(row["security_id"], [])
+            revenue_yoy = float(row["revenue_yoy"] or 0.0) * 100 if row["revenue_yoy"] is not None and abs(float(row["revenue_yoy"])) <= 1 else float(row["revenue_yoy"] or 0.0)
+            netprofit_yoy = float(row["netprofit_yoy"] or 0.0) * 100 if row["netprofit_yoy"] is not None and abs(float(row["netprofit_yoy"])) <= 1 else float(row["netprofit_yoy"] or 0.0)
+            op_margin = float(row["op_margin"] or 0.0) * 100 if row["op_margin"] is not None and abs(float(row["op_margin"])) <= 1 else float(row["op_margin"] or 0.0)
+            sentiment = "positive" if revenue_yoy >= 20 or netprofit_yoy >= 20 else "neutral"
+            summary = f"最近财务披露显示营收同比 {revenue_yoy:.1f}%，净利同比 {netprofit_yoy:.1f}%，经营利润率 {op_margin:.1f}%。"
+            _upsert_synthetic_signal(
+                conn,
+                signal_id=f"signal::synthetic::cn-financial::{row['symbol']}::{row['report_period']}",
+                event_id=f"synthetic::cn-financial::{row['symbol']}::{row['report_period']}",
+                security_id=row["security_id"],
+                market="CN",
+                symbol=row["symbol"],
+                event_time=f"{row['report_period']}T09:00:00+08:00",
+                event_type="financial",
+                title=f"{row['symbol']} 财务兑现跟踪",
+                summary=summary,
+                sentiment=sentiment,
+                importance=2 if sentiment == "positive" else 1,
+                risk_tags=[],
+                theme_tags=theme_tags,
+                object_key=f"synthetic://cn/financial/{row['symbol']}/{row['report_period']}",
+            )
+
+        cn_latest_trade = conn.execute("SELECT MAX(trade_date) AS trade_date FROM dwd.security_market_daily WHERE market = 'CN'").fetchone()
+        latest_cn_trade_date = cn_latest_trade["trade_date"] if cn_latest_trade else None
+        if latest_cn_trade_date is not None:
+            cn_market_rows = conn.execute(
+                """
+                SELECT security_id, symbol, trade_date, return_1d, return_5d, distance_from_recent_high
+                FROM dwd.security_market_daily
+                WHERE market = 'CN' AND trade_date = %s
+                """,
+                (latest_cn_trade_date,),
+            ).fetchall()
+            for row in cn_market_rows:
+                theme_tags = cn_theme_map.get(row["security_id"], [])
+                ret_5d = float(row["return_5d"] or 0.0) * 100 if row["return_5d"] is not None else 0.0
+                dist_high = float(row["distance_from_recent_high"] or 0.0) * 100 if row["distance_from_recent_high"] is not None else 0.0
+                sentiment = "positive" if ret_5d >= 3 else "negative" if ret_5d <= -5 else "neutral"
+                risk_tags = ["price_cooling"] if sentiment == "negative" else []
+                summary = f"最近 5 日涨跌幅 {ret_5d:.1f}%，距阶段高点 {dist_high:.1f}%。"
+                _upsert_synthetic_signal(
+                    conn,
+                    signal_id=f"signal::synthetic::cn-market::{row['symbol']}::{row['trade_date']}",
+                    event_id=f"synthetic::cn-market::{row['symbol']}::{row['trade_date']}",
+                    security_id=row["security_id"],
+                    market="CN",
+                    symbol=row["symbol"],
+                    event_time=f"{row['trade_date']}T15:00:00+08:00",
+                    event_type="market",
+                    title=f"{row['symbol']} 行情跟踪",
+                    summary=summary,
+                    sentiment=sentiment,
+                    importance=2 if abs(ret_5d) >= 5 else 1,
+                    risk_tags=risk_tags,
+                    theme_tags=theme_tags,
+                    object_key=f"synthetic://cn/market/{row['symbol']}/{row['trade_date']}",
+                )
 
 
 def build_dws(settings: Settings) -> None:
@@ -1430,24 +2036,38 @@ def build_dws(settings: Settings) -> None:
             RESTART IDENTITY CASCADE;
             """
         )
-        latest_trade_date = conn.execute("SELECT MAX(trade_date) AS trade_date FROM dwd.security_market_daily").fetchone()["trade_date"]
-        if latest_trade_date is None:
+        latest_trade_dates = conn.execute(
+            """
+            SELECT market, MAX(trade_date) AS trade_date
+            FROM dwd.security_market_daily
+            GROUP BY market
+            """
+        ).fetchall()
+        if not latest_trade_dates:
             raise RuntimeError("No market data available in dwd.security_market_daily")
+        latest_trade_date_by_market = {row["market"]: row["trade_date"] for row in latest_trade_dates}
 
         latest_bars = conn.execute(
             """
-            SELECT * FROM dwd.security_market_daily WHERE trade_date = %s ORDER BY symbol
-            """,
-            (latest_trade_date,),
+            WITH latest AS (
+                SELECT market, MAX(trade_date) AS trade_date
+                FROM dwd.security_market_daily
+                GROUP BY market
+            )
+            SELECT m.*
+            FROM dwd.security_market_daily m
+            JOIN latest l ON l.market = m.market AND l.trade_date = m.trade_date
+            ORDER BY m.market, m.symbol
+            """
         ).fetchall()
 
-        feature_rows: list[dict[str, Any]] = []
-        score_rows: list[dict[str, Any]] = []
         rank_input: list[dict[str, Any]] = []
 
         for bar in latest_bars:
             security_id = bar["security_id"]
             symbol = bar["symbol"]
+            market = bar["market"]
+            trade_date = latest_trade_date_by_market[market]
             financial = conn.execute(
                 """
                 SELECT * FROM dwd.security_financial_quarterly
@@ -1474,54 +2094,79 @@ def build_dws(settings: Settings) -> None:
                 (security_id,),
             ).fetchone()["cnt"]
 
-            risk_tags = []
+            risk_tags: list[str] = []
             for group in signal_stats["risk_tag_groups"] or []:
                 risk_tags.extend(group)
             risk_tags = sorted(set(risk_tags))
 
-            theme_tags = []
+            theme_tags: list[str] = []
             for group in signal_stats["theme_tag_groups"] or []:
                 theme_tags.extend(group)
+            dim_theme_rows = conn.execute(
+                "SELECT theme_id FROM dim.security_theme WHERE security_id = %s ORDER BY theme_id",
+                (security_id,),
+            ).fetchall()
+            theme_tags.extend(row["theme_id"] for row in dim_theme_rows)
             theme_tags = sorted(set(theme_tags))
 
             components = build_score_components(
-                revenue_yoy=float(financial["revenue_yoy"] or 0.0) if financial else None,
-                op_margin=float(financial["op_margin"] or 0.0) if financial else None,
-                fcf_margin=float(financial["fcf_margin"] or 0.0) if financial else None,
-                return_5d=float(bar["return_5d"] or 0.0) if bar else None,
-                distance_from_high=float(bar["distance_from_recent_high"] or 0.0) if bar else None,
-                ps_ttm=float(bar["ps_ttm"] or 0.0) if bar and bar["ps_ttm"] is not None else None,
-                market_cap=float(bar["market_cap"] or 0.0) if bar and bar["market_cap"] is not None else None,
+                revenue_yoy=float(financial["revenue_yoy"] or 0.0) if financial and financial["revenue_yoy"] is not None else None,
+                op_margin=float(financial["op_margin"] or 0.0) if financial and financial["op_margin"] is not None else None,
+                fcf_margin=float(financial["fcf_margin"] or 0.0) if financial and financial["fcf_margin"] is not None else None,
+                return_5d=float(bar["return_5d"] or 0.0) if bar["return_5d"] is not None else None,
+                distance_from_high=float(bar["distance_from_recent_high"] or 0.0) if bar["distance_from_recent_high"] is not None else None,
+                ps_ttm=float(bar["ps_ttm"] or 0.0) if bar["ps_ttm"] is not None else None,
+                market_cap=float(bar["market_cap"] or 0.0) if bar["market_cap"] is not None else None,
                 risk_count=len(risk_tags),
                 negative_event_count=int(signal_stats["negative_event_count"] or 0),
                 theme_count=int(theme_count),
                 positive_signal_count=int(signal_stats["positive_signal_count"] or 0),
+                market=market,
+                netprofit_yoy=float(financial["netprofit_yoy"] or 0.0) if financial and financial["netprofit_yoy"] is not None else None,
+                cfo_to_np=float(financial["cfo_to_np"] or 0.0) if financial and financial["cfo_to_np"] is not None else None,
+                rd_ratio_ttm=float(financial["rd_ratio_ttm"] or 0.0) if financial and financial["rd_ratio_ttm"] is not None else None,
+                pe_ttm=float(bar["pe_ttm"] or 0.0) if bar["pe_ttm"] is not None else None,
+                pb=float(bar["pb"] or 0.0) if bar["pb"] is not None else None,
+                turnover_rate=float(bar["turnover_rate"] or 0.0) if bar["turnover_rate"] is not None else None,
             )
             stage = classify_stage(
                 components,
-                ps_ttm=float(bar["ps_ttm"] or 0.0) if bar and bar["ps_ttm"] is not None else None,
-                market_cap=float(bar["market_cap"] or 0.0) if bar and bar["market_cap"] is not None else None,
-                return_5d=float(bar["return_5d"] or 0.0) if bar else None,
-                distance_from_high=float(bar["distance_from_recent_high"] or 0.0) if bar else None,
+                market=market,
+                ps_ttm=float(bar["ps_ttm"] or 0.0) if bar["ps_ttm"] is not None else None,
+                market_cap=float(bar["market_cap"] or 0.0) if bar["market_cap"] is not None else None,
+                return_5d=float(bar["return_5d"] or 0.0) if bar["return_5d"] is not None else None,
+                distance_from_high=float(bar["distance_from_recent_high"] or 0.0) if bar["distance_from_recent_high"] is not None else None,
+                risk_count=len(risk_tags),
+                negative_event_count=int(signal_stats["negative_event_count"] or 0),
             )
+            score_reason = explain_components(components, market=market)
 
             conn.execute(
                 """
                 INSERT INTO dws.security_feature_daily (
-                    security_id, symbol, trade_date, revenue_yoy, op_margin, fcf_margin,
-                    return_1d, return_5d, distance_from_recent_high, ps_ttm, risk_count, negative_event_count,
-                    theme_count, positive_signal_count
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    security_id, market, symbol, trade_date, revenue_yoy, netprofit_yoy, op_margin, fcf_margin,
+                    cfo_to_np, rd_ratio_ttm, return_1d, return_5d, distance_from_recent_high, ps_ttm, pe_ttm, pb, turnover_rate,
+                    risk_count, negative_event_count, theme_count, positive_signal_count
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
-                    security_id, symbol, latest_trade_date,
+                    security_id,
+                    market,
+                    symbol,
+                    trade_date,
                     financial["revenue_yoy"] if financial else None,
+                    financial["netprofit_yoy"] if financial else None,
                     financial["op_margin"] if financial else None,
                     financial["fcf_margin"] if financial else None,
+                    financial["cfo_to_np"] if financial else None,
+                    financial["rd_ratio_ttm"] if financial else None,
                     bar["return_1d"],
                     bar["return_5d"],
                     bar["distance_from_recent_high"],
                     bar["ps_ttm"],
+                    bar["pe_ttm"],
+                    bar["pb"],
+                    bar["turnover_rate"],
                     len(risk_tags),
                     int(signal_stats["negative_event_count"] or 0),
                     int(theme_count),
@@ -1532,15 +2177,17 @@ def build_dws(settings: Settings) -> None:
             conn.execute(
                 """
                 INSERT INTO dws.security_score_component_daily (
-                    security_id, symbol, trade_date, growth_score, quality_score,
+                    security_id, market, symbol, trade_date, growth_score, quality_score,
                     momentum_score, valuation_score, size_score, evidence_score,
-                    risk_score, theme_score, total_score, stage, score_change_reason
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    risk_score, theme_score, industry_prosperity_score, leader_position_score, financial_acceleration_score,
+                    cashflow_quality_score, moat_score, valuation_chip_score, total_score, stage, score_change_reason
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     security_id,
+                    market,
                     symbol,
-                    latest_trade_date,
+                    trade_date,
                     components.growth,
                     components.quality,
                     components.momentum,
@@ -1549,52 +2196,65 @@ def build_dws(settings: Settings) -> None:
                     components.evidence,
                     components.risk,
                     components.theme,
+                    components.industry_prosperity,
+                    components.leader_position,
+                    components.financial_acceleration,
+                    components.cashflow_quality,
+                    components.moat,
+                    components.valuation_chip,
                     components.total,
                     stage,
-                    explain_components(components),
+                    score_reason,
                 ),
             )
 
             rank_input.append(
                 {
                     "security_id": security_id,
+                    "market": market,
                     "symbol": symbol,
-                    "trade_date": latest_trade_date,
+                    "trade_date": trade_date,
                     "total_score": components.total,
                     "stage": stage,
-                    "entry_reason": explain_components(components),
+                    "entry_reason": score_reason,
                     "risk_tags": risk_tags,
                     "theme_tags": theme_tags,
                 }
             )
 
-        ranked = sorted(rank_input, key=lambda row: row["total_score"], reverse=True)
-        for idx, row in enumerate(ranked, start=1):
-            conn.execute(
-                """
-                INSERT INTO dws.security_candidate_rank_daily (
-                    security_id, symbol, trade_date, total_score, stage, rank_no, entry_reason,
-                    risk_tags, theme_tags
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    row["security_id"],
-                    row["symbol"],
-                    row["trade_date"],
-                    row["total_score"],
-                    row["stage"],
-                    idx,
-                    row["entry_reason"],
-                    _json(row["risk_tags"]),
-                    _json(row["theme_tags"]),
-                ),
-            )
+        ranked = sorted(rank_input, key=lambda row: (row["market"], -row["total_score"], row["symbol"]))
+        grouped_ranked: dict[str, list[dict[str, Any]]] = {}
+        for row in ranked:
+            grouped_ranked.setdefault(row["market"], []).append(row)
+        for market, rows in grouped_ranked.items():
+            for idx, row in enumerate(rows, start=1):
+                conn.execute(
+                    """
+                    INSERT INTO dws.security_candidate_rank_daily (
+                        security_id, market, symbol, trade_date, total_score, stage, rank_no, entry_reason,
+                        risk_tags, theme_tags
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        row["security_id"],
+                        market,
+                        row["symbol"],
+                        row["trade_date"],
+                        row["total_score"],
+                        row["stage"],
+                        idx,
+                        row["entry_reason"],
+                        _json(row["risk_tags"]),
+                        _json(row["theme_tags"]),
+                    ),
+                )
 
         theme_rows = conn.execute(
             """
             SELECT
                 t.theme_id,
                 t.theme_name,
+                s.market,
                 st.security_id,
                 s.symbol,
                 sc.total_score,
@@ -1602,21 +2262,20 @@ def build_dws(settings: Settings) -> None:
             FROM dim.theme t
             JOIN dim.security_theme st ON st.theme_id = t.theme_id
             JOIN dim.security s ON s.security_id = st.security_id
-            JOIN dws.security_score_component_daily sc ON sc.security_id = st.security_id AND sc.trade_date = %s
+            JOIN dws.security_score_component_daily sc ON sc.security_id = st.security_id
             LEFT JOIN (
                 SELECT security_id, COUNT(*) AS signal_count
                 FROM dwd.security_document_signal
                 GROUP BY security_id
             ) sig ON sig.security_id = st.security_id
-            ORDER BY t.theme_id, sc.total_score DESC
-            """,
-            (latest_trade_date,),
+            ORDER BY s.market, t.theme_id, sc.total_score DESC
+            """
         ).fetchall()
 
-        grouped: dict[str, dict[str, Any]] = {}
+        grouped: dict[tuple[str, str], dict[str, Any]] = {}
         for row in theme_rows:
             bucket = grouped.setdefault(
-                row["theme_id"],
+                (row["market"], row["theme_id"]),
                 {
                     "theme_name": row["theme_name"],
                     "total_scores": [],
@@ -1628,21 +2287,26 @@ def build_dws(settings: Settings) -> None:
             bucket["leaders"].append((row["symbol"], float(row["total_score"])))
             bucket["signal_count"] += int(row["signal_count"] or 0)
 
-        for theme_id, bucket in grouped.items():
+        for (market, theme_id), bucket in grouped.items():
             avg_score = sum(bucket["total_scores"]) / len(bucket["total_scores"])
-            heat_score = round(avg_score * 0.7 + bucket["signal_count"] * 3, 2)
-            status = "上升" if heat_score >= 70 else "震荡" if heat_score >= 55 else "转弱"
+            if market == "CN":
+                heat_score = round(avg_score * 0.9 + len(bucket["leaders"]) * 4 + bucket["signal_count"] * 2, 2)
+                status = "上升" if heat_score >= 60 else "震荡" if heat_score >= 48 else "转弱"
+            else:
+                heat_score = round(avg_score * 0.7 + bucket["signal_count"] * 3, 2)
+                status = "上升" if heat_score >= 70 else "震荡" if heat_score >= 55 else "转弱"
             leader_symbols = [symbol for symbol, _score in sorted(bucket["leaders"], key=lambda item: item[1], reverse=True)[:3]]
             conn.execute(
                 """
                 INSERT INTO dws.theme_heat_daily (
-                    theme_id, trade_date, theme_name, heat_score, status,
+                    theme_id, market, trade_date, theme_name, heat_score, status,
                     symbol_count, evidence_count, leader_symbols
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     theme_id,
-                    latest_trade_date,
+                    market,
+                    latest_trade_date_by_market[market],
                     bucket["theme_name"],
                     heat_score,
                     status,
@@ -1665,42 +2329,66 @@ def build_ads(settings: Settings) -> None:
             RESTART IDENTITY CASCADE;
             """
         )
-        latest_trade_date = conn.execute("SELECT MAX(trade_date) AS trade_date FROM dws.security_candidate_rank_daily").fetchone()["trade_date"]
-        if latest_trade_date is None:
+        latest_trade_dates = conn.execute(
+            """
+            SELECT market, MAX(trade_date) AS trade_date
+            FROM dws.security_candidate_rank_daily
+            GROUP BY market
+            """
+        ).fetchall()
+        if not latest_trade_dates:
             raise RuntimeError("No ranked candidates available in dws.security_candidate_rank_daily")
+        latest_trade_date_by_market = {row["market"]: row["trade_date"] for row in latest_trade_dates}
 
         ranked_rows = conn.execute(
             """
-            SELECT * FROM dws.security_candidate_rank_daily
-            WHERE trade_date = %s
-            ORDER BY rank_no
-            """,
-            (latest_trade_date,),
+            SELECT *
+            FROM dws.security_candidate_rank_daily
+            ORDER BY market, rank_no
+            """
         ).fetchall()
-        candidates = [row for row in ranked_rows if row["stage"] != "crowded"][:20] or ranked_rows[:20]
-        for new_rank, row in enumerate(candidates, start=1):
-            summary = f"{row['symbol']} 主候选排名第 {new_rank}，所处阶段 {row['stage']}，核心强项：{row['entry_reason']}。"
-            conn.execute(
-                """
-                INSERT INTO ads.candidate_pool_daily (
-                    security_id, symbol, trade_date, rank_no, total_score, stage,
-                    reason_summary, risk_tags, theme_tags
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    row["security_id"], row["symbol"], row["trade_date"], new_rank, row["total_score"], row["stage"],
-                    summary, _json(row["risk_tags"]), _json(row["theme_tags"]),
-                ),
-            )
+        grouped_ranked: dict[str, list[dict[str, Any]]] = {}
+        for row in ranked_rows:
+            if row["trade_date"] != latest_trade_date_by_market.get(row["market"]):
+                continue
+            grouped_ranked.setdefault(row["market"], []).append(row)
 
-        securities = conn.execute("SELECT security_id, symbol, company_name FROM dim.security ORDER BY security_id").fetchall()
+        for market, rows in grouped_ranked.items():
+            candidates = [row for row in rows if row["stage"] != "crowded"][:20] or rows[:20]
+            for new_rank, row in enumerate(candidates, start=1):
+                summary = f"{row['symbol']} 主候选排名第 {new_rank}，所处阶段 {row['stage']}，核心强项：{row['entry_reason']}。"
+                conn.execute(
+                    """
+                    INSERT INTO ads.candidate_pool_daily (
+                        security_id, market, symbol, trade_date, rank_no, total_score, stage,
+                        reason_summary, risk_tags, theme_tags
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        row["security_id"],
+                        market,
+                        row["symbol"],
+                        row["trade_date"],
+                        new_rank,
+                        row["total_score"],
+                        row["stage"],
+                        summary,
+                        _json(row["risk_tags"]),
+                        _json(row["theme_tags"]),
+                    ),
+                )
+
+        securities = conn.execute("SELECT security_id, market, symbol, company_name FROM dim.security ORDER BY market, security_id").fetchall()
         for sec in securities:
+            trade_date = latest_trade_date_by_market.get(sec["market"])
+            if trade_date is None:
+                continue
             score = conn.execute(
                 """
                 SELECT * FROM dws.security_score_component_daily
                 WHERE security_id = %s AND trade_date = %s
                 """,
-                (sec["security_id"], latest_trade_date),
+                (sec["security_id"], trade_date),
             ).fetchone()
             if score is None:
                 continue
@@ -1755,10 +2443,11 @@ def build_ads(settings: Settings) -> None:
             conn.execute(
                 """
                 INSERT INTO ads.research_card_current (
-                    security_id, symbol, as_of_date, thesis, key_points,
+                    security_id, market, symbol, as_of_date, thesis, key_points,
                     risk_points, next_watch_items, evidence_refs, stage, total_score
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (security_id) DO UPDATE SET
+                    market = EXCLUDED.market,
                     symbol = EXCLUDED.symbol,
                     as_of_date = EXCLUDED.as_of_date,
                     thesis = EXCLUDED.thesis,
@@ -1771,8 +2460,9 @@ def build_ads(settings: Settings) -> None:
                 """,
                 (
                     sec["security_id"],
+                    sec["market"],
                     sec["symbol"],
-                    latest_trade_date,
+                    trade_date,
                     thesis,
                     _json(key_points),
                     _json(risk_points),
@@ -1785,14 +2475,19 @@ def build_ads(settings: Settings) -> None:
 
         watchlist_rows = conn.execute(
             """
-            SELECT w.user_id, w.security_id, w.symbol, c.rank_no, c.total_score, c.reason_summary,
+            WITH latest AS (
+                SELECT market, MAX(trade_date) AS trade_date
+                FROM ads.candidate_pool_daily
+                GROUP BY market
+            )
+            SELECT w.user_id, w.market, w.security_id, w.symbol, c.rank_no, c.total_score, c.reason_summary,
                    c.risk_tags
             FROM dwd.user_watchlist_state_current w
+            LEFT JOIN latest l ON l.market = w.market
             LEFT JOIN ads.candidate_pool_daily c
-              ON c.security_id = w.security_id AND c.trade_date = %s
+              ON c.security_id = w.security_id AND c.trade_date = l.trade_date
             WHERE w.state = 'watching'
-            """,
-            (latest_trade_date,),
+            """
         ).fetchall()
         for row in watchlist_rows:
             risk_tags = row["risk_tags"] or []
@@ -1800,15 +2495,16 @@ def build_ads(settings: Settings) -> None:
                 conn.execute(
                     """
                     INSERT INTO ads.watchlist_alert_daily (
-                        alert_id, user_id, symbol, trade_date, alert_type, severity,
+                        alert_id, user_id, market, symbol, trade_date, alert_type, severity,
                         alert_message, evidence_refs
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         str(uuid4()),
                         row["user_id"],
+                        row["market"],
                         row["symbol"],
-                        latest_trade_date,
+                        latest_trade_date_by_market.get(row["market"]),
                         "risk",
                         "high",
                         f"{row['symbol']} 出现风险标签：{', '.join(risk_tags)}，建议复核最新事件。",
@@ -1819,15 +2515,16 @@ def build_ads(settings: Settings) -> None:
                 conn.execute(
                     """
                     INSERT INTO ads.watchlist_alert_daily (
-                        alert_id, user_id, symbol, trade_date, alert_type, severity,
+                        alert_id, user_id, market, symbol, trade_date, alert_type, severity,
                         alert_message, evidence_refs
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         str(uuid4()),
                         row["user_id"],
+                        row["market"],
                         row["symbol"],
-                        latest_trade_date,
+                        latest_trade_date_by_market.get(row["market"]),
                         "candidate_upgrade",
                         "medium",
                         f"{row['symbol']} 进入候选池前二，当前总分 {float(row['total_score']):.2f}。",
@@ -1838,21 +2535,22 @@ def build_ads(settings: Settings) -> None:
         themes = conn.execute(
             """
             SELECT * FROM dws.theme_heat_daily
-            WHERE trade_date = %s
             ORDER BY heat_score DESC
-            """,
-            (latest_trade_date,),
+            """
         ).fetchall()
         for row in themes:
+            if row["trade_date"] != latest_trade_date_by_market.get(row["market"]):
+                continue
             conn.execute(
                 """
                 INSERT INTO ads.theme_radar_daily (
-                    theme_id, trade_date, theme_name, heat_score, status,
+                    theme_id, market, trade_date, theme_name, heat_score, status,
                     key_drivers, representative_symbols
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     row["theme_id"],
+                    row["market"],
                     row["trade_date"],
                     row["theme_name"],
                     row["heat_score"],
@@ -1876,15 +2574,15 @@ def fetch_ads_preview(settings: Settings) -> dict[str, list[dict[str, Any]]]:
     with connect(settings) as conn:
         return {
             "candidate_pool": conn.execute(
-                "SELECT symbol, rank_no, total_score, reason_summary FROM ads.candidate_pool_daily ORDER BY rank_no"
+                "SELECT market, symbol, rank_no, total_score, reason_summary FROM ads.candidate_pool_daily ORDER BY market, rank_no"
             ).fetchall(),
             "research_cards": conn.execute(
-                "SELECT symbol, total_score, thesis FROM ads.research_card_current ORDER BY total_score DESC"
+                "SELECT market, symbol, total_score, thesis FROM ads.research_card_current ORDER BY market, total_score DESC"
             ).fetchall(),
             "watchlist_alerts": conn.execute(
-                "SELECT user_id, symbol, alert_type, severity, alert_message FROM ads.watchlist_alert_daily ORDER BY created_at, symbol"
+                "SELECT user_id, market, symbol, alert_type, severity, alert_message FROM ads.watchlist_alert_daily ORDER BY created_at, market, symbol"
             ).fetchall(),
             "theme_radar": conn.execute(
-                "SELECT theme_name, heat_score, status FROM ads.theme_radar_daily ORDER BY heat_score DESC"
+                "SELECT market, theme_name, heat_score, status FROM ads.theme_radar_daily ORDER BY market, heat_score DESC"
             ).fetchall(),
         }

@@ -93,6 +93,61 @@ class ScoringTests(unittest.TestCase):
         self.assertIn("crowded", explanation.stage_reason)
         self.assertEqual(len(explanation.score_drivers), 3)
 
+    def test_cn_score_profile_should_use_a_share_weights(self) -> None:
+        components = build_score_components(
+            revenue_yoy=35.0,
+            op_margin=0.18,
+            fcf_margin=0.12,
+            return_5d=0.06,
+            distance_from_high=-0.08,
+            ps_ttm=None,
+            market_cap=35_000_000_000,
+            risk_count=0,
+            negative_event_count=0,
+            theme_count=2,
+            positive_signal_count=2,
+            market="CN",
+            netprofit_yoy=42.0,
+            cfo_to_np=1.1,
+            rd_ratio_ttm=0.12,
+            pe_ttm=25.0,
+            pb=3.2,
+            turnover_rate=0.03,
+        )
+        self.assertGreater(components.industry_prosperity, 50)
+        self.assertGreater(components.financial_acceleration, 50)
+        self.assertGreater(components.total, 50)
+
+    def test_cn_stage_can_reach_acceleration(self) -> None:
+        components = build_score_components(
+            revenue_yoy=55.0,
+            op_margin=0.22,
+            fcf_margin=0.18,
+            return_5d=0.08,
+            distance_from_high=-0.05,
+            ps_ttm=None,
+            market_cap=45_000_000_000,
+            risk_count=0,
+            negative_event_count=0,
+            theme_count=3,
+            positive_signal_count=3,
+            market="CN",
+            netprofit_yoy=60.0,
+            cfo_to_np=1.2,
+            rd_ratio_ttm=0.14,
+            pe_ttm=28.0,
+            pb=3.5,
+            turnover_rate=0.025,
+        )
+        stage = classify_stage(
+            components,
+            market="CN",
+            market_cap=45_000_000_000,
+            return_5d=0.08,
+            distance_from_high=-0.05,
+        )
+        self.assertEqual(stage, "acceleration")
+
 
 
     def test_build_financial_snapshot_from_sec(self) -> None:

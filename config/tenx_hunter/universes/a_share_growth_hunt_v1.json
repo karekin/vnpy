@@ -1,0 +1,31 @@
+{
+  "name": "A股十倍股狩猎池",
+  "strategy": "a-share-growth-research",
+  "description": "聚焦 A 股里更容易出现景气扩散、龙头验证与财务加速共振的成长方向，优先覆盖算力、汽车电子、高端制造和创新药等中长期主线。",
+  "buckets": [
+    {
+      "slug": "ai-compute",
+      "label": "算力与光模块",
+      "rationale": "优先观察 AI 基础设施景气向订单和利润兑现扩散的链条。",
+      "symbols": ["300308.SZ", "300502.SZ", "300394.SZ", "002281.SZ"]
+    },
+    {
+      "slug": "ev-supply-chain",
+      "label": "新能源车与汽车电子",
+      "rationale": "寻找具备全球份额提升和产业升级逻辑的硬科技龙头。",
+      "symbols": ["002594.SZ", "300750.SZ", "002850.SZ", "603986.SH"]
+    },
+    {
+      "slug": "advanced-manufacturing",
+      "label": "高端制造与设备",
+      "rationale": "重点看设备、材料和自主可控方向的景气验证。",
+      "symbols": ["688041.SH", "688981.SH", "300124.SZ", "002371.SZ"]
+    },
+    {
+      "slug": "innovation-healthcare",
+      "label": "创新药与医疗科技",
+      "rationale": "补充一篮子研发驱动型成长公司，验证研发投入能否转化为收入弹性。",
+      "symbols": ["300760.SZ", "688266.SH", "688271.SH"]
+    }
+  ]
+}

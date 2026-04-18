@@ -4,15 +4,18 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 import gzip
 import json
+import re
 from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+from xml.etree import ElementTree
 
 
 SEC_TICKER_MAP_URL = "https://www.sec.gov/files/company_tickers.json"
 SEC_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 SEC_COMPANYFACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
 SEC_ARCHIVES_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{document}"
+SEC_ARCHIVES_INDEX_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/index.json"
 POLYGON_OVERVIEW_URL = "https://api.polygon.io/v3/reference/tickers/{ticker}"
 POLYGON_BARS_URL = "https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/day/{start}/{end}"
 YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
@@ -21,6 +24,7 @@ YAHOO_QUOTE_SUMMARY_URL = "https://query1.finance.yahoo.com/v10/finance/quoteSum
 YAHOO_SEARCH_URL = "https://query1.finance.yahoo.com/v1/finance/search"
 
 ACCEPTED_SEC_FORMS = {"10-Q", "10-K", "8-K", "20-F", "40-F", "6-K"}
+ACCEPTED_13F_FORMS = {"13F-HR", "13F-HR/A"}
 THEME_CATALOG = {
     "ai_infra": "AI Infra",
     "cloud": "Cloud",
@@ -33,6 +37,24 @@ THEME_HINTS = {
     "cybersecurity": {"security", "endpoint", "threat", "identity", "breach", "zero trust"},
     "semis": {"semiconductor", "chip", "wafer", "hbm", "cpu", "gpu", "silicon", "ip"},
 }
+COMPANY_SUFFIXES = (
+    " CORPORATION",
+    " CORP",
+    " INCORPORATED",
+    " INC",
+    " COMPANY",
+    " CO",
+    " LIMITED",
+    " LTD",
+    " HOLDINGS",
+    " HOLDING",
+    " GROUP",
+    " PLC",
+    " N V",
+    " NV",
+    " S A",
+    " SA",
+)
 
 
 @dataclass(frozen=True)
@@ -142,6 +164,28 @@ class NewsRecord:
 
 
 @dataclass(frozen=True)
+class InstitutionalActivityRecord:
+    activity_id: str
+    symbol: str
+    activity_time: str
+    activity_type: str
+    report_period: str | None
+    filing_date: str | None
+    title: str
+    manager_symbol: str
+    manager_name: str
+    manager_cik: str | None
+    filing_id: str
+    filing_type: str
+    position_value_usd: float | None
+    position_shares: float | None
+    source_url: str | None
+    source_vendor: str
+    content: str
+    raw_payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class RealBootstrapBundle:
     securities: list[SecuritySeed]
     security_themes: list[dict[str, str]]
@@ -149,6 +193,7 @@ class RealBootstrapBundle:
     financials: list[FinancialSnapshot]
     filings: list[FilingRecord]
     news: list[NewsRecord]
+    institutional_activity: list[InstitutionalActivityRecord]
     watch_actions: list[dict[str, str]]
 
 
@@ -240,6 +285,15 @@ def fetch_sec_filing_document(cik: str, accession_number: str, primary_document:
     return request_text(url, headers=_sec_headers(user_agent), timeout=60)
 
 
+def fetch_sec_filing_index(cik: str, accession_number: str, user_agent: str) -> dict[str, Any]:
+    accession = accession_number.replace("-", "")
+    return request_json(
+        SEC_ARCHIVES_INDEX_URL.format(cik=str(int(cik)), accession=accession),
+        headers=_sec_headers(user_agent),
+        timeout=60,
+    )
+
+
 def _parse_datetime(value: Any) -> datetime | None:
     if value is None:
         return None
@@ -327,6 +381,37 @@ def _safe_bool(value: Any) -> bool | None:
     return None
 
 
+def _normalize_company_key(value: Any) -> str | None:
+    text = _safe_str(value)
+    if text is None:
+        return None
+    normalized = text.upper().replace("&", " AND ")
+    normalized = re.sub(r"[^A-Z0-9]+", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized or None
+
+
+def _company_name_aliases(value: Any) -> list[str]:
+    normalized = _normalize_company_key(value)
+    if normalized is None:
+        return []
+    aliases = {normalized}
+    for suffix in COMPANY_SUFFIXES:
+        if normalized.endswith(suffix):
+            trimmed = normalized[: -len(suffix)].strip()
+            if trimmed:
+                aliases.add(trimmed)
+    return sorted(aliases, key=len, reverse=True)
+
+
+def _build_company_title_map(ticker_map: dict[str, dict[str, Any]]) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for ticker, row in ticker_map.items():
+        for alias in _company_name_aliases(row.get("title")):
+            mapping.setdefault(alias, ticker)
+    return mapping
+
+
 def _infer_period_type(label: str | None) -> str | None:
     text = _safe_str(label)
     if text is None:
@@ -359,6 +444,10 @@ def _sec_filing_url(cik: str | None, accession_number: str | None, primary_docum
     except (TypeError, ValueError):
         return None
     return SEC_ARCHIVES_URL.format(cik=normalized_cik, accession=accession_number.replace("-", ""), document=primary_document)
+
+
+def _sec_13f_information_table_url(cik: str | None, accession_number: str | None, table_document: str | None) -> str | None:
+    return _sec_filing_url(cik, accession_number, table_document)
 
 
 def _latest_fact(companyfacts: dict[str, Any], candidates: list[tuple[str, str, str]]) -> dict[str, Any] | None:
@@ -549,6 +638,153 @@ def build_filings_from_submissions(symbol: str, cik: str, submissions: dict[str,
             )
         )
         if len(records) >= limit:
+            break
+    return records
+
+
+def fetch_sec_13f_information_table(cik: str, accession_number: str, user_agent: str) -> tuple[str | None, list[dict[str, Any]]]:
+    index_payload = fetch_sec_filing_index(cik, accession_number, user_agent)
+    directory = index_payload.get("directory") if isinstance(index_payload, dict) else {}
+    items = directory.get("item") if isinstance(directory, dict) else []
+    table_document: str | None = None
+    if isinstance(items, list):
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            name = _safe_str(item.get("name"))
+            lowered = (name or "").lower()
+            if lowered == "information_table.xml":
+                table_document = name
+                break
+        if table_document is None:
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                name = _safe_str(item.get("name"))
+                lowered = (name or "").lower()
+                if lowered.endswith(".xml") and "information" in lowered:
+                    table_document = name
+                    break
+    if table_document is None:
+        return None, []
+
+    xml_text = request_text(
+        SEC_ARCHIVES_URL.format(cik=str(int(cik)), accession=accession_number.replace("-", ""), document=table_document),
+        headers=_sec_headers(user_agent),
+        timeout=60,
+    )
+    root = ElementTree.fromstring(xml_text)
+    namespace_uri = root.tag.split("}", 1)[0].strip("{") if root.tag.startswith("{") else ""
+    namespace = {"ns": namespace_uri} if namespace_uri else {}
+
+    def _find_text(node: ElementTree.Element, path: str) -> str | None:
+        target = node.find(path, namespace) if namespace else node.find(path)
+        if target is None or target.text is None:
+            return None
+        return target.text.strip() or None
+
+    holdings: list[dict[str, Any]] = []
+    info_tables = root.findall("ns:infoTable", namespace) if namespace else root.findall("infoTable")
+    for row in info_tables:
+        holdings.append(
+            {
+                "nameOfIssuer": _find_text(row, "ns:nameOfIssuer" if namespace else "nameOfIssuer"),
+                "titleOfClass": _find_text(row, "ns:titleOfClass" if namespace else "titleOfClass"),
+                "cusip": _find_text(row, "ns:cusip" if namespace else "cusip"),
+                "value": _find_text(row, "ns:value" if namespace else "value"),
+                "sshPrnamt": _find_text(row, "ns:shrsOrPrnAmt/ns:sshPrnamt" if namespace else "shrsOrPrnAmt/sshPrnamt"),
+                "sshPrnamtType": _find_text(row, "ns:shrsOrPrnAmt/ns:sshPrnamtType" if namespace else "shrsOrPrnAmt/sshPrnamtType"),
+                "investmentDiscretion": _find_text(row, "ns:investmentDiscretion" if namespace else "investmentDiscretion"),
+            }
+        )
+    return table_document, holdings
+
+
+def build_institutional_activity_from_submissions(
+    *,
+    manager_symbol: str,
+    manager_name: str,
+    manager_cik: str,
+    submissions: dict[str, Any],
+    title_to_ticker: dict[str, str],
+    universe_symbols: set[str],
+    user_agent: str,
+    limit: int = 1,
+) -> list[InstitutionalActivityRecord]:
+    recent = submissions.get("filings", {}).get("recent", {})
+    records: list[InstitutionalActivityRecord] = []
+    seen_symbols: set[tuple[str, str]] = set()
+    filings_seen = 0
+
+    for index, form in enumerate(recent.get("form", []) or []):
+        if form not in ACCEPTED_13F_FORMS:
+            continue
+        accession = _list_get(recent.get("accessionNumber"), index)
+        if not accession:
+            continue
+        filing_date = _list_get(recent.get("filingDate"), index)
+        filing_time = _list_get(recent.get("acceptanceDateTime"), index) or filing_date
+        report_period = _list_get(recent.get("reportDate"), index)
+        try:
+            table_document, holdings = fetch_sec_13f_information_table(manager_cik, accession, user_agent)
+        except Exception:
+            continue
+
+        for holding in holdings:
+            issuer_name = _safe_str(holding.get("nameOfIssuer"))
+            if issuer_name is None:
+                continue
+            held_symbol = next((title_to_ticker.get(alias) for alias in _company_name_aliases(issuer_name) if alias in title_to_ticker), None)
+            if held_symbol is None or held_symbol not in universe_symbols:
+                continue
+            dedupe_key = (accession, held_symbol)
+            if dedupe_key in seen_symbols:
+                continue
+            seen_symbols.add(dedupe_key)
+
+            value_usd = _safe_float(holding.get("value"))
+            share_count = _safe_float(holding.get("sshPrnamt"))
+            title = f"{manager_symbol} 13F disclosed a {held_symbol} holding"
+            value_text = f"${value_usd:,.0f}" if value_usd is not None else "an undisclosed value"
+            shares_text = f"{share_count:,.0f} shares" if share_count is not None else "an undisclosed share count"
+            period_text = report_period or filing_date or "the latest quarter"
+            content = (
+                f"{manager_name} ({manager_symbol}) filed {form} for {period_text} and disclosed a holding in "
+                f"{held_symbol} ({issuer_name}). Reported position value was about {value_text} with {shares_text}."
+            )
+            records.append(
+                InstitutionalActivityRecord(
+                    activity_id=f"{manager_symbol}-{accession}-{held_symbol}",
+                    symbol=held_symbol,
+                    activity_time=_iso_datetime(filing_time),
+                    activity_type="13f_holding",
+                    report_period=_iso_date(report_period) if report_period else None,
+                    filing_date=_iso_date(filing_date) if filing_date else None,
+                    title=title,
+                    manager_symbol=manager_symbol,
+                    manager_name=manager_name,
+                    manager_cik=manager_cik,
+                    filing_id=f"{manager_symbol}-{accession}",
+                    filing_type=form,
+                    position_value_usd=value_usd,
+                    position_shares=share_count,
+                    source_url=_sec_13f_information_table_url(manager_cik, accession, table_document),
+                    source_vendor="sec-13f",
+                    content=content,
+                    raw_payload={
+                        "manager_symbol": manager_symbol,
+                        "manager_name": manager_name,
+                        "manager_cik": manager_cik,
+                        "accessionNumber": accession,
+                        "filingDate": filing_date,
+                        "acceptanceDateTime": filing_time,
+                        "reportDate": report_period,
+                        "holding": holding,
+                    },
+                )
+            )
+        filings_seen += 1
+        if filings_seen >= limit:
             break
     return records
 
@@ -896,8 +1132,10 @@ def build_real_bundle(
     sec_user_agent: str,
     polygon_api_key: str | None,
     include_yfinance_supplement: bool = True,
+    institutional_manager_symbols: list[str] | None = None,
 ) -> RealBootstrapBundle:
     ticker_map = fetch_sec_ticker_map(sec_user_agent)
+    title_to_ticker = _build_company_title_map(ticker_map)
 
     yfinance_securities: list[SecuritySeed] = []
     yfinance_prices: list[PriceBar] = []
@@ -939,6 +1177,7 @@ def build_real_bundle(
     prices = polygon_prices if price_provider == "polygon" else yfinance_prices
     financials: list[FinancialSnapshot] = []
     filings: list[FilingRecord] = []
+    institutional_activity: list[InstitutionalActivityRecord] = []
     security_themes: list[dict[str, str]] = []
 
     for index, symbol in enumerate(symbols, start=1):
@@ -972,6 +1211,30 @@ def build_real_bundle(
                     "source_note": f"inferred from real-source metadata for {symbol}",
                 }
             )
+
+    manager_symbols = [symbol.strip().upper() for symbol in (institutional_manager_symbols or ["NVDA"]) if symbol and symbol.strip()]
+    universe_symbols = {symbol.upper() for symbol in symbols}
+    for manager_symbol in manager_symbols:
+        manager_row = ticker_map.get(manager_symbol, {})
+        manager_cik = _safe_str(manager_row.get("cik_str"))
+        if manager_cik is None:
+            continue
+        try:
+            manager_submissions = fetch_sec_submissions(manager_cik, sec_user_agent)
+        except Exception:
+            continue
+        institutional_activity.extend(
+            build_institutional_activity_from_submissions(
+                manager_symbol=manager_symbol,
+                manager_name=_safe_str(manager_row.get("title")) or manager_symbol,
+                manager_cik=manager_cik,
+                submissions=manager_submissions,
+                title_to_ticker=title_to_ticker,
+                universe_symbols=universe_symbols,
+                user_agent=sec_user_agent,
+                limit=1,
+            )
+        )
 
     watch_actions = [
         {
@@ -1008,5 +1271,6 @@ def build_real_bundle(
         financials=financials,
         filings=filings,
         news=polygon_news or yfinance_news,
+        institutional_activity=institutional_activity,
         watch_actions=watch_actions,
     )

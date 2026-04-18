@@ -32,13 +32,22 @@ describe("TenxHunter API adapter", () => {
           },
         ],
         snapshot_at: "2026-04-12 08:15 UTC",
+        freshness: {
+          updated_at: "2026-04-12 08:15 UTC",
+          data_complete: true,
+          source_summary: "demo",
+          coverage: "workspace",
+        },
+        available_actions: [],
         candidates: [
           {
+            market: "US",
             symbol: "NVDA",
             name: "NVIDIA",
             sector: "Semiconductors",
             theme: "AI Infra",
             stage: "acceleration",
+            lifecycle_stage: { key: "acceleration", label: "业绩加速", summary: "summary" },
             score: 94,
             score_change: 3.2,
             price: 188.63,
@@ -54,10 +63,20 @@ describe("TenxHunter API adapter", () => {
             stage_reason: "Acceleration because validation remains broad and recent.",
             crowding_note: "Still expensive, but evidence breadth remains unusually strong.",
             score_drivers: ["增长分 92", "证据分 88", "主题分 79"],
+            why_selected: { summary: "Growth and evidence both rank near the top of the universe.", bullets: ["增长分 92"] },
+            score_breakdown: [],
+            freshness: {
+              updated_at: "2026-04-12 08:15 UTC",
+              data_complete: true,
+              source_summary: "demo",
+              coverage: "workspace",
+            },
+            available_actions: [],
           },
         ],
         themes: [
           {
+            market: "US",
             slug: "ai-infra",
             name: "AI Infra",
             heat: 94,
@@ -65,10 +84,17 @@ describe("TenxHunter API adapter", () => {
             driver: "Capex and demand validation remain strong.",
             evidence: ["Cloud capex held up."],
             related_symbols: ["NVDA"],
+            freshness: {
+              updated_at: "2026-04-12 08:15 UTC",
+              data_complete: true,
+              source_summary: "demo",
+              coverage: "workspace",
+            },
           },
         ],
         watchlist: [
           {
+            market: "US",
             symbol: "NVDA",
             name: "NVIDIA",
             thesis_status: "strengthening",
@@ -77,11 +103,13 @@ describe("TenxHunter API adapter", () => {
             next_check: "Next earnings call",
             risk_level: "medium",
             score: 94,
+            available_actions: [],
           },
         ],
         timeline: [
           {
             id: "evt-1",
+            market: "US",
             symbol: "NVDA",
             date: "2026-04-12",
             title: "Cloud leaders maintain AI capex",
@@ -93,7 +121,7 @@ describe("TenxHunter API adapter", () => {
       }),
     });
 
-    const snapshot = await loadTenxWorkspaceSnapshot();
+    const snapshot = await loadTenxWorkspaceSnapshot("US");
     const metrics = getOverviewMetrics(snapshot);
 
     expect(metrics).toHaveLength(4);
@@ -109,36 +137,50 @@ describe("TenxHunter API adapter", () => {
     mockedFetch.mockResolvedValue({
       ok: true,
       json: async () => ({
+        market: "US",
         symbol: "NVDA",
         name: "NVIDIA",
         sector: "Semiconductors",
         theme: "AI Infra",
         stage: "acceleration",
+        lifecycle_stage: { key: "acceleration", label: "业绩加速", summary: "summary" },
         score: 94,
         thesis_summary: "AI demand remains supported by recent capex commentary.",
         selection_reason: "The company remains a primary beneficiary of AI infra buildout.",
         stage_reason: "Validation remains broad across demand signals.",
         crowding_note: "Crowding risk exists, but evidence remains strong.",
         score_drivers: ["增长分 92", "证据分 88"],
+        why_selected: { summary: "summary", bullets: ["增长分 92"] },
+        score_breakdown: [],
         facts: ["Revenue growth remains elevated."],
         thesis_points: ["Capex continues to support demand."],
-        risks: ["Expectation bar is high."],
-        next_checkpoints: ["Next earnings call"],
-        evidence: [
+        risk_items: [{ title: "Expectation bar is high.", severity: "medium", trigger: "trigger", note: "note" }],
+        next_watch_points: ["Next earnings call"],
+        evidence_items: [
           {
+            id: "evt-1",
             source: "Recent earnings call",
             published_at: "2026-04-12 08:15 UTC",
+            title: "Recent earnings call",
             note: "Management reiterated sustained demand.",
+            linked_to: [],
           },
         ],
+        freshness: {
+          updated_at: "2026-04-12 08:15 UTC",
+          data_complete: true,
+          source_summary: "demo",
+          coverage: "research",
+        },
+        available_actions: [],
       }),
     });
 
-    const card = await loadTenxResearchCard("NVDA");
+    const card = await loadTenxResearchCard("US", "NVDA");
 
     expect(card).not.toBeNull();
     expect(card?.symbol).toBe("NVDA");
-    expect(card?.evidence.length).toBeGreaterThan(0);
+    expect(card?.evidenceItems.length).toBeGreaterThan(0);
   });
 
   test("returns null for real 404 research responses", async () => {
@@ -147,7 +189,7 @@ describe("TenxHunter API adapter", () => {
       status: 404,
     });
 
-    await expect(loadTenxResearchCard("UNKNOWN")).resolves.toBeNull();
+    await expect(loadTenxResearchCard("US", "UNKNOWN")).resolves.toBeNull();
   });
 
   test("surfaces backend failures instead of falling back to mock data", async () => {
@@ -156,7 +198,7 @@ describe("TenxHunter API adapter", () => {
       status: 503,
     });
 
-    await expect(loadTenxWorkspaceSnapshot()).rejects.toThrow("HTTP 503");
+    await expect(loadTenxWorkspaceSnapshot("US")).rejects.toThrow("HTTP 503");
     expect(getTenxErrorMessage(new Error("backend down"))).toBe("backend down");
   });
 
@@ -170,13 +212,22 @@ describe("TenxHunter API adapter", () => {
         universe_description: "Preset research universe.",
         universe_buckets: [],
         snapshot_at: "2026-04-12 08:15 UTC",
+        freshness: {
+          updated_at: "2026-04-12 08:15 UTC",
+          data_complete: true,
+          source_summary: "demo",
+          coverage: "workspace",
+        },
+        available_actions: [],
         candidates: [
           {
+            market: "US",
             symbol: "MU",
             name: "Micron",
             sector: "Memory",
             theme: "AI Compute",
             stage: "validation",
+            lifecycle_stage: { key: "validation", label: "逻辑验证", summary: "summary" },
             score: 88,
             score_change: 1.8,
             price: 140.12,
@@ -192,10 +243,20 @@ describe("TenxHunter API adapter", () => {
             stage_reason: "Evidence breadth improved.",
             crowding_note: "Still cyclical.",
             score_drivers: ["证据分 85"],
+            why_selected: { summary: "Memory leverage improved.", bullets: ["证据分 85"] },
+            score_breakdown: [],
+            freshness: {
+              updated_at: "2026-04-12 08:15 UTC",
+              data_complete: true,
+              source_summary: "demo",
+              coverage: "workspace",
+            },
+            available_actions: [],
           },
         ],
         themes: [
           {
+            market: "US",
             slug: "ai-compute",
             name: "AI Compute",
             heat: 91,
@@ -203,12 +264,19 @@ describe("TenxHunter API adapter", () => {
             driver: "Demand remains strong.",
             evidence: ["Pricing improved."],
             related_symbols: ["MU"],
+            freshness: {
+              updated_at: "2026-04-12 08:15 UTC",
+              data_complete: true,
+              source_summary: "demo",
+              coverage: "workspace",
+            },
           },
         ],
         watchlist: [],
         timeline: [
           {
             id: "evt-mu-1",
+            market: "US",
             symbol: "MU",
             date: "2026-04-12",
             title: "HBM pricing improves",
@@ -220,7 +288,7 @@ describe("TenxHunter API adapter", () => {
       }),
     });
 
-    const snapshot = await loadTenxWorkspaceSnapshot();
+    const snapshot = await loadTenxWorkspaceSnapshot("US");
     const theme = getThemeBySlug("ai-compute", snapshot);
     const timeline = getTimelineForSymbol("MU", snapshot);
 

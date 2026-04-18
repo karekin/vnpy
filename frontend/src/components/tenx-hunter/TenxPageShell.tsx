@@ -1,5 +1,6 @@
 import PageBreadcrumb from "@/components/common/PageBreadCrumb";
 import TenxNavigation from "@/components/tenx-hunter/TenxNavigation";
+import type { TenxMarket } from "@/components/tenx-hunter/types";
 import React from "react";
 
 type TenxPageShellProps = {
@@ -7,12 +8,14 @@ type TenxPageShellProps = {
   subtitle: string;
   children: React.ReactNode;
   marketLabel?: string;
+  market: TenxMarket;
 };
 
 export default function TenxPageShell({
   title,
   subtitle,
   children,
+  market,
   marketLabel = "US Growth Tech / AI Infrastructure",
 }: TenxPageShellProps) {
   return (
@@ -28,7 +31,7 @@ export default function TenxPageShell({
           </div>
         </div>
       </div>
-      <TenxNavigation />
+      <TenxNavigation market={market} />
       <div className="min-w-0 space-y-6">{children}</div>
     </div>
   );

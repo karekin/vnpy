@@ -43,6 +43,7 @@ class TenxFetchSnapshotTests(unittest.TestCase):
             financials=[],
             filings=[],
             news=[],
+            institutional_activity=[],
             watch_actions=[{"action_id": "watch-1", "user_id": "demo_user", "symbol": "DEMO", "action": "watch", "action_time": "2026-04-11T00:00:00Z"}],
         )
 
@@ -61,6 +62,7 @@ class TenxFetchSnapshotTests(unittest.TestCase):
             self.assertTrue((out_dir / "securities.csv").exists())
             self.assertTrue((out_dir / "price_daily.csv").exists())
             self.assertTrue((out_dir / "manifest.json").exists())
+            self.assertTrue((out_dir / "institutional_activity.json").exists())
             manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["mode"], "yfinance+sec")
 

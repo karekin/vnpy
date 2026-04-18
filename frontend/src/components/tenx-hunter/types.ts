@@ -1,16 +1,55 @@
-export type TenxStage = "early" | "validation" | "acceleration" | "crowded";
+export type TenxMarket = "CN" | "US";
+export type TenxStage = "discovery" | "validation" | "acceleration" | "crowded" | "falsified";
 export type TenxRiskLevel = "low" | "medium" | "high";
 export type TenxMomentum = "strengthening" | "stable" | "cooling";
 export type TenxThemeTrend = "rising" | "stable" | "weakening";
 export type TenxThesisStatus = "strengthening" | "needs-review" | "at-risk";
-export type TenxTimelineType = "earnings" | "capex" | "price" | "supply-chain" | "risk";
+export type TenxTimelineType = "earnings" | "capex" | "price" | "supply-chain" | "risk" | "filing";
+export type TenxAlertSeverity = "P1" | "P2" | "P3";
+
+export type TenxFreshness = {
+  updatedAt: string;
+  dataComplete: boolean;
+  sourceSummary: string;
+  coverage: string;
+};
+
+export type TenxAction = {
+  id: string;
+  label: string;
+  kind: string;
+  enabled: boolean;
+};
+
+export type TenxWhySelected = {
+  summary: string;
+  bullets: string[];
+};
+
+export type TenxScoreBreakdown = {
+  key: string;
+  label: string;
+  score: number;
+  weight: number;
+  summary: string;
+  positiveNotes: string[];
+  negativeNotes: string[];
+};
+
+export type TenxLifecycleStage = {
+  key: TenxStage;
+  label: string;
+  summary: string;
+};
 
 export type TenxCandidate = {
+  market: TenxMarket;
   symbol: string;
   name: string;
   sector: string;
   theme: string;
   stage: TenxStage;
+  lifecycleStage: TenxLifecycleStage;
   score: number;
   scoreChange: number;
   price: number;
@@ -22,13 +61,18 @@ export type TenxCandidate = {
   nextEvent: string;
   thesis: string;
   keySignal: string;
-  selectionReason?: string;
-  stageReason?: string;
-  crowdingNote?: string;
-  scoreDrivers?: string[];
+  selectionReason: string;
+  stageReason: string;
+  crowdingNote: string;
+  scoreDrivers: string[];
+  whySelected: TenxWhySelected;
+  scoreBreakdown: TenxScoreBreakdown[];
+  freshness: TenxFreshness;
+  availableActions: TenxAction[];
 };
 
 export type TenxTheme = {
+  market: TenxMarket;
   slug: string;
   name: string;
   heat: number;
@@ -36,9 +80,11 @@ export type TenxTheme = {
   driver: string;
   evidence: string[];
   relatedSymbols: string[];
+  freshness: TenxFreshness;
 };
 
 export type TenxWatchlistItem = {
+  market: TenxMarket;
   symbol: string;
   name: string;
   thesisStatus: TenxThesisStatus;
@@ -47,35 +93,53 @@ export type TenxWatchlistItem = {
   nextCheck: string;
   riskLevel: TenxRiskLevel;
   score: number;
+  availableActions: TenxAction[];
 };
 
-export type TenxEvidence = {
+export type TenxEvidenceItem = {
+  id: string;
   source: string;
   publishedAt: string;
+  title: string;
+  note: string;
+  linkedTo: string[];
+};
+
+export type TenxRiskItem = {
+  title: string;
+  severity: TenxRiskLevel;
+  trigger: string;
   note: string;
 };
 
 export type TenxResearchCard = {
+  market: TenxMarket;
   symbol: string;
   name: string;
   sector: string;
   theme: string;
   stage: TenxStage;
+  lifecycleStage: TenxLifecycleStage;
   score: number;
   thesisSummary: string;
-  selectionReason?: string;
-  stageReason?: string;
-  crowdingNote?: string;
-  scoreDrivers?: string[];
+  selectionReason: string;
+  stageReason: string;
+  crowdingNote: string;
+  scoreDrivers: string[];
+  whySelected: TenxWhySelected;
+  scoreBreakdown: TenxScoreBreakdown[];
   facts: string[];
   thesisPoints: string[];
-  risks: string[];
-  nextCheckpoints: string[];
-  evidence: TenxEvidence[];
+  evidenceItems: TenxEvidenceItem[];
+  riskItems: TenxRiskItem[];
+  nextWatchPoints: string[];
+  freshness: TenxFreshness;
+  availableActions: TenxAction[];
 };
 
 export type TenxTimelineEvent = {
   id: string;
+  market: TenxMarket;
   symbol: string;
   date: string;
   title: string;
@@ -84,7 +148,7 @@ export type TenxTimelineEvent = {
 };
 
 export type TenxWorkspaceSnapshot = {
-  market: "US";
+  market: TenxMarket;
   universe: string;
   universeStrategy: string;
   universeDescription: string;
@@ -96,11 +160,33 @@ export type TenxWorkspaceSnapshot = {
     sampleSymbols: string[];
   }[];
   snapshotAt: string;
+  freshness: TenxFreshness;
+  availableActions: TenxAction[];
   candidates: TenxCandidate[];
   themes: TenxTheme[];
   watchlist: TenxWatchlistItem[];
   timeline: TenxTimelineEvent[];
   copilotPrompts: string[];
+};
+
+export type TenxAlertItem = {
+  id: string;
+  market: TenxMarket;
+  symbol: string;
+  title: string;
+  summary: string;
+  severity: TenxAlertSeverity;
+  alertType: string;
+  source: string;
+  createdAt: string;
+  nextAction: string;
+};
+
+export type TenxAlertCenter = {
+  market: TenxMarket;
+  freshness: TenxFreshness;
+  availableActions: TenxAction[];
+  items: TenxAlertItem[];
 };
 
 export type TenxOverviewMetric = {

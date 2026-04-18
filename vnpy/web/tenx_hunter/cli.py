@@ -32,12 +32,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _print_runtime_settings() -> None:
     settings = load_settings()
+    selected_universe = settings.market_universes[settings.default_market]
     payload = {
-        "universe_name": settings.real_universe_name,
-        "universe_strategy": settings.real_universe_strategy,
-        "universe_bucket_labels": [bucket["label"] for bucket in settings.real_universe_buckets],
+        "default_market": settings.default_market,
+        "universe_name": selected_universe.name,
+        "universe_strategy": selected_universe.strategy,
+        "universe_bucket_labels": [bucket.label for bucket in selected_universe.buckets],
         "real_symbols_source": settings.real_symbols_source,
-        "real_symbols": settings.real_symbols,
+        "real_symbols": selected_universe.symbols,
         "price_provider": settings.price_provider,
         "price_start_date": settings.price_start_date,
         "price_end_date": settings.price_end_date,
@@ -63,7 +65,7 @@ def _bootstrap_sample() -> None:
 def _bootstrap_real() -> None:
     settings = load_settings()
     _print_runtime_settings()
-    bootstrap_real_data(settings, reset=True)
+    bootstrap_real_data(settings, reset=True, market=settings.default_market)
     print("bootstrap-real complete")
 
 
@@ -84,7 +86,7 @@ def _demo_sample() -> None:
 def _demo_real() -> None:
     settings = load_settings()
     _print_runtime_settings()
-    bootstrap_real_data(settings, reset=True)
+    bootstrap_real_data(settings, reset=True, market=settings.default_market)
     run_all(settings)
     preview = fetch_ads_preview(settings)
     print(json.dumps(preview, ensure_ascii=False, indent=2, default=str))

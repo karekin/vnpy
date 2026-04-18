@@ -9,6 +9,7 @@ from .universe import ResolvedUniverse, apply_symbol_overrides, load_universe_fi
 
 
 DEFAULT_REAL_UNIVERSE_PRESET = "us_growth_hunt_v1"
+DEFAULT_CN_UNIVERSE_PRESET = "a_share_growth_hunt_v1"
 
 
 @dataclass(frozen=True)
@@ -35,7 +36,10 @@ class Settings:
     price_start_date: str
     price_end_date: str
     include_yfinance_supplement: bool
+    institutional_manager_symbols: list[str]
     scheduler_bootstrap_mode: str
+    default_market: str
+    market_universes: dict[str, ResolvedUniverse]
 
     @property
     def pg_dsn(self) -> str:
@@ -123,6 +127,11 @@ def _serialize_buckets(universe: ResolvedUniverse) -> list[dict[str, object]]:
     ]
 
 
+def _normalize_market(value: str | None) -> str:
+    lowered = (value or "CN").strip().upper()
+    return lowered if lowered in {"CN", "US"} else "CN"
+
+
 def _resolve_real_universe() -> tuple[ResolvedUniverse, str]:
     raw_symbols = os.getenv("REAL_SYMBOLS")
     if raw_symbols:
@@ -173,10 +182,87 @@ def _resolve_real_universe() -> tuple[ResolvedUniverse, str]:
     return fallback, "fallback:demo"
 
 
+def _resolve_market_universe(
+    *,
+    market: str,
+    env_prefix: str,
+    default_preset: str,
+    fallback_name: str,
+    fallback_strategy: str,
+    fallback_description: str,
+    fallback_symbols: list[str],
+) -> tuple[ResolvedUniverse, str]:
+    raw_symbols = os.getenv(f"{env_prefix}_SYMBOLS")
+    if raw_symbols:
+        universe = ResolvedUniverse(
+            name=f"{market} Env Research Universe",
+            strategy="env-symbol-list",
+            description=f"Universe assembled directly from {env_prefix}_SYMBOLS.",
+            symbols=_parse_symbols(raw_symbols),
+            buckets=[],
+            source=f"env:{env_prefix}_SYMBOLS",
+        )
+        return apply_symbol_overrides(
+            universe,
+            include_symbols=_parse_symbols(os.getenv(f"{env_prefix}_INCLUDE", "")),
+            exclude_symbols=_parse_symbols(os.getenv(f"{env_prefix}_EXCLUDE", "")),
+        ), f"env:{env_prefix}_SYMBOLS"
+
+    raw_file = os.getenv(f"{env_prefix}_FILE")
+    if raw_file:
+        path = _resolve_symbol_file(raw_file)
+        if path.exists():
+            universe = load_universe_file(path, source=f"file:{path.name}")
+            return apply_symbol_overrides(
+                universe,
+                include_symbols=_parse_symbols(os.getenv(f"{env_prefix}_INCLUDE", "")),
+                exclude_symbols=_parse_symbols(os.getenv(f"{env_prefix}_EXCLUDE", "")),
+            ), f"file:{path.name}"
+
+    preset = (os.getenv(f"{env_prefix}_PRESET") or default_preset).strip() or default_preset
+    preset_dir = _default_universe_dir()
+    for candidate in (preset_dir / f"{preset}.json", preset_dir / f"{preset}.txt"):
+        if candidate.exists():
+            universe = load_universe_file(candidate, source=f"preset:{preset}")
+            return apply_symbol_overrides(
+                universe,
+                include_symbols=_parse_symbols(os.getenv(f"{env_prefix}_INCLUDE", "")),
+                exclude_symbols=_parse_symbols(os.getenv(f"{env_prefix}_EXCLUDE", "")),
+            ), f"preset:{preset}"
+
+    fallback = ResolvedUniverse(
+        name=fallback_name,
+        strategy=fallback_strategy,
+        description=fallback_description,
+        symbols=fallback_symbols,
+        buckets=[],
+        source=f"fallback:{market.lower()}",
+    )
+    return fallback, f"fallback:{market.lower()}"
+
+
 def load_settings() -> Settings:
     _load_local_env_defaults()
     default_start, default_end = default_date_range()
     universe, symbols_source = _resolve_real_universe()
+    cn_universe, _cn_symbols_source = _resolve_market_universe(
+        market="CN",
+        env_prefix="TENX_CN_UNIVERSE",
+        default_preset=DEFAULT_CN_UNIVERSE_PRESET,
+        fallback_name="A Share Growth Hunt",
+        fallback_strategy="fallback-cn",
+        fallback_description="Fallback CN universe used when no preset can be resolved.",
+        fallback_symbols=["300308.SZ", "002594.SZ", "300502.SZ", "688041.SH"],
+    )
+    us_universe, _us_symbols_source = _resolve_market_universe(
+        market="US",
+        env_prefix="TENX_US_UNIVERSE",
+        default_preset=DEFAULT_REAL_UNIVERSE_PRESET,
+        fallback_name="US Growth Hunt",
+        fallback_strategy="fallback-us",
+        fallback_description="Fallback US universe used when no preset can be resolved.",
+        fallback_symbols=["NVDA", "SNOW", "CRWD", "ARM"],
+    )
     symbols = universe.symbols
     universe_name = (os.getenv("TENX_UNIVERSE_NAME") or universe.name or _humanize_universe_name(symbols_source)).strip()
     return Settings(
@@ -202,5 +288,11 @@ def load_settings() -> Settings:
         price_start_date=os.getenv("PRICE_START_DATE") or default_start,
         price_end_date=os.getenv("PRICE_END_DATE") or default_end,
         include_yfinance_supplement=_as_bool(os.getenv("INCLUDE_YFINANCE_SUPPLEMENT"), default=True),
+        institutional_manager_symbols=_parse_symbols(os.getenv("TENX_INSTITUTIONAL_MANAGER_SYMBOLS") or "NVDA"),
         scheduler_bootstrap_mode=(os.getenv("PIPELINE_BOOTSTRAP_MODE") or "real").strip().lower(),
+        default_market=_normalize_market(os.getenv("TENX_DEFAULT_MARKET")),
+        market_universes={
+            "CN": cn_universe,
+            "US": us_universe,
+        },
     )

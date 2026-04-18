@@ -28,6 +28,9 @@ class TenxConfigTests(unittest.TestCase):
         self.assertIn("Growth", settings.real_universe_name)
         self.assertEqual(settings.real_universe_strategy, "bucketed-growth-research")
         self.assertGreater(len(settings.real_universe_buckets), 1)
+        self.assertEqual(settings.default_market, "CN")
+        self.assertIn("CN", settings.market_universes)
+        self.assertIn("US", settings.market_universes)
 
     def test_real_symbols_env_override_takes_priority(self) -> None:
         with patch.dict(
@@ -77,6 +80,17 @@ class TenxConfigTests(unittest.TestCase):
                     self.assertEqual(os.environ["PGHOST"], "db.internal")
                     self.assertEqual(os.environ["PGPORT"], "54329")
                     self.assertEqual(os.environ["SEC_USER_AGENT"], "TenX Hunter 445923692@qq.com")
+
+    def test_cn_market_universe_should_load_a_share_preset(self) -> None:
+        with patch.dict(os.environ, {"TENX_CN_UNIVERSE_PRESET": "a_share_growth_hunt_v1"}, clear=False):
+            settings = load_settings()
+        self.assertGreater(len(settings.market_universes["CN"].symbols), 4)
+        self.assertIn("A股", settings.market_universes["CN"].name)
+
+    def test_institutional_manager_symbols_defaults_to_nvda(self) -> None:
+        with patch.dict(os.environ, {"TENX_INSTITUTIONAL_MANAGER_SYMBOLS": ""}, clear=False):
+            settings = load_settings()
+        self.assertEqual(settings.institutional_manager_symbols, ["NVDA"])
 
 
 if __name__ == "__main__":

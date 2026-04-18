@@ -6,11 +6,47 @@ from unittest.mock import patch
 from vnpy.web.tenx_hunter.real_sources import (
     SEC_ARCHIVES_URL,
     build_filings_from_submissions,
+    build_institutional_activity_from_submissions,
+    fetch_sec_13f_information_table,
     fetch_yfinance_bundle,
 )
 
 
 class RealSourcesTests(unittest.TestCase):
+    @patch("vnpy.web.tenx_hunter.real_sources.request_text")
+    @patch("vnpy.web.tenx_hunter.real_sources.fetch_sec_filing_index")
+    def test_fetch_sec_13f_information_table_parses_xml_holdings(self, mocked_index, mocked_text) -> None:
+        mocked_index.return_value = {
+            "directory": {
+                "item": [
+                    {"name": "primary_doc.xml"},
+                    {"name": "information_table.xml"},
+                ]
+            }
+        }
+        mocked_text.return_value = """<?xml version="1.0" encoding="UTF-8"?>
+<informationTable xmlns="http://www.sec.gov/edgar/document/thirteenf/informationtable">
+  <infoTable>
+    <nameOfIssuer>INTEL CORP</nameOfIssuer>
+    <titleOfClass>COM</titleOfClass>
+    <cusip>458140100</cusip>
+    <value>7925257721</value>
+    <shrsOrPrnAmt>
+      <sshPrnamt>214776632</sshPrnamt>
+      <sshPrnamtType>SH</sshPrnamtType>
+    </shrsOrPrnAmt>
+    <investmentDiscretion>SOLE</investmentDiscretion>
+  </infoTable>
+</informationTable>
+"""
+
+        document, holdings = fetch_sec_13f_information_table("1045810", "0001045810-26-000011", "test-agent")
+
+        self.assertEqual(document, "information_table.xml")
+        self.assertEqual(len(holdings), 1)
+        self.assertEqual(holdings[0]["nameOfIssuer"], "INTEL CORP")
+        self.assertEqual(holdings[0]["sshPrnamt"], "214776632")
+
     @patch("vnpy.web.tenx_hunter.real_sources.fetch_sec_filing_document", return_value="<html>filing body</html>")
     def test_build_filings_from_submissions_keeps_structured_metadata(self, mocked_fetch) -> None:
         submissions = {
@@ -126,6 +162,50 @@ class RealSourcesTests(unittest.TestCase):
         self.assertEqual(prices[0].close, 108.0)
         self.assertEqual(len(news_items), 1)
         self.assertEqual(news_items[0].symbol, "NVDA")
+
+    @patch("vnpy.web.tenx_hunter.real_sources.fetch_sec_13f_information_table")
+    def test_build_institutional_activity_from_submissions_maps_held_symbol_into_universe(self, mocked_table) -> None:
+        mocked_table.return_value = (
+            "information_table.xml",
+            [
+                {
+                    "nameOfIssuer": "INTEL CORP",
+                    "titleOfClass": "COM",
+                    "value": "7925257721",
+                    "sshPrnamt": "214776632",
+                    "sshPrnamtType": "SH",
+                }
+            ],
+        )
+        submissions = {
+            "filings": {
+                "recent": {
+                    "accessionNumber": ["0001045810-26-000011"],
+                    "form": ["13F-HR"],
+                    "filingDate": ["2026-02-17"],
+                    "reportDate": ["2025-12-31"],
+                    "acceptanceDateTime": ["2026-02-17T16:27:55.000Z"],
+                }
+            }
+        }
+
+        records = build_institutional_activity_from_submissions(
+            manager_symbol="NVDA",
+            manager_name="NVIDIA CORP",
+            manager_cik="1045810",
+            submissions=submissions,
+            title_to_ticker={"INTEL CORP": "INTC", "INTEL": "INTC"},
+            universe_symbols={"INTC", "NVDA"},
+            user_agent="test-agent",
+        )
+
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual(record.symbol, "INTC")
+        self.assertEqual(record.manager_symbol, "NVDA")
+        self.assertEqual(record.filing_type, "13F-HR")
+        self.assertEqual(record.position_value_usd, 7925257721.0)
+        self.assertIn("INTC", record.content)
 
 
 if __name__ == "__main__":

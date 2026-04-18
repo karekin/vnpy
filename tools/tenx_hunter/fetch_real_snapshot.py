@@ -328,6 +328,29 @@ def write_bundle_snapshot(bundle: Any, *, symbols: list[str], start_date: str, e
         }
         for item in bundle.news
     ]
+    institutional_activity = [
+        {
+            'activity_id': item.activity_id,
+            'symbol': item.symbol,
+            'activity_time': item.activity_time,
+            'activity_type': item.activity_type,
+            'report_period': item.report_period,
+            'filing_date': item.filing_date,
+            'title': item.title,
+            'manager_symbol': item.manager_symbol,
+            'manager_name': item.manager_name,
+            'manager_cik': item.manager_cik,
+            'filing_id': item.filing_id,
+            'filing_type': item.filing_type,
+            'position_value_usd': item.position_value_usd,
+            'position_shares': item.position_shares,
+            'source_url': item.source_url,
+            'source_vendor': item.source_vendor,
+            'content': item.content,
+            'raw_payload': item.raw_payload,
+        }
+        for item in getattr(bundle, 'institutional_activity', [])
+    ]
 
     write_csv(OUT_DIR / 'securities.csv', securities, ['security_id', 'symbol', 'company_name', 'exchange_name', 'cik', 'currency', 'listing_status', 'sector', 'industry'])
     write_csv(OUT_DIR / 'themes.csv', themes, ['theme_id', 'theme_name', 'parent_theme', 'active_flag'])
@@ -346,6 +369,7 @@ def write_bundle_snapshot(bundle: Any, *, symbols: list[str], start_date: str, e
     write_csv(OUT_DIR / 'watch_actions.csv', bundle.watch_actions, ['action_id', 'user_id', 'symbol', 'action', 'action_time'])
     write_json(OUT_DIR / 'filings.json', filings)
     write_json(OUT_DIR / 'news.json', news)
+    write_json(OUT_DIR / 'institutional_activity.json', institutional_activity)
     write_json(OUT_DIR / 'symbol_master_raw.json', [])
     write_json(OUT_DIR / 'industry_mapping_raw.json', [])
     write_json(
@@ -401,6 +425,7 @@ def main() -> int:
             sec_user_agent=sec_user_agent,
             polygon_api_key=None,
             include_yfinance_supplement=settings.include_yfinance_supplement,
+            institutional_manager_symbols=settings.institutional_manager_symbols,
         )
         return write_bundle_snapshot(bundle, symbols=symbols, start_date=start_date, end_date=end_date, mode='yfinance+sec')
 
@@ -417,6 +442,7 @@ def main() -> int:
     financials = []
     filings = []
     news = []
+    institutional_activity = []
     polygon_ticker_overview_rows = []
     symbol_master_rows = []
     industry_mapping_rows = []
@@ -696,6 +722,7 @@ def main() -> int:
     write_csv(OUT_DIR / 'watch_actions.csv', watch_actions, ['action_id', 'user_id', 'symbol', 'action', 'action_time'])
     write_json(OUT_DIR / 'filings.json', filings)
     write_json(OUT_DIR / 'news.json', news)
+    write_json(OUT_DIR / 'institutional_activity.json', institutional_activity)
     write_json(OUT_DIR / 'symbol_master_raw.json', symbol_master_rows)
     write_json(OUT_DIR / 'industry_mapping_raw.json', industry_mapping_rows)
     theme_taxonomy_rows = [

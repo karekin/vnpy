@@ -10,7 +10,7 @@ import { getRiskTone, getStageTone, TenxSectionCard } from "@/components/tenx-hu
 import type { TenxWorkspaceSnapshot } from "@/components/tenx-hunter/types";
 import { TableCell, TableRow } from "@/components/ui/table";
 
-const stageOptions = ["all", "early", "validation", "acceleration", "crowded"] as const;
+const stageOptions = ["all", "discovery", "validation", "acceleration", "crowded", "falsified"] as const;
 const pageSizeOptions = [5, 10];
 
 type TenxHunterDiscoverClientProps = {
@@ -18,6 +18,7 @@ type TenxHunterDiscoverClientProps = {
 };
 
 export default function TenxHunterDiscoverClient({ snapshot }: TenxHunterDiscoverClientProps) {
+  const marketPath = snapshot.market.toLowerCase();
   const [search, setSearch] = useState("");
   const [stage, setStage] = useState<string>("all");
   const [theme, setTheme] = useState<string>("all");
@@ -53,8 +54,9 @@ export default function TenxHunterDiscoverClient({ snapshot }: TenxHunterDiscove
 
   return (
     <TenxPageShell
+      market={snapshot.market}
       title="TenX Hunter · Discover"
-      subtitle="围绕美股成长科技做候选发现，先看谁值得研究，再进入研究卡片。这里的排序代表研究优先级，而非直接交易建议。"
+      subtitle={snapshot.market === "CN" ? "围绕 A 股成长主线做候选发现，先看谁值得研究，再进入研究卡片。这里的排序代表研究优先级，而非交易建议。" : "围绕美股成长科技做候选发现，先看谁值得研究，再进入研究卡片。这里的排序代表研究优先级，而非直接交易建议。"}
     >
       <TenxSectionCard
         title="Universe Builder"
@@ -176,7 +178,7 @@ export default function TenxHunterDiscoverClient({ snapshot }: TenxHunterDiscove
                 <TableRow key={row.symbol} className="border-b border-gray-100 last:border-b-0 dark:border-gray-800">
                   <TableCell className="px-4 py-3 align-top">
                     <Link
-                      href={`/tenx-hunter/research/${row.symbol}`}
+                      href={`/tenx-hunter/${marketPath}/research/${row.symbol}`}
                       className="font-semibold text-gray-900 hover:text-brand-600 dark:text-white dark:hover:text-brand-300"
                     >
                       {row.symbol}
@@ -202,7 +204,8 @@ export default function TenxHunterDiscoverClient({ snapshot }: TenxHunterDiscove
                     </div>
                   </TableCell>
                   <TableCell className="px-4 py-3 text-sm text-gray-600 dark:text-gray-300">
-                    ${row.price.toFixed(2)} · {row.priceChangePct >= 0 ? "+" : ""}
+                    {snapshot.market === "CN" ? "¥" : "$"}
+                    {row.price.toFixed(2)} · {row.priceChangePct >= 0 ? "+" : ""}
                     {row.priceChangePct.toFixed(1)}%
                   </TableCell>
                   <TableCell className="px-4 py-3">
@@ -236,7 +239,7 @@ export default function TenxHunterDiscoverClient({ snapshot }: TenxHunterDiscove
                   <div className="flex items-center gap-2">
                     <StatusTag label={event.type} tone="blue" />
                     <Link
-                      href={`/tenx-hunter/research/${event.symbol}`}
+                      href={`/tenx-hunter/${marketPath}/research/${event.symbol}`}
                       className="text-sm font-medium text-brand-600 hover:text-brand-700 dark:text-brand-300 dark:hover:text-brand-200"
                     >
                       {event.symbol}

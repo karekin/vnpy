@@ -15,7 +15,7 @@ def main() -> None:
         started_at = datetime.now(timezone.utc).isoformat()
         print(f"[{started_at}] scheduler run started ({settings.scheduler_bootstrap_mode})")
         if settings.scheduler_bootstrap_mode == "real":
-            bootstrap_real_data(settings, reset=True)
+            bootstrap_real_data(settings, reset=True, market=settings.default_market)
         else:
             bootstrap_sample_data(settings, reset=True)
         run_all(settings)
