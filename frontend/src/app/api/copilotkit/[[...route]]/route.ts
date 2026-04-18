@@ -35,7 +35,7 @@ const apiKey = process.env.MINIMAX_API_KEY || env.MINIMAX_API_KEY || "";
 const baseURL = (
   process.env.MINIMAX_BASE_URL ||
   env.MINIMAX_BASE_URL ||
-  "https://api.minimaxi.com/anthropic"
+  "https://api.minimaxi.com/anthropic/v1"
 ).replace(/\/$/, "");
 const model = process.env.MINIMAX_MODEL || env.MINIMAX_MODEL || "MiniMax-M2.7";
 
