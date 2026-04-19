@@ -38,19 +38,19 @@ export default async function TenxHunterMarketHomePage({ params }: { params: Pro
   const pathMarket = snapshot.market.toLowerCase();
 
   return (
-    <TenxPageShell
-      market={market as TenxMarket}
-      title="TenX Hunter"
-      subtitle={market === "CN" ? "如果今天只有 15 分钟，这里应该先告诉你哪几只 A 股值得研究、哪些观察对象发生了变化。" : "如果今天只有 15 分钟，这里应该先告诉你哪几只美股值得研究、哪些观察对象发生了变化。"}
-      marketLabel={`${marketLabel(market)} · ${snapshot.universe}`}
-    >
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {metrics.map((metric) => (
-          <TenxMetricCard key={metric.label} label={metric.label} value={metric.value} delta={metric.delta} />
-        ))}
-      </div>
+    <TenxCopilotPanel market={market} workspace={snapshot}>
+      <TenxPageShell
+        market={market as TenxMarket}
+        title="TenX Hunter"
+        subtitle={market === "CN" ? "如果今天只有 15 分钟，这里应该先告诉你哪几只 A 股值得研究、哪些观察对象发生了变化。" : "如果今天只有 15 分钟，这里应该先告诉你哪几只美股值得研究、哪些观察对象发生了变化。"}
+        marketLabel={`${marketLabel(market)} · ${snapshot.universe}`}
+      >
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {metrics.map((metric) => (
+            <TenxMetricCard key={metric.label} label={metric.label} value={metric.value} delta={metric.delta} />
+          ))}
+        </div>
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.6fr_1fr]">
         <TenxSectionCard
           title="Workspace"
           description="先回答今天最该看什么，再进入研究卡片。"
@@ -98,12 +98,9 @@ export default async function TenxHunterMarketHomePage({ params }: { params: Pro
           </div>
         </TenxSectionCard>
 
-        <TenxCopilotPanel market={market} workspace={snapshot} />
-      </div>
-
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-        <TenxSectionCard title="Theme Radar" description="先看主线，再看个股。">
-          <div className="space-y-4">
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+          <TenxSectionCard title="Theme Radar" description="先看主线，再看个股。">
+            <div className="space-y-4">
             {hotThemes.length ? hotThemes.map((theme) => (
               <div key={theme.slug} className="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
                 <div className="flex items-center justify-between gap-3">
@@ -158,7 +155,8 @@ export default async function TenxHunterMarketHomePage({ params }: { params: Pro
             )}
           </div>
         </TenxSectionCard>
-      </div>
-    </TenxPageShell>
+        </div>
+      </TenxPageShell>
+    </TenxCopilotPanel>
   );
 }

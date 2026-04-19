@@ -33,6 +33,10 @@ export class TenxApiError extends Error {
 }
 
 function buildUrl(path: string) {
+  if (typeof window !== "undefined") {
+    return path;
+  }
+
   return `${apiBase}${path}`;
 }
 
@@ -476,6 +480,111 @@ export async function createAlertDraft(market: TenxMarket, symbol: string, title
       rule_payload: {},
     }),
   });
+}
+
+export async function loadTenxDeerFlowState(threadId: string): Promise<Record<string, unknown> | null> {
+  try {
+    return await requestJson<Record<string, unknown>>(
+      buildUrl(`/api/v1/tenx-hunter/deerflow/state?thread_id=${encodeURIComponent(threadId)}`),
+    );
+  } catch (error) {
+    if (error instanceof TenxApiError && error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export async function loadTenxDeerFlowHistory(
+  threadId: string,
+  limit = 10,
+): Promise<Array<Record<string, unknown>>> {
+  return requestJson<Array<Record<string, unknown>>>(buildUrl("/api/v1/tenx-hunter/deerflow/history"), {
+    method: "POST",
+    body: JSON.stringify({
+      thread_id: threadId,
+      limit,
+    }),
+  });
+}
+
+export async function loadTenxDeerFlowThreads(limit = 20): Promise<Array<Record<string, unknown>>> {
+  return requestJson<Array<Record<string, unknown>>>(buildUrl("/api/v1/tenx-hunter/deerflow/threads/search"), {
+    method: "POST",
+    body: JSON.stringify({
+      limit,
+      metadata: {
+        source: "vnpy",
+      },
+    }),
+  });
+}
+
+export async function loadTenxDeerFlowUploads(
+  threadId: string,
+): Promise<{ files: Array<{ filename: string; size?: number; created_at?: string }>; count?: number }> {
+  return requestJson<{ files: Array<{ filename: string; size?: number; created_at?: string }>; count?: number }>(
+    buildUrl(`/api/v1/tenx-hunter/deerflow/uploads?thread_id=${encodeURIComponent(threadId)}`),
+  );
+}
+
+export async function uploadTenxDeerFlowFiles(
+  threadId: string,
+  files: File[] | FileList,
+): Promise<{
+  success: boolean;
+  files: Array<{
+    filename: string;
+    size: string;
+    path: string;
+    virtual_path: string;
+    artifact_url: string;
+    markdown_file?: string;
+    markdown_path?: string;
+    markdown_virtual_path?: string;
+    markdown_artifact_url?: string;
+  }>;
+  message: string;
+}> {
+  const formData = new FormData();
+  for (const file of Array.from(files)) {
+    formData.append("files", file);
+  }
+
+  const response = await fetch(
+    buildUrl(`/api/v1/tenx-hunter/deerflow/uploads?thread_id=${encodeURIComponent(threadId)}`),
+    {
+      method: "POST",
+      body: formData,
+      cache: "no-store",
+    },
+  );
+
+  if (!response.ok) {
+    throw new TenxApiError(`TenX DeerFlow upload failed with HTTP ${response.status}.`, response.url, response.status);
+  }
+
+  return (await response.json()) as {
+    success: boolean;
+    files: Array<{
+      filename: string;
+      size: string;
+      path: string;
+      virtual_path: string;
+      artifact_url: string;
+      markdown_file?: string;
+      markdown_path?: string;
+      markdown_virtual_path?: string;
+      markdown_artifact_url?: string;
+    }>;
+    message: string;
+  };
+}
+
+export function getTenxDeerFlowArtifactUrl(threadId: string, path: string, download = false) {
+  return buildUrl(
+    `/api/v1/tenx-hunter/deerflow/artifact?thread_id=${encodeURIComponent(threadId)}&path=${encodeURIComponent(path)}&download=${download ? "true" : "false"}`,
+  );
 }
 
 export function getTenxErrorMessage(error: unknown): string {

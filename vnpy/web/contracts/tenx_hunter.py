@@ -222,6 +222,42 @@ class TenxAlertCreateRequest(BaseModel):
     rule_payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class TenxDeerFlowFileMeta(BaseModel):
+    filename: str
+    size: str
+    path: str
+    virtual_path: str
+    artifact_url: str
+    markdown_file: str | None = None
+    markdown_path: str | None = None
+    markdown_virtual_path: str | None = None
+    markdown_artifact_url: str | None = None
+
+
+class TenxDeerFlowChatRequest(BaseModel):
+    prompt: str
+    thread_id: str | None = None
+    files: list[TenxDeerFlowFileMeta] = Field(default_factory=list)
+
+
+class TenxDeerFlowChatResponse(BaseModel):
+    ok: bool
+    content: str
+    backend: str
+    thread_id: str | None = None
+    error: str | None = None
+
+
+class TenxDeerFlowHistoryRequest(BaseModel):
+    thread_id: str
+    limit: int = 10
+
+
+class TenxDeerFlowSearchRequest(BaseModel):
+    limit: int = 20
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class TenxMutationResponse(BaseModel):
     ok: bool = True
     message: str
