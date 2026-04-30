@@ -328,6 +328,11 @@ export default function SmartAllocationDashboard({
   const [wheelCandidates, setWheelCandidates] = useState<SmartAllocationWheelCandidate[]>([]);
   const [wheelDailyRecommendation, setWheelDailyRecommendation] = useState<SmartAllocationWheelDailyRecommendation | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
+  const [isSnapshotSaving, setIsSnapshotSaving] = useState(false);
+  const [snapshotSaveFeedback, setSnapshotSaveFeedback] = useState<{
+    tone: "success" | "error";
+    message: string;
+  } | null>(null);
 
   const { snapshot, targets } = dashboard;
   const shouldShow = (...views: SmartAllocationView[]) => views.includes(activeView);
@@ -688,6 +693,9 @@ export default function SmartAllocationDashboard({
   }
 
   async function applyDerivedSnapshot() {
+    if (isSnapshotSaving) return;
+    setIsSnapshotSaving(true);
+    setSnapshotSaveFeedback(null);
     const nextSnapshotForm = {
       total_equity: amount(derivedSnapshot.totalEquity),
       cash_value: amount(derivedSnapshot.cashValue),
@@ -701,38 +709,53 @@ export default function SmartAllocationDashboard({
       latest_rsi_by_symbol: snapshotForm.latest_rsi_by_symbol,
       open_leaps_symbols: snapshotForm.open_leaps_symbols,
     };
-    setSnapshotForm((current) => ({
-      ...current,
-      ...nextSnapshotForm,
-    }));
-    await updateSmartAllocationProfile(dashboard.profile.id, {
-      age: Number(profileAge),
-      income_status: incomeStatus,
-      name: "智能仓位方案",
-      rebalance_threshold: 0.05,
-      allow_bull_market_leaps_relaxation: false,
-      quality_stock_symbols: splitSymbols(qualitySymbols),
-      wheel_symbols: splitSymbols(wheelSymbols),
-      leaps_symbols: splitSymbols(leapsSymbols),
-    });
-    const next = await refreshSmartAllocationSnapshot({
-      total_equity: num(nextSnapshotForm.total_equity),
-      cash_value: num(nextSnapshotForm.cash_value),
-      dca_value: num(nextSnapshotForm.dca_value),
-      options_value: num(nextSnapshotForm.options_value),
-      wheel_value: num(nextSnapshotForm.wheel_value),
-      leaps_value: num(nextSnapshotForm.leaps_value),
-      margin_used: num(nextSnapshotForm.margin_used),
-      unclassified_value: num(nextSnapshotForm.unclassified_value),
-      single_stock_values: parseNumberMap(nextSnapshotForm.single_stock_values),
-      latest_rsi_by_symbol: parseNumberMap(nextSnapshotForm.latest_rsi_by_symbol),
-      open_leaps_symbols: splitSymbols(nextSnapshotForm.open_leaps_symbols),
-    });
-    setDashboard(next);
-    await refreshCashflowEvents();
-    await refreshWheelCandidates();
-    await refreshWheelDailyRecommendation();
-    setStatusMessage("已按汇丰 + 嘉信截图口径生成并刷新快照，账户结构和关键红线已联动更新。");
+    try {
+      setSnapshotForm((current) => ({
+        ...current,
+        ...nextSnapshotForm,
+      }));
+      await updateSmartAllocationProfile(dashboard.profile.id, {
+        age: Number(profileAge),
+        income_status: incomeStatus,
+        name: "智能仓位方案",
+        rebalance_threshold: 0.05,
+        allow_bull_market_leaps_relaxation: false,
+        quality_stock_symbols: splitSymbols(qualitySymbols),
+        wheel_symbols: splitSymbols(wheelSymbols),
+        leaps_symbols: splitSymbols(leapsSymbols),
+      });
+      const next = await refreshSmartAllocationSnapshot({
+        total_equity: num(nextSnapshotForm.total_equity),
+        cash_value: num(nextSnapshotForm.cash_value),
+        dca_value: num(nextSnapshotForm.dca_value),
+        options_value: num(nextSnapshotForm.options_value),
+        wheel_value: num(nextSnapshotForm.wheel_value),
+        leaps_value: num(nextSnapshotForm.leaps_value),
+        margin_used: num(nextSnapshotForm.margin_used),
+        unclassified_value: num(nextSnapshotForm.unclassified_value),
+        single_stock_values: parseNumberMap(nextSnapshotForm.single_stock_values),
+        latest_rsi_by_symbol: parseNumberMap(nextSnapshotForm.latest_rsi_by_symbol),
+        open_leaps_symbols: splitSymbols(nextSnapshotForm.open_leaps_symbols),
+      });
+      setDashboard(next);
+      await refreshCashflowEvents();
+      await refreshWheelCandidates();
+      await refreshWheelDailyRecommendation();
+      const savedAt = new Date(next.snapshot.snapshot_at).toLocaleTimeString("zh-CN", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      });
+      const message = `已保存 ${savedAt}，账户快照已更新。`;
+      setStatusMessage("已按汇丰 + 嘉信截图口径生成并刷新快照，账户结构和关键红线已联动更新。");
+      setSnapshotSaveFeedback({ tone: "success", message });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "保存失败，请稍后重试。";
+      setStatusMessage(`保存账户快照失败：${message}`);
+      setSnapshotSaveFeedback({ tone: "error", message: `保存失败：${message}` });
+    } finally {
+      setIsSnapshotSaving(false);
+    }
   }
 
   return (
@@ -914,9 +937,31 @@ export default function SmartAllocationDashboard({
               <p className="text-sm font-semibold text-gray-900 dark:text-white">保存后会同时更新基本情况和账户快照</p>
               <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">目标仓位、关键红线、AI 解读和再平衡建议会基于保存后的快照重新计算。</p>
             </div>
-            <button type="button" onClick={applyDerivedSnapshot} className="rounded-lg bg-brand-500 px-5 py-2.5 text-sm font-semibold text-white hover:bg-brand-600">
-              保存账户快照
-            </button>
+            <div className="flex flex-col items-start gap-2 sm:items-end">
+              <button
+                type="button"
+                onClick={applyDerivedSnapshot}
+                disabled={isSnapshotSaving}
+                aria-busy={isSnapshotSaving}
+                className="inline-flex min-w-[132px] items-center justify-center gap-2 rounded-lg bg-brand-500 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {isSnapshotSaving ? <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" /> : <CheckCircle2 className="h-4 w-4" aria-hidden="true" />}
+                {isSnapshotSaving ? "保存中" : "保存账户快照"}
+              </button>
+              <div
+                role="status"
+                aria-live="polite"
+                className={`min-h-5 text-xs font-medium ${
+                  snapshotSaveFeedback?.tone === "error"
+                    ? "text-red-600 dark:text-red-400"
+                    : snapshotSaveFeedback?.tone === "success"
+                    ? "text-emerald-700 dark:text-emerald-300"
+                    : "text-gray-500 dark:text-gray-400"
+                }`}
+              >
+                {snapshotSaveFeedback?.message || "点击后会写入后端快照"}
+              </div>
+            </div>
           </div>
           <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-gray-900/40">
             <div>
