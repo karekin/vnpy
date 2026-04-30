@@ -1,0 +1,16 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+
+WORKDIR /app
+
+COPY deploy/requirements-api.txt deploy/requirements-worker.txt /tmp/
+RUN cd /tmp && pip install --no-cache-dir -r requirements-worker.txt
+
+COPY vnpy /app/vnpy
+COPY config /app/config
+
+CMD ["python", "-m", "vnpy.web.agent_chain", "worker"]
+

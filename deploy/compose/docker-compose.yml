@@ -1,0 +1,289 @@
+name: vnpy-position-agent
+
+x-app-env-file: &app-env-file
+  - ../env/agent.env.example
+
+x-tenx-env: &tenx-env
+  PGHOST: postgres
+  PGPORT: 5432
+  PGDATABASE: tenx
+  PGUSER: tenx
+  PGPASSWORD: tenx
+  MINIO_ENDPOINT: http://tenx-minio:9000
+  MINIO_ACCESS_KEY: minioadmin
+  MINIO_SECRET_KEY: minioadmin
+  MINIO_BUCKET: tenx-ods
+  SAMPLE_DATA_DIR: /workspace/examples/tenx_hunter_data_pipeline/sample_data
+  PYTHONPATH: /workspace
+  PRICE_PROVIDER: ${PRICE_PROVIDER:-yfinance}
+  REAL_SYMBOLS: ${REAL_SYMBOLS:-}
+  REAL_UNIVERSE_PRESET: ${REAL_UNIVERSE_PRESET:-us_growth_hunt_v1}
+  REAL_UNIVERSE_INCLUDE: ${REAL_UNIVERSE_INCLUDE:-}
+  REAL_UNIVERSE_EXCLUDE: ${REAL_UNIVERSE_EXCLUDE:-}
+  PRICE_START_DATE: ${PRICE_START_DATE:-}
+  PRICE_END_DATE: ${PRICE_END_DATE:-}
+  SEC_USER_AGENT: ${SEC_USER_AGENT:-TenX Hunter Demo contact@tenxhunter.local}
+  TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}
+  TUSHARE_HTTP_URL: ${TUSHARE_HTTP_URL:-}
+  POLYGON_API_KEY: ${POLYGON_API_KEY:-}
+  INCLUDE_YFINANCE_SUPPLEMENT: ${INCLUDE_YFINANCE_SUPPLEMENT:-true}
+  PIPELINE_BOOTSTRAP_MODE: ${PIPELINE_BOOTSTRAP_MODE:-real}
+  TENX_DEFAULT_MARKET: ${TENX_DEFAULT_MARKET:-CN}
+
+x-python-service: &python-service
+  build:
+    context: ../..
+  env_file: *app-env-file
+  environment:
+    <<: *tenx-env
+    POSTGRES_DB: ${POSTGRES_DB:-position_agent}
+    POSTGRES_USER: ${POSTGRES_USER:-position_agent}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    TEMPORAL_ADDRESS: temporal:7233
+    TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-default}
+    TEMPORAL_TASK_QUEUE: ${TEMPORAL_TASK_QUEUE:-stock-recommendation}
+    REDIS_URL: redis://redis:6379/0
+    QDRANT_URL: http://qdrant:6333
+    TENX_DEERFLOW_ENABLED: ${TENX_DEERFLOW_ENABLED:-true}
+    TENX_DEERFLOW_URL: ${TENX_DEERFLOW_URL:-http://deerflow-nginx:2026}
+    TENX_DEERFLOW_ASSISTANT_ID: ${TENX_DEERFLOW_ASSISTANT_ID:-tenx-hunter-agent}
+    TENX_DEERFLOW_TIMEOUT_SECONDS: ${TENX_DEERFLOW_TIMEOUT_SECONDS:-1800}
+    OPTIONS_CHAIN_EXPIRATION_LIMIT: ${OPTIONS_CHAIN_EXPIRATION_LIMIT:-4}
+    OPTIONS_CHAIN_REQUEST_TIMEOUT_SECONDS: ${OPTIONS_CHAIN_REQUEST_TIMEOUT_SECONDS:-15}
+    OPTIONS_CHAIN_TRUST_ENV: ${OPTIONS_CHAIN_TRUST_ENV:-false}
+    VNPY_SMART_ALLOCATION_DB_PATH: /data/smart_allocation/smart_allocation.db
+    VNPY_AGENT_CHAIN_RESULTS_PATH: /data/agent_chain/strategy_fit_reviews.jsonl
+  volumes:
+    - app-data:/data
+    - ../../config:/app/config:ro
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-position_agent}
+      POSTGRES_USER: ${POSTGRES_USER:-position_agent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:54329:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - app
+
+  tenx-minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - tenx-minio-data:/data
+    networks:
+      - app
+      - public
+
+  temporal:
+    image: temporalio/auto-setup:1.28
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-position_agent}
+      POSTGRES_PWD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_SEEDS: postgres
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/docker.yaml
+    ports:
+      - "127.0.0.1:7233:7233"
+    networks:
+      - app
+
+  temporal-ui:
+    image: temporalio/ui:2.40.1
+    restart: unless-stopped
+    depends_on:
+      - temporal
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:3000,http://localhost:2026,http://localhost:8000
+    ports:
+      - "127.0.0.1:8088:8080"
+    networks:
+      - public
+      - app
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    networks:
+      - app
+
+  qdrant:
+    image: qdrant/qdrant:v1.15.5
+    restart: unless-stopped
+    volumes:
+      - qdrant-data:/qdrant/storage
+    networks:
+      - app
+
+  position-api:
+    <<: *python-service
+    build:
+      context: ../..
+      dockerfile: deploy/Dockerfile.api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      tenx-minio:
+        condition: service_started
+      temporal:
+        condition: service_started
+    environment:
+      <<: *tenx-env
+      VNPY_WEB_HOST: 0.0.0.0
+      VNPY_WEB_PORT: 8000
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/system/health', timeout=3).read()\""]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks:
+      - public
+      - app
+      - agent
+
+  tenx-pipeline:
+    build:
+      context: ../..
+      dockerfile: docker/tenx_hunter/pipeline.Dockerfile
+    profiles: ["tenx-ops"]
+    restart: "no"
+    environment: *tenx-env
+    volumes:
+      - ../../config:/workspace/config
+      - ../../vnpy:/workspace/vnpy
+      - ../../examples/tenx_hunter_data_pipeline/sample_data:/workspace/examples/tenx_hunter_data_pipeline/sample_data
+      - ../../tests:/workspace/tests
+    depends_on:
+      postgres:
+        condition: service_healthy
+      tenx-minio:
+        condition: service_started
+    entrypoint: ["python", "-m", "vnpy.web.tenx_hunter.cli"]
+    command: ["help"]
+    networks:
+      - app
+
+  tenx-scheduler:
+    build:
+      context: ../..
+      dockerfile: docker/tenx_hunter/pipeline.Dockerfile
+    profiles: ["tenx-scheduler"]
+    restart: unless-stopped
+    environment:
+      <<: *tenx-env
+      PIPELINE_INTERVAL_SECONDS: ${PIPELINE_INTERVAL_SECONDS:-43200}
+    volumes:
+      - ../../config:/workspace/config
+      - ../../vnpy:/workspace/vnpy
+      - ../../examples/tenx_hunter_data_pipeline/sample_data:/workspace/examples/tenx_hunter_data_pipeline/sample_data
+      - ../../tests:/workspace/tests
+    depends_on:
+      postgres:
+        condition: service_healthy
+      tenx-minio:
+        condition: service_started
+    command: ["python", "-m", "vnpy.web.tenx_hunter.scheduler"]
+    networks:
+      - app
+
+  stock-worker:
+    <<: *python-service
+    build:
+      context: ../..
+      dockerfile: deploy/Dockerfile.worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+    command: ["python", "-m", "vnpy.web.agent_chain", "worker"]
+    networks:
+      - public
+      - app
+      - agent
+
+  scheduler-cli:
+    <<: *python-service
+    build:
+      context: ../..
+      dockerfile: deploy/Dockerfile.worker
+    profiles: ["ops"]
+    restart: "no"
+    depends_on:
+      temporal:
+        condition: service_started
+    command:
+      - python
+      - -m
+      - vnpy.web.agent_chain
+      - create-schedule
+    networks:
+      - app
+      - agent
+
+  frontend:
+    build:
+      context: ../..
+      dockerfile: frontend/Dockerfile
+    env_file: *app-env-file
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://position-api:8000}
+      NEXT_PUBLIC_SMART_ALLOCATION_API_URL: ${NEXT_PUBLIC_SMART_ALLOCATION_API_URL:-http://position-api:8000}
+      NEXT_PUBLIC_TENX_HUNTER_API_URL: ${NEXT_PUBLIC_TENX_HUNTER_API_URL:-http://position-api:8000}
+      TENX_DEERFLOW_API_URL: ${TENX_DEERFLOW_API_URL:-http://position-api:8000}
+    depends_on:
+      position-api:
+        condition: service_started
+    ports:
+      - "127.0.0.1:3000:3000"
+    restart: unless-stopped
+    networks:
+      - public
+
+volumes:
+  postgres-data:
+  tenx-minio-data:
+  redis-data:
+  qdrant-data:
+  app-data:
+
+networks:
+  public:
+    driver: bridge
+  app:
+    driver: bridge
+    internal: true
+  agent:
+    driver: bridge
+    internal: true

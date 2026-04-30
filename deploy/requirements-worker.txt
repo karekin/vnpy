@@ -1,0 +1,3 @@
+-r requirements-api.txt
+temporalio==1.19.0
+

@@ -36,6 +36,17 @@ type NavItem = {
 
 const navItems: NavItem[] = [
   {
+    name: "OpenClaw Mobile",
+    icon: <AiIcon />,
+    new: true,
+    subItems: [
+      { name: "投资总览", path: "/dashboard" },
+      { name: "持仓分析", path: "/portfolio" },
+      { name: "风险雷达", path: "/risk" },
+      { name: "标的研究库", path: "/research" },
+    ],
+  },
+  {
     icon: <GridIcon />,
     name: "Dashboard",
     subItems: [
@@ -98,6 +109,21 @@ const navItems: NavItem[] = [
       { name: "自动执行", path: "/cb-quant/auto-execution" },
       { name: "反馈复盘", path: "/cb-quant/review" },
       { name: "持续迭代", path: "/cb-quant/continuous-iteration" },
+    ],
+  },
+  {
+    name: "智能仓位",
+    icon: <PieChartIcon />,
+    new: true,
+    subItems: [
+      { name: "账户结构与目标", path: "/smart-allocation" },
+      { name: "现金流瀑布", path: "/smart-allocation/waterfall" },
+      { name: "再平衡建议", path: "/smart-allocation/rebalance" },
+      { name: "LEAPS 候选池", path: "/smart-allocation/leaps" },
+      { name: "Wheel 现金流", path: "/smart-allocation/wheel" },
+      { name: "每日 Wheel 推荐", path: "/smart-allocation/wheel/recommendations" },
+      { name: "风控巡检", path: "/smart-allocation/guardrails" },
+      { name: "季度复盘", path: "/smart-allocation/review" },
     ],
   },
   {

@@ -1,0 +1,10 @@
+name: vnpy-position-agent
+
+networks:
+  agent:
+    name: vnpy-position-agent_agent
+    external: true
+
+# DeerFlow is intentionally not vendored here. Run the upstream DeerFlow compose
+# project and attach its gateway/nginx services to this external network, or
+# override TENX_DEERFLOW_URL to a reachable host URL in deploy/env/agent.env.

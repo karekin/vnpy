@@ -16,6 +16,7 @@ from vnpy.web.services.cb_quant_service import CbQuantService
 from vnpy.web.services.cb_tushare_service import CbTushareService
 
 if TYPE_CHECKING:
+    from vnpy.web.services.smart_allocation_service import SmartAllocationService
     from vnpy.web.services.tenx_hunter_service import TenxHunterService
 
 _history_service: CbHistoryService | None = None
@@ -25,10 +26,11 @@ _catalog_service: CbCatalogService | None = None
 _tushare_service: CbTushareService | None = None
 _tenx_service: TenxHunterService | None = None
 _deerflow_agent_service: DeerFlowService | None = None
+_allocation_service: SmartAllocationService | None = None
 
 
 def __getattr__(name: str):
-    global _history_service, _quant_service, _market_service, _catalog_service, _tushare_service, _tenx_service, _deerflow_agent_service
+    global _history_service, _quant_service, _market_service, _catalog_service, _tushare_service, _tenx_service, _deerflow_agent_service, _allocation_service
 
     if name == "history_service":
         if _history_service is None:
@@ -64,6 +66,16 @@ def __getattr__(name: str):
         if _deerflow_agent_service is None:
             _deerflow_agent_service = DeerFlowService()
         return _deerflow_agent_service
+    if name == "SmartAllocationService":
+        from vnpy.web.services.smart_allocation_service import SmartAllocationService
+
+        return SmartAllocationService
+    if name == "allocation_service":
+        if _allocation_service is None:
+            from vnpy.web.services.smart_allocation_service import SmartAllocationService
+
+            _allocation_service = SmartAllocationService()
+        return _allocation_service
     raise AttributeError(name)
 
 
@@ -74,6 +86,7 @@ __all__ = [
     "CbHistoryService",
     "CbTushareService",
     "TenxHunterService",
+    "SmartAllocationService",
     "history_service",
     "quant_service",
     "market_service",
@@ -81,4 +94,5 @@ __all__ = [
     "tushare_service",
     "tenx_service",
     "deerflow_agent_service",
+    "allocation_service",
 ]

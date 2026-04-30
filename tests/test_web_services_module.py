@@ -67,3 +67,26 @@ def test_services_module_should_lazy_create_tenx_singleton(monkeypatch) -> None:
     assert isinstance(first, _FakeTenxHunterService)
     assert first is second
     assert created == ["tenx"]
+
+
+def test_services_module_should_lazy_create_smart_allocation_singleton(monkeypatch) -> None:
+    created: list[str] = []
+
+    fake_module = types.ModuleType("vnpy.web.services.smart_allocation_service")
+
+    class _FakeSmartAllocationService:
+        def __init__(self) -> None:
+            created.append("smart-allocation")
+
+    fake_module.SmartAllocationService = _FakeSmartAllocationService
+
+    sys.modules.pop("vnpy.web.services", None)
+    monkeypatch.setitem(sys.modules, "vnpy.web.services.smart_allocation_service", fake_module)
+
+    module = importlib.import_module("vnpy.web.services")
+    first = module.allocation_service
+    second = module.allocation_service
+
+    assert isinstance(first, _FakeSmartAllocationService)
+    assert first is second
+    assert created == ["smart-allocation"]
