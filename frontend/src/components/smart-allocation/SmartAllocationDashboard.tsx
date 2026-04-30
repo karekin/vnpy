@@ -33,6 +33,7 @@ export type SmartAllocationView =
   | "waterfall"
   | "rebalance"
   | "leaps"
+  | "optionStrategies"
   | "wheel"
   | "wheelRecommendations"
   | "callSpread"
@@ -331,6 +332,7 @@ export default function SmartAllocationDashboard({
   const [wheelCandidates, setWheelCandidates] = useState<SmartAllocationWheelCandidate[]>([]);
   const [wheelDailyRecommendation, setWheelDailyRecommendation] = useState<SmartAllocationWheelDailyRecommendation | null>(null);
   const [callSpreadDailyRecommendation, setCallSpreadDailyRecommendation] = useState<SmartAllocationCallSpreadDailyRecommendation | null>(null);
+  const [optionStrategyTab, setOptionStrategyTab] = useState<"wheel" | "callSpread">("wheel");
   const [statusMessage, setStatusMessage] = useState("");
   const [isSnapshotSaving, setIsSnapshotSaving] = useState(false);
   const [snapshotSaveFeedback, setSnapshotSaveFeedback] = useState<{
@@ -340,6 +342,9 @@ export default function SmartAllocationDashboard({
 
   const { snapshot, targets } = dashboard;
   const shouldShow = (...views: SmartAllocationView[]) => views.includes(activeView);
+  const isOptionStrategiesView = activeView === "optionStrategies";
+  const showWheelStrategy = shouldShow("wheel") || (isOptionStrategiesView && optionStrategyTab === "wheel");
+  const showCallSpreadStrategy = shouldShow("callSpread") || (isOptionStrategiesView && optionStrategyTab === "callSpread");
   const derivedSnapshot = useMemo(() => {
     const hkdUsdRate = num(snapshotSourceForm.hkdUsdRate) || 7.8;
     const hsbcTotalUsd = num(snapshotSourceForm.hsbcTotalHkd) / hkdUsdRate;
@@ -810,7 +815,53 @@ export default function SmartAllocationDashboard({
         </div>
       ) : null}
 
-      {shouldShow("wheel", "wheelRecommendations") ? (
+      {isOptionStrategiesView ? (
+        <Section title="期权策略管理" description="把 Wheel 和 Call Spread 收在同一个工作台里，先按账户预算过滤，再进入具体策略核验。">
+          <div className="flex flex-wrap gap-2">
+            {[
+              ["wheel", "Wheel 推荐", `${wheelDailyRecommendation?.actionable_count ?? candidateWheelCount} 个可核验`],
+              ["callSpread", "Call Spread 推荐", `${callSpreadActionableCount} 个可核验`],
+            ].map(([value, label, meta]) => {
+              const active = optionStrategyTab === value;
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setOptionStrategyTab(value as "wheel" | "callSpread")}
+                  className={`inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-semibold transition ${
+                    active
+                      ? "border-brand-500 bg-brand-50 text-brand-700 dark:border-brand-400 dark:bg-brand-500/15 dark:text-brand-300"
+                      : "border-gray-200 text-gray-600 hover:bg-gray-50 dark:border-gray-800 dark:text-gray-300 dark:hover:bg-gray-900"
+                  }`}
+                >
+                  {label}
+                  <span className="rounded-full bg-white px-2 py-0.5 text-xs text-gray-500 dark:bg-gray-950/40 dark:text-gray-400">{meta}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="mt-4 grid gap-3 text-sm md:grid-cols-4">
+            <div className="rounded-lg bg-gray-50 p-3 dark:bg-gray-900/50">
+              <p className="text-gray-500 dark:text-gray-400">账户权益</p>
+              <p className="mt-1 font-semibold text-gray-900 dark:text-white">{money(displaySnapshot.total_equity)}</p>
+            </div>
+            <div className="rounded-lg bg-gray-50 p-3 dark:bg-gray-900/50">
+              <p className="text-gray-500 dark:text-gray-400">期权目标缺口</p>
+              <p className="mt-1 font-semibold text-gray-900 dark:text-white">{money(Math.max(displayTargets.options_value - displaySnapshot.options_value, 0))}</p>
+            </div>
+            <div className="rounded-lg bg-gray-50 p-3 dark:bg-gray-900/50">
+              <p className="text-gray-500 dark:text-gray-400">Wheel 可用</p>
+              <p className="mt-1 font-semibold text-gray-900 dark:text-white">{money(wheelDailyRecommendation?.wheel_available ?? wheelAvailableCash)}</p>
+            </div>
+            <div className="rounded-lg bg-gray-50 p-3 dark:bg-gray-900/50">
+              <p className="text-gray-500 dark:text-gray-400">Call Spread 单笔上限</p>
+              <p className="mt-1 font-semibold text-gray-900 dark:text-white">{money(callSpreadDailyRecommendation?.per_trade_limit ?? 0)}</p>
+            </div>
+          </div>
+        </Section>
+      ) : null}
+
+      {showWheelStrategy || shouldShow("wheelRecommendations") ? (
         <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-white/[0.03]">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
@@ -1084,7 +1135,7 @@ export default function SmartAllocationDashboard({
       </Section>
       ) : null}
 
-      {shouldShow("wheel") ? (
+      {showWheelStrategy ? (
         <Section title="Wheel 现金流" description="把 Cash-Secured Put 和 Covered Call 纳入账户纪律：只做愿意持有的标的，权利金先沉淀到现金流瀑布。">
           <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
             <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-gray-900/40">
@@ -1198,12 +1249,14 @@ export default function SmartAllocationDashboard({
                   <RefreshCw className="h-4 w-4" aria-hidden="true" />
                   刷新推荐
                 </button>
-                <a
-                  href="/smart-allocation/wheel/recommendations"
-                  className="inline-flex items-center rounded-lg border border-gray-200 px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 dark:border-gray-800 dark:text-gray-200 dark:hover:bg-gray-900"
-                >
-                  每日推荐页
-                </a>
+                {!isOptionStrategiesView ? (
+                  <a
+                    href="/smart-allocation/options-strategies"
+                    className="inline-flex items-center rounded-lg border border-gray-200 px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 dark:border-gray-800 dark:text-gray-200 dark:hover:bg-gray-900"
+                  >
+                    期权策略管理
+                  </a>
+                ) : null}
               </div>
             </div>
             {wheelPoolSources.length ? (
@@ -1337,7 +1390,7 @@ export default function SmartAllocationDashboard({
         </Section>
       ) : null}
 
-      {shouldShow("wheelRecommendations") ? (
+      {shouldShow("wheelRecommendations") || showWheelStrategy ? (
         <Section title="每日 Wheel 推荐" description="每日任务先做账户级候选过滤，再等待真实期权链扫描接入后补全可交易信号。">
           <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
             <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-gray-900/40">
@@ -1450,7 +1503,7 @@ export default function SmartAllocationDashboard({
         </Section>
       ) : null}
 
-      {shouldShow("callSpread") ? (
+      {showCallSpreadStrategy ? (
         <Section title="Call Spread 策略" description="和 Wheel 并列的方向性期权策略：用买入 Call + 卖出更高行权价 Call 控制最大亏损。">
           <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
             <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-gray-900/40">

@@ -8,6 +8,7 @@ const titles: Record<SmartAllocationView, string> = {
   waterfall: "现金流瀑布",
   rebalance: "再平衡建议",
   leaps: "LEAPS 候选池",
+  optionStrategies: "期权策略管理",
   wheel: "Wheel 现金流",
   wheelRecommendations: "每日 Wheel 推荐",
   callSpread: "Call Spread 策略",
