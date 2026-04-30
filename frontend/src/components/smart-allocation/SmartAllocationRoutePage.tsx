@@ -10,6 +10,7 @@ const titles: Record<SmartAllocationView, string> = {
   leaps: "LEAPS 候选池",
   wheel: "Wheel 现金流",
   wheelRecommendations: "每日 Wheel 推荐",
+  callSpread: "Call Spread 策略",
   guardrails: "风控巡检",
   review: "季度复盘",
 };

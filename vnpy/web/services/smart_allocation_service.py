@@ -3,8 +3,11 @@ from __future__ import annotations
 from decimal import Decimal
 import os
 from pathlib import Path
+from typing import Any
 
 from vnpy.web.contracts.smart_allocation import (
+    SmartAllocationCallSpreadCandidateResponse,
+    SmartAllocationCallSpreadDailyRecommendationResponse,
     SmartAllocationDashboardResponse,
     SmartAllocationCashflowEventResponse,
     SmartAllocationGuardrailResponse,
@@ -19,6 +22,10 @@ from vnpy.web.contracts.smart_allocation import (
     SmartAllocationWheelDailyRecommendationResponse,
 )
 from vnpy.web.domain.smart_allocation.calculator import calculate_allocation_targets, decimal_from
+from vnpy.web.domain.smart_allocation.call_spread import (
+    build_call_spread_daily_recommendation,
+    list_call_spread_symbols,
+)
 from vnpy.web.domain.smart_allocation.classifier import snapshot_from_legacy_portfolio_status
 from vnpy.web.domain.smart_allocation.guardrails import run_guardrail_checks
 from vnpy.web.domain.smart_allocation.leaps import classify_leaps_candidate
@@ -39,6 +46,10 @@ from vnpy.web.domain.smart_allocation.wheel import build_daily_wheel_recommendat
 
 def _float(value: Decimal) -> float:
     return float(value)
+
+
+def _optional_float(value: Decimal | None) -> float | None:
+    return None if value is None else float(value)
 
 
 class SmartAllocationService:
@@ -372,6 +383,121 @@ class SmartAllocationService:
             ],
             methodology=list(recommendation.methodology),
         )
+
+    def get_daily_call_spread_recommendation(
+        self,
+        profile_id: str | None = None,
+    ) -> SmartAllocationCallSpreadDailyRecommendationResponse:
+        profile = self._get_profile(profile_id)
+        snapshot = self._snapshots.get(profile.id) or self._default_snapshot()
+        targets = calculate_allocation_targets(profile, snapshot.total_equity)
+        symbols = list_call_spread_symbols(profile, snapshot)
+        option_chains, option_summaries = self._load_latest_call_option_context(symbols)
+        recommendation = build_call_spread_daily_recommendation(
+            profile,
+            snapshot,
+            targets,
+            option_chains=option_chains,
+            option_summaries=option_summaries,
+        )
+        return SmartAllocationCallSpreadDailyRecommendationResponse(
+            scan_date=recommendation.scan_date,
+            account_equity=_float(recommendation.account_equity),
+            options_available=_float(recommendation.options_available),
+            per_trade_limit=_float(recommendation.per_trade_limit),
+            candidate_count=recommendation.candidate_count,
+            actionable_count=recommendation.actionable_count,
+            candidates=[
+                SmartAllocationCallSpreadCandidateResponse(
+                    symbol=item.symbol,
+                    source=item.source,
+                    score=item.score,
+                    status=item.status,
+                    expiration_date=item.expiration_date,
+                    long_strike=_optional_float(item.long_strike),
+                    short_strike=_optional_float(item.short_strike),
+                    net_debit=_float(item.net_debit),
+                    max_profit=_float(item.max_profit),
+                    max_loss=_float(item.max_loss),
+                    reward_risk=_float(item.reward_risk),
+                    break_even=_optional_float(item.break_even),
+                    max_contracts=item.max_contracts,
+                    underlying_price=_optional_float(item.underlying_price),
+                    reason=item.reason,
+                    blockers=list(item.blockers),
+                )
+                for item in recommendation.candidates
+            ],
+            methodology=list(recommendation.methodology),
+        )
+
+    @staticmethod
+    def _load_latest_call_option_context(
+        symbols: list[str],
+    ) -> tuple[dict[str, list[dict[str, Any]]], dict[str, dict[str, Any]]]:
+        normalized_symbols = sorted({symbol.strip().upper().replace(".US", "") for symbol in symbols if symbol.strip()})
+        if not normalized_symbols:
+            return {}, {}
+        try:
+            from vnpy.web.tenx_hunter.config import load_settings
+            from vnpy.web.tenx_hunter.db import connect
+        except ModuleNotFoundError:
+            return {}, {}
+
+        try:
+            settings = load_settings()
+            with connect(settings) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        WITH latest AS (
+                            SELECT symbol, MAX(trade_date) AS trade_date
+                            FROM ods.us_option_chain_raw
+                            WHERE market = 'US' AND option_type = 'call' AND symbol = ANY(%s)
+                            GROUP BY symbol
+                        )
+                        SELECT r.symbol, r.expiration_date, r.contract_symbol, r.strike, r.bid, r.ask,
+                               r.volume, r.open_interest, r.underlying_price
+                        FROM ods.us_option_chain_raw r
+                        JOIN latest l ON l.symbol = r.symbol AND l.trade_date = r.trade_date
+                        WHERE r.market = 'US' AND r.option_type = 'call'
+                        ORDER BY r.symbol, r.expiration_date, r.strike
+                        """,
+                        (normalized_symbols,),
+                    )
+                    option_rows = cur.fetchall()
+                    cur.execute(
+                        """
+                        WITH latest AS (
+                            SELECT symbol, MAX(trade_date) AS trade_date
+                            FROM dws.security_option_chain_summary_daily
+                            WHERE market = 'US' AND symbol = ANY(%s)
+                            GROUP BY symbol
+                        )
+                        SELECT s.symbol, s.underlying_price, s.selection_score, s.liquidity_score,
+                               s.flow_sentiment, s.data_quality_flag, s.summary_json
+                        FROM dws.security_option_chain_summary_daily s
+                        JOIN latest l ON l.symbol = s.symbol AND l.trade_date = s.trade_date
+                        WHERE s.market = 'US'
+                        """,
+                        (normalized_symbols,),
+                    )
+                    summary_rows = cur.fetchall()
+        except Exception:
+            return {}, {}
+
+        chains: dict[str, list[dict[str, Any]]] = {symbol: [] for symbol in normalized_symbols}
+        for row in option_rows:
+            symbol = str(row.get("symbol", "")).upper()
+            chains.setdefault(symbol, []).append(dict(row))
+
+        summaries: dict[str, dict[str, Any]] = {}
+        for row in summary_rows:
+            symbol = str(row.get("symbol", "")).upper()
+            summary = dict(row.get("summary_json") or {})
+            summary.update({key: value for key, value in row.items() if key != "summary_json"})
+            summaries[symbol] = summary
+        return chains, summaries
 
     def _select_active_profile_id(
         self,

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 import sys
 
 from vnpy.web.domain.smart_allocation.calculator import calculate_allocation_targets
+from vnpy.web.domain.smart_allocation.call_spread import build_call_spread_daily_recommendation
 from vnpy.web.domain.smart_allocation.classifier import snapshot_from_legacy_portfolio_status
 from vnpy.web.domain.smart_allocation.guardrails import run_guardrail_checks
 from vnpy.web.domain.smart_allocation.models import (
@@ -178,6 +180,7 @@ def test_smart_allocation_routes_should_be_registered_on_vnpy_web_app() -> None:
     assert "/api/v1/smart-allocation/leaps/candidates/refresh" in paths
     assert "/api/v1/smart-allocation/wheel/candidates/refresh" in paths
     assert "/api/v1/smart-allocation/wheel/daily-recommendations/refresh" in paths
+    assert "/api/v1/smart-allocation/call-spread/daily-recommendations/refresh" in paths
 
 
 def test_smart_allocation_store_should_persist_profile_snapshot_and_cashflow(tmp_path: Path) -> None:
@@ -409,3 +412,68 @@ def test_daily_wheel_recommendation_should_include_pool_sources_and_mrvl(tmp_pat
     assert by_symbol["MRVL.US"].status == "blocked"
     assert by_symbol["MRVL.US"].estimated_cash_required == 15000
     assert by_symbol["MRVL.US"].blockers
+
+
+def test_call_spread_recommendation_should_use_budget_and_option_chain() -> None:
+    profile = AllocationProfile(
+        age=28,
+        income_status=IncomeStatus.STABLE,
+        quality_stock_symbols=("PLTR.US",),
+    )
+    snapshot = AllocationSnapshot(
+        total_equity=Decimal("12550.56"),
+        cash_value=Decimal("3045.87"),
+        dca_value=Decimal("9504.69"),
+        options_value=Decimal("0"),
+        wheel_value=Decimal("0"),
+        leaps_value=Decimal("0"),
+        single_stock_values={"NVDA.US": Decimal("1043.10")},
+    )
+    targets = calculate_allocation_targets(profile, snapshot.total_equity)
+    expiration = (date.today() + timedelta(days=30)).isoformat()
+
+    recommendation = build_call_spread_daily_recommendation(
+        profile,
+        snapshot,
+        targets,
+        option_summaries={
+            "PLTR": {
+                "underlying_price": Decimal("137.97"),
+                "selection_score": Decimal("81.28"),
+                "flow_sentiment": "bullish",
+            }
+        },
+        option_chains={
+            "PLTR": [
+                {
+                    "expiration_date": expiration,
+                    "contract_symbol": "PLTR260515C00140000",
+                    "strike": Decimal("140"),
+                    "bid": Decimal("7.20"),
+                    "ask": Decimal("7.40"),
+                    "volume": 8000,
+                    "open_interest": 12000,
+                    "underlying_price": Decimal("137.97"),
+                },
+                {
+                    "expiration_date": expiration,
+                    "contract_symbol": "PLTR260515C00160000",
+                    "strike": Decimal("160"),
+                    "bid": Decimal("1.88"),
+                    "ask": Decimal("2.00"),
+                    "volume": 6000,
+                    "open_interest": 20000,
+                    "underlying_price": Decimal("137.97"),
+                },
+            ]
+        },
+    )
+    by_symbol = {item.symbol: item for item in recommendation.candidates}
+
+    assert recommendation.options_available > Decimal("0")
+    assert recommendation.per_trade_limit == Decimal("1000.00")
+    assert by_symbol["PLTR.US"].status == "candidate"
+    assert by_symbol["PLTR.US"].long_strike == Decimal("140")
+    assert by_symbol["PLTR.US"].short_strike == Decimal("160")
+    assert by_symbol["PLTR.US"].max_loss == Decimal("552.00")
+    assert by_symbol["PLTR.US"].max_contracts == 1

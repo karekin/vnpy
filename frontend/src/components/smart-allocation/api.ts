@@ -1,4 +1,5 @@
 import type {
+  SmartAllocationCallSpreadDailyRecommendation,
   SmartAllocationDashboard,
   SmartAllocationCashflowEvent,
   SmartAllocationLeapsCandidate,
@@ -158,6 +159,10 @@ export function loadSmartAllocationWheelCandidates() {
 
 export function loadSmartAllocationWheelDailyRecommendation() {
   return requestJson<SmartAllocationWheelDailyRecommendation>(buildUrls("/api/v1/smart-allocation/wheel/daily-recommendations"));
+}
+
+export function loadSmartAllocationCallSpreadDailyRecommendation() {
+  return requestJson<SmartAllocationCallSpreadDailyRecommendation>(buildUrls("/api/v1/smart-allocation/call-spread/daily-recommendations"));
 }
 
 export function updateSmartAllocationRecommendation(

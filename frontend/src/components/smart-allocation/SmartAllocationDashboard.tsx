@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { ArrowRight, CheckCircle2, CircleDollarSign, ClipboardCheck, Plus, RefreshCw, RotateCcw, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
 import {
+  loadSmartAllocationCallSpreadDailyRecommendation,
   loadSmartAllocationCashflowEvents,
   loadSmartAllocationDashboard,
   loadSmartAllocationLeapsCandidates,
@@ -14,6 +15,7 @@ import {
   updateSmartAllocationRecommendation,
 } from "@/components/smart-allocation/api";
 import type {
+  SmartAllocationCallSpreadDailyRecommendation,
   SmartAllocationDashboard,
   SmartAllocationCashflowEvent,
   SmartAllocationGuardrail,
@@ -33,6 +35,7 @@ export type SmartAllocationView =
   | "leaps"
   | "wheel"
   | "wheelRecommendations"
+  | "callSpread"
   | "guardrails"
   | "review";
 
@@ -327,6 +330,7 @@ export default function SmartAllocationDashboard({
   const [leapsCandidates, setLeapsCandidates] = useState<SmartAllocationLeapsCandidate[]>([]);
   const [wheelCandidates, setWheelCandidates] = useState<SmartAllocationWheelCandidate[]>([]);
   const [wheelDailyRecommendation, setWheelDailyRecommendation] = useState<SmartAllocationWheelDailyRecommendation | null>(null);
+  const [callSpreadDailyRecommendation, setCallSpreadDailyRecommendation] = useState<SmartAllocationCallSpreadDailyRecommendation | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
   const [isSnapshotSaving, setIsSnapshotSaving] = useState(false);
   const [snapshotSaveFeedback, setSnapshotSaveFeedback] = useState<{
@@ -569,6 +573,9 @@ export default function SmartAllocationDashboard({
           : "下一笔开仓仍按现金担保、单标的上限和事件风险逐项检查。";
   const candidateWheelCount = wheelCandidates.filter((item) => item.status === "candidate").length;
   const topWheelCandidates = wheelCandidates.slice(0, 8);
+  const callSpreadCandidates = callSpreadDailyRecommendation?.candidates ?? [];
+  const topCallSpreadCandidates = callSpreadCandidates.slice(0, 10);
+  const callSpreadActionableCount = callSpreadDailyRecommendation?.actionable_count ?? callSpreadCandidates.filter((item) => item.status === "candidate").length;
   const wheelPoolSources = wheelDailyRecommendation?.pool_sources ?? [];
   const mrvlCandidate = wheelDailyRecommendation?.candidates.find((item) => item.symbol === "MRVL.US") ?? wheelCandidates.find((item) => item.symbol === "MRVL.US");
   const mrvlAccountText = mrvlCandidate
@@ -624,6 +631,7 @@ export default function SmartAllocationDashboard({
     void refreshCashflowEvents();
     void refreshWheelCandidates();
     void refreshWheelDailyRecommendation();
+    void refreshCallSpreadDailyRecommendation();
   }, []);
 
   async function refreshCashflowEvents() {
@@ -660,6 +668,7 @@ export default function SmartAllocationDashboard({
     await refreshCashflowEvents();
     await refreshWheelCandidates();
     await refreshWheelDailyRecommendation();
+    await refreshCallSpreadDailyRecommendation();
     setStatusMessage("现金流事件已记录。");
   }
 
@@ -684,6 +693,15 @@ export default function SmartAllocationDashboard({
       setWheelDailyRecommendation(recommendation);
     } catch {
       setWheelDailyRecommendation(null);
+    }
+  }
+
+  async function refreshCallSpreadDailyRecommendation() {
+    try {
+      const recommendation = await loadSmartAllocationCallSpreadDailyRecommendation();
+      setCallSpreadDailyRecommendation(recommendation);
+    } catch {
+      setCallSpreadDailyRecommendation(null);
     }
   }
 
@@ -741,6 +759,7 @@ export default function SmartAllocationDashboard({
       await refreshCashflowEvents();
       await refreshWheelCandidates();
       await refreshWheelDailyRecommendation();
+      await refreshCallSpreadDailyRecommendation();
       const savedAt = new Date(next.snapshot.snapshot_at).toLocaleTimeString("zh-CN", {
         hour: "2-digit",
         minute: "2-digit",
@@ -1422,6 +1441,120 @@ export default function SmartAllocationDashboard({
             <p className="text-sm font-semibold text-gray-900 dark:text-white">每日任务链路</p>
             <div className="mt-3 grid gap-2 text-sm md:grid-cols-2">
               {(wheelDailyRecommendation?.methodology ?? []).map((item) => (
+                <div key={item} className="rounded-lg bg-white p-3 text-gray-600 dark:bg-gray-950/40 dark:text-gray-300">
+                  {item}
+                </div>
+              ))}
+            </div>
+          </div>
+        </Section>
+      ) : null}
+
+      {shouldShow("callSpread") ? (
+        <Section title="Call Spread 策略" description="和 Wheel 并列的方向性期权策略：用买入 Call + 卖出更高行权价 Call 控制最大亏损。">
+          <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+            <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-gray-900/40">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-gray-900 dark:text-white">今日 Call Spread 扫描</p>
+                  <p className="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                    扫描日期 {callSpreadDailyRecommendation?.scan_date ?? "待刷新"}；最大亏损按净权利金计算，不占用一张股票的现金担保。
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await refreshCallSpreadDailyRecommendation();
+                    setStatusMessage("Call Spread 推荐已刷新。");
+                  }}
+                  className="inline-flex items-center gap-2 rounded-lg bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-600"
+                >
+                  <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                  刷新扫描
+                </button>
+              </div>
+              <div className="mt-4 grid gap-3 text-sm sm:grid-cols-4">
+                <div className="rounded-lg bg-white p-3 dark:bg-gray-950/40">
+                  <p className="text-gray-500 dark:text-gray-400">期权可用</p>
+                  <p className="mt-1 font-semibold text-gray-900 dark:text-white">{money(callSpreadDailyRecommendation?.options_available ?? Math.max(displayTargets.options_value - displaySnapshot.options_value, 0))}</p>
+                </div>
+                <div className="rounded-lg bg-white p-3 dark:bg-gray-950/40">
+                  <p className="text-gray-500 dark:text-gray-400">单笔上限</p>
+                  <p className="mt-1 font-semibold text-gray-900 dark:text-white">{money(callSpreadDailyRecommendation?.per_trade_limit ?? 0)}</p>
+                </div>
+                <div className="rounded-lg bg-white p-3 dark:bg-gray-950/40">
+                  <p className="text-gray-500 dark:text-gray-400">可核验</p>
+                  <p className="mt-1 font-semibold text-gray-900 dark:text-white">{callSpreadActionableCount}</p>
+                </div>
+                <div className="rounded-lg bg-white p-3 dark:bg-gray-950/40">
+                  <p className="text-gray-500 dark:text-gray-400">观察候选</p>
+                  <p className="mt-1 font-semibold text-gray-900 dark:text-white">{callSpreadDailyRecommendation?.candidate_count ?? callSpreadCandidates.length}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-brand-200 bg-brand-50 p-4 dark:border-brand-900/60 dark:bg-brand-950/20">
+              <p className="text-sm font-semibold text-gray-900 dark:text-white">适合当前仓位的口径</p>
+              <p className="mt-3 text-sm leading-6 text-gray-600 dark:text-gray-300">
+                你的期权仓位仍有目标缺口，但 Call Spread 是方向性风险；系统按现金超额、期权目标缺口和保证金余量三重约束，先给出可核验组合，再由你确认事件风险和盘口。
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-5 overflow-x-auto rounded-xl border border-gray-200 dark:border-gray-800">
+            <div className="grid min-w-[1120px] grid-cols-[1fr_90px_1.1fr_1fr_1fr_1fr_1.4fr] bg-gray-50 px-4 py-3 text-xs font-semibold text-gray-500 dark:bg-gray-900/60 dark:text-gray-400">
+              <span>标的</span>
+              <span>评分</span>
+              <span>组合</span>
+              <span>最大亏损</span>
+              <span>最大收益</span>
+              <span>状态</span>
+              <span>账户级结论</span>
+            </div>
+            {topCallSpreadCandidates.map((item) => (
+              <div key={item.symbol} className="grid min-w-[1120px] grid-cols-[1fr_90px_1.1fr_1fr_1fr_1fr_1.4fr] gap-3 border-t border-gray-200 px-4 py-3 text-sm text-gray-700 dark:border-gray-800 dark:text-gray-200">
+                <div>
+                  <p className="font-semibold text-gray-900 dark:text-white">{item.symbol}</p>
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{item.source}</p>
+                </div>
+                <span className="font-semibold text-gray-900 dark:text-white">{item.score}</span>
+                <div>
+                  <p>
+                    {item.expiration_date && item.long_strike && item.short_strike
+                      ? `${item.expiration_date} ${item.long_strike}/${item.short_strike} Call`
+                      : "等待可交易价差"}
+                  </p>
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    Break-even {item.break_even ? `$${item.break_even.toFixed(2)}` : "-"} / RR {item.reward_risk.toFixed(2)}
+                  </p>
+                </div>
+                <div>
+                  <p>{money(item.max_loss)}</p>
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">可做 {item.max_contracts} 张</p>
+                </div>
+                <p>{money(item.max_profit)}</p>
+                <span className={`self-start rounded-full px-2.5 py-1 text-xs font-semibold ${wheelStatusTone(item.status)}`}>
+                  {item.status}
+                </span>
+                <div className="text-xs leading-5 text-gray-500 dark:text-gray-400">
+                  <p>{item.reason}</p>
+                  {item.blockers.map((blocker) => (
+                    <p key={blocker} className="mt-1 text-red-600 dark:text-red-300">{blocker}</p>
+                  ))}
+                </div>
+              </div>
+            ))}
+            {topCallSpreadCandidates.length === 0 ? (
+              <p className="border-t border-gray-200 px-4 py-3 text-sm text-gray-500 dark:border-gray-800 dark:text-gray-400">
+                暂无 Call Spread 推荐。点击刷新扫描后，系统会读取最新期权链并按账户预算筛选价差组合。
+              </p>
+            ) : null}
+          </div>
+
+          <div className="mt-5 rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-gray-900/40">
+            <p className="text-sm font-semibold text-gray-900 dark:text-white">策略筛选方法</p>
+            <div className="mt-3 grid gap-2 text-sm md:grid-cols-2">
+              {(callSpreadDailyRecommendation?.methodology ?? []).map((item) => (
                 <div key={item} className="rounded-lg bg-white p-3 text-gray-600 dark:bg-gray-950/40 dark:text-gray-300">
                   {item}
                 </div>

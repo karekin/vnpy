@@ -145,6 +145,36 @@ class SmartAllocationWheelDailyRecommendationResponse(BaseModel):
     methodology: list[str]
 
 
+class SmartAllocationCallSpreadCandidateResponse(BaseModel):
+    symbol: str
+    source: str
+    score: int
+    status: str
+    expiration_date: str | None = None
+    long_strike: float | None = None
+    short_strike: float | None = None
+    net_debit: float
+    max_profit: float
+    max_loss: float
+    reward_risk: float
+    break_even: float | None = None
+    max_contracts: int
+    underlying_price: float | None = None
+    reason: str
+    blockers: list[str] = Field(default_factory=list)
+
+
+class SmartAllocationCallSpreadDailyRecommendationResponse(BaseModel):
+    scan_date: str
+    account_equity: float
+    options_available: float
+    per_trade_limit: float
+    candidate_count: int
+    actionable_count: int
+    candidates: list[SmartAllocationCallSpreadCandidateResponse]
+    methodology: list[str]
+
+
 class SmartAllocationDashboardResponse(BaseModel):
     profile: SmartAllocationProfileResponse
     snapshot: SmartAllocationSnapshotResponse

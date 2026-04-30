@@ -122,6 +122,7 @@ const navItems: NavItem[] = [
       { name: "LEAPS 候选池", path: "/smart-allocation/leaps" },
       { name: "Wheel 现金流", path: "/smart-allocation/wheel" },
       { name: "每日 Wheel 推荐", path: "/smart-allocation/wheel/recommendations" },
+      { name: "Call Spread 策略", path: "/smart-allocation/call-spread" },
       { name: "风控巡检", path: "/smart-allocation/guardrails" },
       { name: "季度复盘", path: "/smart-allocation/review" },
     ],

@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query
 
 from vnpy.web.contracts.smart_allocation import (
+    SmartAllocationCallSpreadDailyRecommendationResponse,
     SmartAllocationCashflowEventRequest,
     SmartAllocationCashflowEventResponse,
     SmartAllocationDashboardResponse,
@@ -263,3 +264,20 @@ def refresh_wheel_daily_recommendations(
     profile_id: str | None = Query(None),
 ) -> SmartAllocationWheelDailyRecommendationResponse:
     return get_wheel_daily_recommendations(profile_id)
+
+
+@router.get("/call-spread/daily-recommendations", response_model=SmartAllocationCallSpreadDailyRecommendationResponse)
+def get_call_spread_daily_recommendations(
+    profile_id: str | None = Query(None),
+) -> SmartAllocationCallSpreadDailyRecommendationResponse:
+    try:
+        return services.allocation_service.get_daily_call_spread_recommendation(profile_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"profile not found: {profile_id}") from exc
+
+
+@router.post("/call-spread/daily-recommendations/refresh", response_model=SmartAllocationCallSpreadDailyRecommendationResponse)
+def refresh_call_spread_daily_recommendations(
+    profile_id: str | None = Query(None),
+) -> SmartAllocationCallSpreadDailyRecommendationResponse:
+    return get_call_spread_daily_recommendations(profile_id)

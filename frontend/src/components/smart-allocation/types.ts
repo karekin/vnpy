@@ -105,6 +105,36 @@ export type SmartAllocationWheelDailyRecommendation = {
   methodology: string[];
 };
 
+export type SmartAllocationCallSpreadCandidate = {
+  symbol: string;
+  source: string;
+  score: number;
+  status: string;
+  expiration_date?: string | null;
+  long_strike?: number | null;
+  short_strike?: number | null;
+  net_debit: number;
+  max_profit: number;
+  max_loss: number;
+  reward_risk: number;
+  break_even?: number | null;
+  max_contracts: number;
+  underlying_price?: number | null;
+  reason: string;
+  blockers: string[];
+};
+
+export type SmartAllocationCallSpreadDailyRecommendation = {
+  scan_date: string;
+  account_equity: number;
+  options_available: number;
+  per_trade_limit: number;
+  candidate_count: number;
+  actionable_count: number;
+  candidates: SmartAllocationCallSpreadCandidate[];
+  methodology: string[];
+};
+
 export type SmartAllocationWaterfallTransfer = {
   amount: number;
   source_bucket: string;
