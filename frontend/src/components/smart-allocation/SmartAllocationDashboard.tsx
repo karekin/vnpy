@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { ArrowRight, CheckCircle2, CircleDollarSign, ClipboardCheck, Plus, RefreshCw, RotateCcw, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
+import { ArrowRight, BookOpen, CheckCircle2, CircleDollarSign, ClipboardCheck, Plus, RefreshCw, RotateCcw, ShieldCheck, Sparkles, Trash2, X } from "lucide-react";
 import {
   loadSmartAllocationCallSpreadDailyRecommendation,
   loadSmartAllocationCashflowEvents,
@@ -45,6 +45,8 @@ type SingleStockRow = {
   symbol: string;
   value: string;
 };
+
+type OptionGuideTopic = "wheel" | "callSpread";
 
 const DEFAULT_SINGLE_STOCK_ROWS: SingleStockRow[] = [
   { id: "stock-nvda", symbol: "NVDA.US", value: "1043.10" },
@@ -249,6 +251,28 @@ const WHEEL_OPERATION_SOP = [
   "下单后记录 cycle、strike、premium、cash_reserved；权利金只按已实现现金流入账。",
 ];
 
+const WHEEL_METHODOLOGY_FALLBACK = [
+  "候选池 = 手动 Wheel 候选池 + 优质个股白名单 + 当前持仓反向观察 + 系统内置高流动性观察池。",
+  "先做账户级过滤：一张现金担保 Put 不能超过 Wheel 剩余额度，也不能突破单股集中度上限。",
+  "再做风险过滤：保证金触线、已有持仓超限、现金担保不足时标记 blocked。",
+  "当前版本是每日规则扫描；接入真实期权链后继续过滤 DTE、Delta、IV、成交量、未平仓量和 bid/ask spread。",
+];
+
+const CALL_SPREAD_OPERATION_SOP = [
+  "先确认券商权限已开通 Spreads；只有 Long Call 权限时不能实盘执行价差组合。",
+  "刷新 Call Spread 推荐，只处理 status 为 candidate 且最大亏损低于单笔上限的组合。",
+  "核验期权链：优先 7-60 DTE、买入腿接近平值、卖出腿在上方压力位附近，并检查成交量、OI 和 bid/ask 价差。",
+  "核验事件风险：财报、重大产品发布、监管新闻和 IV crush 都要写入交易前备注。",
+  "下单后记录 expiration、long_strike、short_strike、net_debit、max_loss、max_profit、止损和止盈规则。",
+];
+
+const CALL_SPREAD_METHODOLOGY_FALLBACK = [
+  "Call Spread 与 Wheel 并列，但风控口径不同：最大亏损是净权利金，不是一张 Put 的现金担保金额。",
+  "可用资金取期权目标缺口、现金超额和保证金余量三者最小值，避免把长期仓位或应急现金误当期权弹药。",
+  "单笔风险上限取可用资金的 50%、账户权益的 8% 和 1000 美元三者最小值。",
+  "优先选择 7-60 DTE、买入腿接近平值、上方卖出腿、净权利金低于单笔风险上限且成交/OI 活跃的组合。",
+];
+
 function cashflowAuditText(value: string) {
   if (value === "snapshot_waterfall_audit") return "系统快照审计";
   if (value === "wheel_premium_received") return "Wheel 权利金";
@@ -333,6 +357,7 @@ export default function SmartAllocationDashboard({
   const [wheelDailyRecommendation, setWheelDailyRecommendation] = useState<SmartAllocationWheelDailyRecommendation | null>(null);
   const [callSpreadDailyRecommendation, setCallSpreadDailyRecommendation] = useState<SmartAllocationCallSpreadDailyRecommendation | null>(null);
   const [optionStrategyTab, setOptionStrategyTab] = useState<"wheel" | "callSpread">("wheel");
+  const [optionGuideTopic, setOptionGuideTopic] = useState<OptionGuideTopic | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
   const [isSnapshotSaving, setIsSnapshotSaving] = useState(false);
   const [snapshotSaveFeedback, setSnapshotSaveFeedback] = useState<{
@@ -582,6 +607,36 @@ export default function SmartAllocationDashboard({
   const topCallSpreadCandidates = callSpreadCandidates.slice(0, 10);
   const callSpreadActionableCount = callSpreadDailyRecommendation?.actionable_count ?? callSpreadCandidates.filter((item) => item.status === "candidate").length;
   const wheelPoolSources = wheelDailyRecommendation?.pool_sources ?? [];
+  const wheelMethodologyItems = wheelDailyRecommendation?.methodology.length ? wheelDailyRecommendation.methodology : WHEEL_METHODOLOGY_FALLBACK;
+  const callSpreadMethodologyItems = callSpreadDailyRecommendation?.methodology.length ? callSpreadDailyRecommendation.methodology : CALL_SPREAD_METHODOLOGY_FALLBACK;
+  const optionGuide =
+    optionGuideTopic === "wheel"
+      ? {
+          title: "Wheel SOP / 方法论",
+          subtitle: "现金担保 Put + Covered Call 的执行纪律，重点是愿意持有、现金担保和真实现金流记录。",
+          badge: `${money(wheelDailyRecommendation?.wheel_available ?? wheelAvailableCash)} 可用`,
+          sop: WHEEL_OPERATION_SOP,
+          methodology: wheelMethodologyItems,
+          checklistTitle: "下单前检查",
+          checklist: WHEEL_CHECKLIST_ITEMS,
+        }
+      : optionGuideTopic === "callSpread"
+        ? {
+            title: "Call Spread SOP / 方法论",
+            subtitle: "方向性价差策略，用净权利金定义最大亏损；适合小资金先控制风险再表达看涨观点。",
+            badge: `${money(callSpreadDailyRecommendation?.per_trade_limit ?? 0)} 单笔上限`,
+            sop: CALL_SPREAD_OPERATION_SOP,
+            methodology: callSpreadMethodologyItems,
+            checklistTitle: "执行前硬条件",
+            checklist: [
+              "券商 Spreads 权限已开通。",
+              "最大亏损低于单笔风险上限，且不会挤占现金安全垫。",
+              "组合 bid/ask 价差可接受，成交量和未平仓量足够。",
+              "到期前有明确催化或趋势假设，而不是只因为期权便宜。",
+              "提前写好止损、止盈和到期处理规则。",
+            ],
+          }
+        : null;
   const mrvlCandidate = wheelDailyRecommendation?.candidates.find((item) => item.symbol === "MRVL.US") ?? wheelCandidates.find((item) => item.symbol === "MRVL.US");
   const mrvlAccountText = mrvlCandidate
     ? mrvlCandidate.status === "candidate"
@@ -638,6 +693,23 @@ export default function SmartAllocationDashboard({
     void refreshWheelDailyRecommendation();
     void refreshCallSpreadDailyRecommendation();
   }, []);
+
+  useEffect(() => {
+    if (!optionGuideTopic) return;
+
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOptionGuideTopic(null);
+    };
+
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [optionGuideTopic]);
 
   async function refreshCashflowEvents() {
     try {
@@ -815,6 +887,84 @@ export default function SmartAllocationDashboard({
         </div>
       ) : null}
 
+      {optionGuide ? (
+        <div className="fixed inset-0 z-[100000]">
+          <button
+            type="button"
+            aria-label="关闭策略手册"
+            onClick={() => setOptionGuideTopic(null)}
+            className="absolute inset-0 bg-gray-950/40"
+          />
+          <aside
+            role="dialog"
+            aria-modal="true"
+            aria-label={optionGuide.title}
+            className="absolute right-0 top-0 flex h-full w-full max-w-xl flex-col overflow-hidden bg-white shadow-2xl dark:bg-gray-950"
+          >
+            <div className="border-b border-gray-200 p-5 dark:border-gray-800">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-lg font-semibold text-gray-900 dark:text-white">{optionGuide.title}</p>
+                    <span className="rounded-full bg-brand-50 px-2.5 py-1 text-xs font-semibold text-brand-700 dark:bg-brand-500/15 dark:text-brand-300">
+                      {optionGuide.badge}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-gray-500 dark:text-gray-400">{optionGuide.subtitle}</p>
+                </div>
+                <button
+                  type="button"
+                  aria-label="关闭"
+                  onClick={() => setOptionGuideTopic(null)}
+                  className="rounded-lg border border-gray-200 p-2 text-gray-500 hover:bg-gray-50 dark:border-gray-800 dark:text-gray-300 dark:hover:bg-gray-900"
+                >
+                  <X className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 space-y-5 overflow-y-auto p-5">
+              <div>
+                <p className="text-sm font-semibold text-gray-900 dark:text-white">执行 SOP</p>
+                <div className="mt-3 space-y-2">
+                  {optionGuide.sop.map((item, index) => (
+                    <div key={item} className="flex gap-3 rounded-xl bg-gray-50 p-3 text-sm leading-6 text-gray-600 dark:bg-gray-900/60 dark:text-gray-300">
+                      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand-500 text-xs font-semibold text-white">
+                        {index + 1}
+                      </span>
+                      <span>{item}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <p className="text-sm font-semibold text-gray-900 dark:text-white">策略方法论</p>
+                <div className="mt-3 grid gap-2">
+                  {optionGuide.methodology.map((item) => (
+                    <div key={item} className="rounded-xl border border-gray-200 p-3 text-sm leading-6 text-gray-600 dark:border-gray-800 dark:text-gray-300">
+                      {item}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <p className="text-sm font-semibold text-gray-900 dark:text-white">{optionGuide.checklistTitle}</p>
+                <div className="mt-3 space-y-2">
+                  {optionGuide.checklist.map((item) => (
+                    <div key={item} className="flex gap-2 text-sm leading-6 text-gray-600 dark:text-gray-300">
+                      <CheckCircle2 className="mt-1 h-4 w-4 shrink-0 text-emerald-500" aria-hidden="true" />
+                      <span>{item}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>
+      ) : null}
+
       {isOptionStrategiesView ? (
         <Section title="期权策略管理" description="一页只做一件事：先确认账户火力，再切换策略，看可执行候选和下一步核验。">
           <div className="grid gap-5 xl:grid-cols-[0.85fr_1.15fr]">
@@ -875,6 +1025,24 @@ export default function SmartAllocationDashboard({
                   <p className="text-gray-500 dark:text-gray-400">Spread 单笔</p>
                   <p className="mt-1 font-semibold text-gray-900 dark:text-white">{money(callSpreadDailyRecommendation?.per_trade_limit ?? 0)}</p>
                 </div>
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setOptionGuideTopic("wheel")}
+                  className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-50 dark:border-gray-800 dark:text-gray-300 dark:hover:bg-gray-900"
+                >
+                  <BookOpen className="h-4 w-4" aria-hidden="true" />
+                  Wheel SOP / 方法论
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOptionGuideTopic("callSpread")}
+                  className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-50 dark:border-gray-800 dark:text-gray-300 dark:hover:bg-gray-900"
+                >
+                  <BookOpen className="h-4 w-4" aria-hidden="true" />
+                  Call Spread SOP / 方法论
+                </button>
               </div>
             </div>
           </div>
