@@ -16,10 +16,10 @@ const outfit = Outfit({
 });
 
 export const metadata: Metadata = {
-  applicationName: "OpenClaw",
+  applicationName: "踏潮",
   appleWebApp: {
     capable: true,
-    title: "OpenClaw",
+    title: "踏潮",
     statusBarStyle: "black-translucent",
   },
   icons: {
@@ -31,7 +31,7 @@ export const metadata: Metadata = {
   },
   manifest: "/manifest.webmanifest",
   title: {
-    default: "OpenClaw Investment Dashboard",
+    default: "踏潮",
     template: "%s",
   },
 };

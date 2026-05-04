@@ -1,269 +1,60 @@
 "use client";
 import React, { useEffect, useRef, useCallback, useState } from "react";
 import Link from "next/link";
-import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { useSidebar } from "../context/SidebarContext";
 import {
   AiIcon,
-  BoxCubeIcon,
-  CalenderIcon,
-  CallIcon,
-  CartIcon,
-  ChatIcon,
   ChevronDownIcon,
   DocsIcon,
-  GridIcon,
   HorizontaLDots,
-  ListIcon,
-  MailIcon,
-  PageIcon,
   PieChartIcon,
-  PlugInIcon,
-  TableIcon,
-  TaskIcon,
-  UserCircleIcon,
 } from "../icons/index";
-import SidebarWidget from "./SidebarWidget";
+import BrandLogo from "./BrandLogo";
 
 type NavItem = {
   name: string;
   icon: React.ReactNode;
   path?: string;
-  new?: boolean;
-  subItems?: { name: string; path: string; pro?: boolean; new?: boolean }[];
+  subItems?: { name: string; path: string }[];
 };
 
 const navItems: NavItem[] = [
   {
-    name: "OpenClaw Mobile",
+    name: "TenX Hunter",
     icon: <AiIcon />,
-    new: true,
     subItems: [
-      { name: "投资总览", path: "/dashboard" },
-      { name: "持仓分析", path: "/portfolio" },
-      { name: "风险雷达", path: "/risk" },
-      { name: "标的研究库", path: "/research" },
+      { name: "Workspace", path: "/tenx-hunter/us" },
+      { name: "Discover", path: "/tenx-hunter/us/discover" },
+      { name: "Themes", path: "/tenx-hunter/us/themes" },
+      { name: "Watchlist", path: "/tenx-hunter/us/watchlist" },
+      { name: "Alerts", path: "/tenx-hunter/us/alerts" },
     ],
   },
   {
-    icon: <GridIcon />,
-    name: "Dashboard",
+    name: "Smart Allocation",
+    icon: <PieChartIcon />,
     subItems: [
-      { name: "Ecommerce", path: "/" },
-      { name: "Analytics", path: "/analytics" },
-      { name: "Marketing", path: "/marketing" },
-      { name: "CRM", path: "/crm" },
-      { name: "Stocks", path: "/stocks" },
-      { name: "SaaS", path: "/saas", new: true },
-      { name: "Logistics", path: "/logistics", new: true },
-    ],
-  },
-  {
-    name: "AI Assistant",
-    icon: <AiIcon />,
-    new: true,
-    subItems: [
-      {
-        name: "Text Generator",
-        path: "/text-generator",
-      },
-      {
-        name: "Image Generator",
-        path: "/image-generator",
-      },
-      {
-        name: "Code Generator",
-        path: "/code-generator",
-      },
-      {
-        name: "Video Generator",
-        path: "/video-generator",
-      },
-    ],
-  },
-  {
-    name: "E-commerce",
-    icon: <CartIcon />,
-    new: true,
-    subItems: [
-      { name: "Products", path: "/products" },
-      { name: "Add Product", path: "/add-product" },
-      { name: "Billing", path: "/billing" },
-      { name: "Invoices", path: "/invoices" },
-      { name: "Single Invoice", path: "/single-invoice" },
-      { name: "Create Invoice", path: "/create-invoice" },
-      { name: "Transactions", path: "/transactions" },
-      { name: "Single Transaction", path: "/single-transaction" },
+      { name: "Account Targets", path: "/smart-allocation" },
+      { name: "Cash Waterfall", path: "/smart-allocation/waterfall" },
+      { name: "Rebalance", path: "/smart-allocation/rebalance" },
+      { name: "LEAPS Candidates", path: "/smart-allocation/leaps" },
+      { name: "Options Strategies", path: "/smart-allocation/options-strategies" },
+      { name: "Risk Guardrails", path: "/smart-allocation/guardrails" },
+      { name: "Quarterly Review", path: "/smart-allocation/review" },
     ],
   },
   {
     name: "CB Quant",
     icon: <DocsIcon />,
-    new: true,
     subItems: [
-      { name: "总览", path: "/cb-quant" },
-      { name: "信息挖掘", path: "/cb-quant/info-mining" },
-      { name: "策略生成", path: "/cb-quant/strategy-generation" },
-      { name: "回测评估", path: "/cb-quant/backtest-evaluation" },
-      { name: "自动执行", path: "/cb-quant/auto-execution" },
-      { name: "反馈复盘", path: "/cb-quant/review" },
-      { name: "持续迭代", path: "/cb-quant/continuous-iteration" },
-    ],
-  },
-  {
-    name: "智能仓位",
-    icon: <PieChartIcon />,
-    new: true,
-    subItems: [
-      { name: "账户结构与目标", path: "/smart-allocation" },
-      { name: "现金流瀑布", path: "/smart-allocation/waterfall" },
-      { name: "再平衡建议", path: "/smart-allocation/rebalance" },
-      { name: "LEAPS 候选池", path: "/smart-allocation/leaps" },
-      { name: "期权策略管理", path: "/smart-allocation/options-strategies" },
-      { name: "风控巡检", path: "/smart-allocation/guardrails" },
-      { name: "季度复盘", path: "/smart-allocation/review" },
-    ],
-  },
-  {
-    name: "TenX Hunter",
-    icon: <AiIcon />,
-    new: true,
-    subItems: [
-      { name: "Workspace", path: "/tenx-hunter" },
-      { name: "Discover", path: "/tenx-hunter/discover" },
-      { name: "Themes", path: "/tenx-hunter/themes" },
-      { name: "Watchlist", path: "/tenx-hunter/watchlist" },
-    ],
-  },
-  {
-    icon: <CalenderIcon />,
-    name: "Calendar",
-    path: "/calendar",
-  },
-  {
-    icon: <UserCircleIcon />,
-    name: "User Profile",
-    path: "/profile",
-  },
-  {
-    name: "Task",
-    icon: <TaskIcon />,
-    subItems: [
-      { name: "List", path: "/task-list", pro: true },
-      { name: "Kanban", path: "/task-kanban", pro: true },
-    ],
-  },
-  {
-    name: "Forms",
-    icon: <ListIcon />,
-    subItems: [
-      { name: "Form Elements", path: "/form-elements", pro: false },
-      { name: "Form Layout", path: "/form-layout", pro: true },
-    ],
-  },
-  {
-    name: "Tables",
-    icon: <TableIcon />,
-    subItems: [
-      { name: "Basic Tables", path: "/basic-tables", pro: false },
-      { name: "Data Tables", path: "/data-tables", pro: true },
-    ],
-  },
-  {
-    name: "Pages",
-    icon: <PageIcon />,
-    subItems: [
-      { name: "File Manager", path: "/file-manager" },
-      { name: "Pricing Tables", path: "/pricing-tables" },
-      { name: "FAQ", path: "/faq" },
-      { name: "API Keys", path: "/api-keys", new: true },
-      { name: "Integrations", path: "/integrations", new: true },
-      { name: "Blank Page", path: "/blank" },
-      { name: "404 Error", path: "/error-404" },
-      { name: "500 Error", path: "/error-500" },
-      { name: "503 Error", path: "/error-503" },
-      { name: "Coming Soon", path: "/coming-soon" },
-      { name: "Maintenance", path: "/maintenance" },
-      { name: "Success", path: "/success" },
-    ],
-  },
-];
-
-const othersItems: NavItem[] = [
-  {
-    icon: <PieChartIcon />,
-    name: "Charts",
-    subItems: [
-      { name: "Line Chart", path: "/line-chart", pro: true },
-      { name: "Bar Chart", path: "/bar-chart", pro: true },
-      { name: "Pie Chart", path: "/pie-chart", pro: true },
-    ],
-  },
-  {
-    icon: <BoxCubeIcon />,
-    name: "UI Elements",
-    subItems: [
-      { name: "Alerts", path: "/alerts" },
-      { name: "Avatar", path: "/avatars" },
-      { name: "Badge", path: "/badge" },
-      { name: "Breadcrumb", path: "/breadcrumb" },
-      { name: "Buttons", path: "/buttons" },
-      { name: "Buttons Group", path: "/buttons-group" },
-      { name: "Cards", path: "/cards" },
-      { name: "Carousel", path: "/carousel" },
-      { name: "Dropdowns", path: "/dropdowns" },
-      { name: "Images", path: "/images" },
-      { name: "Links", path: "/links" },
-      { name: "List", path: "/list" },
-      { name: "Modals", path: "/modals" },
-      { name: "Notification", path: "/notifications" },
-      { name: "Pagination", path: "/pagination" },
-      { name: "Popovers", path: "/popovers" },
-      { name: "Progressbar", path: "/progress-bar" },
-      { name: "Ribbons", path: "/ribbons" },
-      { name: "Spinners", path: "/spinners" },
-      { name: "Tabs", path: "/tabs" },
-      { name: "Tooltips", path: "/tooltips" },
-      { name: "Videos", path: "/videos" },
-    ],
-  },
-  {
-    icon: <PlugInIcon />,
-    name: "Authentication",
-    subItems: [
-      { name: "Sign In", path: "/signin", pro: false },
-      { name: "Sign Up", path: "/signup", pro: false },
-      { name: "Reset Password", path: "/reset-password" },
-      {
-        name: "Two Step Verification",
-        path: "/two-step-verification",
-      },
-    ],
-  },
-];
-
-const supportItems: NavItem[] = [
-  {
-    icon: <ChatIcon />,
-    name: "Chat",
-    path: "/chat",
-  },
-  {
-    icon: <CallIcon />,
-    name: "Support Ticket",
-    new: true,
-    subItems: [
-      { name: "Ticket List", path: "/support-tickets" },
-      { name: "Ticket Reply", path: "/ticket-reply" },
-    ],
-  },
-  {
-    icon: <MailIcon />,
-    name: "Email",
-    subItems: [
-      { name: "Inbox", path: "/inbox" },
-      { name: "Details", path: "/inbox-details" },
+      { name: "Overview", path: "/cb-quant" },
+      { name: "Info Mining", path: "/cb-quant/info-mining" },
+      { name: "Strategy Generation", path: "/cb-quant/strategy-generation" },
+      { name: "Backtest Evaluation", path: "/cb-quant/backtest-evaluation" },
+      { name: "Auto Execution", path: "/cb-quant/auto-execution" },
+      { name: "Review", path: "/cb-quant/review" },
+      { name: "Continuous Iteration", path: "/cb-quant/continuous-iteration" },
     ],
   },
 ];
@@ -272,9 +63,8 @@ const AppSidebar: React.FC = () => {
   const { isExpanded, isMobileOpen, isHovered, setIsHovered } = useSidebar();
   const pathname = usePathname();
 
-  // Move state declarations to the top
   const [openSubmenu, setOpenSubmenu] = useState<{
-    type: "main" | "support" | "others";
+    type: "main";
     index: number;
   } | null>(null);
   const [, setSubMenuHeight] = useState<Record<string, number>>({});
@@ -282,7 +72,7 @@ const AppSidebar: React.FC = () => {
 
   const renderMenuItems = (
     navItems: NavItem[],
-    menuType: "main" | "support" | "others"
+    menuType: "main"
   ) => (
     <ul className="flex flex-col gap-1">
       {navItems.map((nav, index) => (
@@ -311,18 +101,6 @@ const AppSidebar: React.FC = () => {
               </span>
               {(isExpanded || isHovered || isMobileOpen) && (
                 <span className={`menu-item-text`}>{nav.name}</span>
-              )}
-              {nav.new && (isExpanded || isHovered || isMobileOpen) && (
-                <span
-                  className={`ml-auto absolute right-10 ${
-                    openSubmenu?.type === menuType &&
-                    openSubmenu?.index === index
-                      ? "menu-dropdown-badge-active"
-                      : "menu-dropdown-badge-inactive"
-                  } menu-dropdown-badge`}
-                >
-                  new
-                </span>
               )}
               {(isExpanded || isHovered || isMobileOpen) && (
                 <ChevronDownIcon
@@ -381,30 +159,6 @@ const AppSidebar: React.FC = () => {
                       }`}
                     >
                       {subItem.name}
-                      <span className="flex items-center gap-1 ml-auto">
-                        {subItem.new && (
-                          <span
-                            className={`ml-auto ${
-                              isActive(subItem.path)
-                                ? "menu-dropdown-badge-active"
-                                : "menu-dropdown-badge-inactive"
-                            } menu-dropdown-badge `}
-                          >
-                            new
-                          </span>
-                        )}
-                        {subItem.pro && (
-                          <span
-                            className={`ml-auto ${
-                              isActive(subItem.path)
-                                ? "menu-dropdown-badge-pro-active"
-                                : "menu-dropdown-badge-pro-inactive"
-                            } menu-dropdown-badge-pro `}
-                          >
-                            pro
-                          </span>
-                        )}
-                      </span>
                     </Link>
                   </li>
                 ))}
@@ -416,43 +170,29 @@ const AppSidebar: React.FC = () => {
     </ul>
   );
 
-  // const isActive = (path: string) => path === pathname;
-
   const isActive = useCallback((path: string) => path === pathname, [pathname]);
 
   useEffect(() => {
-    // Check if the current path matches any submenu item
     let submenuMatched = false;
-    ["main", "support", "others"].forEach((menuType) => {
-      const items =
-        menuType === "main"
-          ? navItems
-          : menuType === "support"
-          ? supportItems
-          : othersItems;
-      items.forEach((nav, index) => {
-        if (nav.subItems) {
-          nav.subItems.forEach((subItem) => {
-            if (isActive(subItem.path)) {
-              setOpenSubmenu({
-                type: menuType as "main" | "support" | "others",
-                index,
-              });
-              submenuMatched = true;
-            }
+
+    navItems.forEach((nav, index) => {
+      nav.subItems?.forEach((subItem) => {
+        if (isActive(subItem.path)) {
+          setOpenSubmenu({
+            type: "main",
+            index,
           });
+          submenuMatched = true;
         }
       });
     });
 
-    // If no submenu item matches, close the open submenu
     if (!submenuMatched) {
       setOpenSubmenu(null);
     }
   }, [pathname, isActive]);
 
   useEffect(() => {
-    // Set the height of the submenu items when the submenu is opened
     if (openSubmenu !== null) {
       const key = `${openSubmenu.type}-${openSubmenu.index}`;
       if (subMenuRefs.current[key]) {
@@ -467,7 +207,7 @@ const AppSidebar: React.FC = () => {
 
   const handleSubmenuToggle = (
     index: number,
-    menuType: "main" | "support" | "others"
+    menuType: "main"
   ) => {
     setOpenSubmenu((prevOpenSubmenu) => {
       if (
@@ -501,33 +241,7 @@ const AppSidebar: React.FC = () => {
           !isExpanded && !isHovered ? "xl:justify-center" : "justify-start"
         }`}
       >
-        <Link href="/">
-          {isExpanded || isHovered || isMobileOpen ? (
-            <>
-              <Image
-                className="dark:hidden"
-                src="/images/logo/logo.svg"
-                alt="Logo"
-                width={150}
-                height={40}
-              />
-              <Image
-                className="hidden dark:block"
-                src="/images/logo/logo-dark.svg"
-                alt="Logo"
-                width={150}
-                height={40}
-              />
-            </>
-          ) : (
-            <Image
-              src="/images/logo/logo-icon.svg"
-              alt="Logo"
-              width={32}
-              height={32}
-            />
-          )}
-        </Link>
+        <BrandLogo compact={!(isExpanded || isHovered || isMobileOpen)} />
       </div>
       <div className="flex flex-col overflow-y-auto  duration-300 ease-linear no-scrollbar">
         <nav className="mb-6">
@@ -548,41 +262,8 @@ const AppSidebar: React.FC = () => {
               </h2>
               {renderMenuItems(navItems, "main")}
             </div>
-            <div>
-              <h2
-                className={`mb-4 text-xs uppercase flex leading-5 text-gray-400 ${
-                  !isExpanded && !isHovered
-                    ? "xl:justify-center"
-                    : "justify-start"
-                }`}
-              >
-                {isExpanded || isHovered || isMobileOpen ? (
-                  "Support"
-                ) : (
-                  <HorizontaLDots />
-                )}
-              </h2>
-              {renderMenuItems(supportItems, "support")}
-            </div>
-            <div>
-              <h2
-                className={`mb-4 text-xs uppercase flex leading-5 text-gray-400 ${
-                  !isExpanded && !isHovered
-                    ? "xl:justify-center"
-                    : "justify-start"
-                }`}
-              >
-                {isExpanded || isHovered || isMobileOpen ? (
-                  "Others"
-                ) : (
-                  <HorizontaLDots />
-                )}
-              </h2>
-              {renderMenuItems(othersItems, "others")}
-            </div>
           </div>
         </nav>
-        {isExpanded || isHovered || isMobileOpen ? <SidebarWidget /> : null}
       </div>
     </aside>
   );

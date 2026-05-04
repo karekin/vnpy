@@ -28,7 +28,13 @@ x-tenx-env: &tenx-env
   POLYGON_API_KEY: ${POLYGON_API_KEY:-}
   INCLUDE_YFINANCE_SUPPLEMENT: ${INCLUDE_YFINANCE_SUPPLEMENT:-true}
   PIPELINE_BOOTSTRAP_MODE: ${PIPELINE_BOOTSTRAP_MODE:-real}
-  TENX_DEFAULT_MARKET: ${TENX_DEFAULT_MARKET:-CN}
+  TENX_DEFAULT_MARKET: ${TENX_DEFAULT_MARKET:-US}
+  TENX_DEERFLOW_ENABLED: ${TENX_DEERFLOW_ENABLED:-true}
+  TENX_DEERFLOW_URL: ${TENX_DEERFLOW_URL:-http://deerflow-nginx:2026}
+  TENX_DEERFLOW_ASSISTANT_ID: ${TENX_DEERFLOW_ASSISTANT_ID:-tenx-hunter-agent}
+  TENX_DEERFLOW_TIMEOUT_SECONDS: ${TENX_DEERFLOW_TIMEOUT_SECONDS:-1800}
+  TENX_PRICE_MAP_DEERFLOW_ENABLED: ${TENX_PRICE_MAP_DEERFLOW_ENABLED:-true}
+  TENX_PRICE_MAP_DEERFLOW_REQUIRED: ${TENX_PRICE_MAP_DEERFLOW_REQUIRED:-false}
 
 x-python-service: &python-service
   build:
@@ -77,7 +83,9 @@ services:
       timeout: 5s
       retries: 10
     networks:
+      - public
       - app
+      - agent
 
   tenx-minio:
     image: minio/minio:latest
@@ -92,8 +100,9 @@ services:
     volumes:
       - tenx-minio-data:/data
     networks:
-      - app
       - public
+      - app
+      - agent
 
   temporal:
     image: temporalio/auto-setup:1.28
@@ -192,7 +201,9 @@ services:
     entrypoint: ["python", "-m", "vnpy.web.tenx_hunter.cli"]
     command: ["help"]
     networks:
+      - public
       - app
+      - agent
 
   tenx-scheduler:
     build:
@@ -215,7 +226,9 @@ services:
         condition: service_started
     command: ["python", "-m", "vnpy.web.tenx_hunter.scheduler"]
     networks:
+      - public
       - app
+      - agent
 
   stock-worker:
     <<: *python-service

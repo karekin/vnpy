@@ -40,6 +40,8 @@ class Settings:
     scheduler_bootstrap_mode: str
     default_market: str
     market_universes: dict[str, ResolvedUniverse]
+    price_map_deerflow_enabled: bool
+    price_map_deerflow_required: bool
 
     @property
     def pg_dsn(self) -> str:
@@ -128,8 +130,8 @@ def _serialize_buckets(universe: ResolvedUniverse) -> list[dict[str, object]]:
 
 
 def _normalize_market(value: str | None) -> str:
-    lowered = (value or "CN").strip().upper()
-    return lowered if lowered in {"CN", "US"} else "CN"
+    lowered = (value or "US").strip().upper()
+    return lowered if lowered in {"CN", "US"} else "US"
 
 
 def _resolve_real_universe() -> tuple[ResolvedUniverse, str]:
@@ -295,4 +297,6 @@ def load_settings() -> Settings:
             "CN": cn_universe,
             "US": us_universe,
         },
+        price_map_deerflow_enabled=_as_bool(os.getenv("TENX_PRICE_MAP_DEERFLOW_ENABLED"), default=False),
+        price_map_deerflow_required=_as_bool(os.getenv("TENX_PRICE_MAP_DEERFLOW_REQUIRED"), default=False),
     )

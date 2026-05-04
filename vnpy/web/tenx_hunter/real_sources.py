@@ -115,11 +115,28 @@ class FinancialSnapshot:
 class EstimateSnapshot:
     symbol: str
     snapshot_date: str
+    fiscal_year_offset: int | None
     next_year_revenue_estimate: float | None
     next_year_eps: float | None
     analyst_count: int | None
     currency: str | None
     period_label: str | None
+    request_status: str | None
+    source_vendor: str
+    raw_payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class EarningsCalendarEvent:
+    event_id: str
+    symbol: str
+    snapshot_date: str
+    earnings_date: str | None
+    fiscal_period: str | None
+    time_of_day: str | None
+    eps_estimate: float | None
+    revenue_estimate: float | None
+    currency: str | None
     request_status: str | None
     source_vendor: str
     raw_payload: dict[str, Any]
@@ -191,6 +208,8 @@ class RealBootstrapBundle:
     security_themes: list[dict[str, str]]
     prices: list[PriceBar]
     financials: list[FinancialSnapshot]
+    estimates: list[EstimateSnapshot]
+    earnings_calendar: list[EarningsCalendarEvent]
     filings: list[FilingRecord]
     news: list[NewsRecord]
     institutional_activity: list[InstitutionalActivityRecord]
@@ -847,6 +866,7 @@ def build_estimate_snapshot_from_yahoo_summary(
     return EstimateSnapshot(
         symbol=symbol,
         snapshot_date=_iso_date(snapshot_date),
+        fiscal_year_offset=2 if period_label == "+1y" else 1 if period_label == "0y" else None,
         next_year_revenue_estimate=_raw_number(revenue_estimate_block.get("avg")),
         next_year_eps=_raw_number(earnings_estimate_block.get("avg")),
         analyst_count=analyst_count,
@@ -866,11 +886,121 @@ def build_estimate_snapshot_from_yahoo_summary(
     )
 
 
+def build_estimate_snapshots_from_yahoo_summary(
+    symbol: str,
+    summary_result: dict[str, Any],
+    *,
+    snapshot_date: str,
+    source_vendor: str = "yfinance-demo",
+) -> list[EstimateSnapshot]:
+    earnings_trend = (summary_result.get("earningsTrend") or {}).get("trend") or []
+    if not isinstance(earnings_trend, list):
+        earnings_trend = []
+    entries = [entry for entry in earnings_trend if isinstance(entry, dict)]
+    wanted_periods = [("0y", 1), ("+1y", 2)]
+    currency = _safe_str((summary_result.get("price") or {}).get("currency")) or _safe_str(summary_result.get("currency")) or "USD"
+    snapshots: list[EstimateSnapshot] = []
+    for period_label, fiscal_year_offset in wanted_periods:
+        entry = next((item for item in entries if _safe_str(item.get("period")) == period_label), None)
+        if entry is None:
+            continue
+        revenue_estimate_block = entry.get("revenueEstimate") if isinstance(entry.get("revenueEstimate"), dict) else {}
+        earnings_estimate_block = entry.get("earningsEstimate") if isinstance(entry.get("earningsEstimate"), dict) else {}
+        analyst_count = _safe_int(_raw_number(revenue_estimate_block.get("numberOfAnalysts"))) or _safe_int(_raw_number(earnings_estimate_block.get("numberOfAnalysts")))
+        request_status = "ok" if revenue_estimate_block or earnings_estimate_block else "missing_estimate"
+        snapshots.append(
+            EstimateSnapshot(
+                symbol=symbol,
+                snapshot_date=_iso_date(snapshot_date),
+                fiscal_year_offset=fiscal_year_offset,
+                next_year_revenue_estimate=_raw_number(revenue_estimate_block.get("avg")),
+                next_year_eps=_raw_number(earnings_estimate_block.get("avg")),
+                analyst_count=analyst_count,
+                currency=currency,
+                period_label=period_label,
+                request_status=request_status,
+                source_vendor=source_vendor,
+                raw_payload={
+                    "currency": currency,
+                    "period": period_label,
+                    "fiscalYearOffset": fiscal_year_offset,
+                    "analystCount": analyst_count,
+                    "revenueEstimate": revenue_estimate_block,
+                    "earningsEstimate": earnings_estimate_block,
+                    "status": request_status,
+                },
+            )
+        )
+    if snapshots:
+        return snapshots
+    fallback = build_estimate_snapshot_from_yahoo_summary(
+        symbol,
+        summary_result,
+        snapshot_date=snapshot_date,
+        source_vendor=source_vendor,
+    )
+    return [fallback] if fallback.request_status == "ok" else []
 
-def fetch_yfinance_bundle(symbols: list[str], start_date: str, end_date: str) -> tuple[list[SecuritySeed], list[PriceBar], list[NewsRecord]]:
+
+def _first_earnings_date(raw_dates: Any) -> tuple[str | None, str | None]:
+    if not isinstance(raw_dates, list) or not raw_dates:
+        return None, None
+    first = raw_dates[0]
+    if isinstance(first, dict):
+        raw = first.get("raw")
+        date_value = _iso_date(datetime.fromtimestamp(raw, tz=timezone.utc)) if isinstance(raw, (int, float)) else _safe_str(first.get("fmt"))
+        return date_value, _safe_str(first.get("fmt"))
+    return _iso_date(first), None
+
+
+def build_earnings_calendar_from_yahoo_summary(
+    symbol: str,
+    summary_result: dict[str, Any],
+    *,
+    snapshot_date: str,
+    source_vendor: str = "yfinance-demo",
+) -> EarningsCalendarEvent | None:
+    calendar = summary_result.get("calendarEvents") if isinstance(summary_result.get("calendarEvents"), dict) else {}
+    earnings = calendar.get("earnings") if isinstance(calendar.get("earnings"), dict) else {}
+    earnings_date, earnings_date_label = _first_earnings_date(earnings.get("earningsDate"))
+    currency = _safe_str((summary_result.get("price") or {}).get("currency")) or _safe_str(summary_result.get("currency")) or "USD"
+    request_status = "ok" if earnings_date else "missing_earnings_date"
+    if request_status != "ok" and not earnings:
+        return None
+    fiscal_period = _safe_str(earnings.get("earningsQuarter")) or _safe_str(earnings.get("fiscalQuarter"))
+    return EarningsCalendarEvent(
+        event_id=f"yf-calendar::{symbol}::{_iso_date(snapshot_date)}",
+        symbol=symbol,
+        snapshot_date=_iso_date(snapshot_date),
+        earnings_date=earnings_date,
+        fiscal_period=fiscal_period,
+        time_of_day=_safe_str(earnings.get("timeOfDay")) or earnings_date_label,
+        eps_estimate=_raw_number(earnings.get("earningsAverage")),
+        revenue_estimate=_raw_number(earnings.get("revenueAverage")),
+        currency=currency,
+        request_status=request_status,
+        source_vendor=source_vendor,
+        raw_payload={
+            "currency": currency,
+            "calendarEvents": calendar,
+            "status": request_status,
+        },
+    )
+
+
+
+def fetch_yfinance_bundle(
+    symbols: list[str],
+    start_date: str,
+    end_date: str,
+    *,
+    include_estimates: bool = False,
+) -> tuple[list[SecuritySeed], list[PriceBar], list[NewsRecord]] | tuple[list[SecuritySeed], list[PriceBar], list[NewsRecord], list[EstimateSnapshot], list[EarningsCalendarEvent]]:
     securities: list[SecuritySeed] = []
     prices: list[PriceBar] = []
     news_items: list[NewsRecord] = []
+    estimates: list[EstimateSnapshot] = []
+    earnings_calendar: list[EarningsCalendarEvent] = []
 
     start_dt = (_parse_datetime(start_date) or _now_utc()).replace(hour=0, minute=0, second=0, microsecond=0)
     end_dt = ((_parse_datetime(end_date) or _now_utc()).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1))
@@ -892,12 +1022,29 @@ def fetch_yfinance_bundle(symbols: list[str], start_date: str, end_date: str) ->
         try:
             summary_payload = request_json(
                 YAHOO_QUOTE_SUMMARY_URL.format(symbol=symbol),
-                params={"modules": "assetProfile,price,defaultKeyStatistics,financialData,earningsTrend"},
+                params={"modules": "assetProfile,price,defaultKeyStatistics,financialData,earningsTrend,calendarEvents"},
                 headers=headers,
             )
             summary_result = ((summary_payload.get("quoteSummary") or {}).get("result") or [{}])[0]
         except Exception:
             summary_result = {}
+        if include_estimates and summary_result:
+            estimates.extend(
+                build_estimate_snapshots_from_yahoo_summary(
+                    symbol,
+                    summary_result,
+                    snapshot_date=end_date,
+                    source_vendor="yfinance-demo",
+                )
+            )
+            earnings_event = build_earnings_calendar_from_yahoo_summary(
+                symbol,
+                summary_result,
+                snapshot_date=end_date,
+                source_vendor="yfinance-demo",
+            )
+            if earnings_event is not None:
+                earnings_calendar.append(earnings_event)
 
         asset_profile = summary_result.get("assetProfile") or summary_result.get("summaryProfile") or {}
         price_module = summary_result.get("price") or {}
@@ -1028,6 +1175,8 @@ def fetch_yfinance_bundle(symbols: list[str], start_date: str, end_date: str) ->
                 )
             )
 
+    if include_estimates:
+        return securities, prices, news_items, estimates, earnings_calendar
     return securities, prices, news_items
 
 
@@ -1140,6 +1289,8 @@ def build_real_bundle(
     yfinance_securities: list[SecuritySeed] = []
     yfinance_prices: list[PriceBar] = []
     yfinance_news: list[NewsRecord] = []
+    yfinance_estimates: list[EstimateSnapshot] = []
+    yfinance_earnings_calendar: list[EarningsCalendarEvent] = []
     polygon_securities: list[SecuritySeed] = []
     polygon_prices: list[PriceBar] = []
     polygon_news: list[NewsRecord] = []
@@ -1150,9 +1301,9 @@ def build_real_bundle(
         polygon_securities, polygon_prices = fetch_polygon_bundle(symbols, start_date, end_date, polygon_api_key)
         polygon_news = fetch_polygon_news(symbols, polygon_api_key)
         if include_yfinance_supplement:
-            yfinance_securities, _unused_prices, yfinance_news = fetch_yfinance_bundle(symbols, start_date, end_date)
+            yfinance_securities, _unused_prices, yfinance_news, yfinance_estimates, yfinance_earnings_calendar = fetch_yfinance_bundle(symbols, start_date, end_date, include_estimates=True)
     elif price_provider == "yfinance":
-        yfinance_securities, yfinance_prices, yfinance_news = fetch_yfinance_bundle(symbols, start_date, end_date)
+        yfinance_securities, yfinance_prices, yfinance_news, yfinance_estimates, yfinance_earnings_calendar = fetch_yfinance_bundle(symbols, start_date, end_date, include_estimates=True)
     else:
         raise RuntimeError(f"Unsupported price provider: {price_provider}")
 
@@ -1269,6 +1420,8 @@ def build_real_bundle(
         security_themes=security_themes,
         prices=prices,
         financials=financials,
+        estimates=yfinance_estimates,
+        earnings_calendar=yfinance_earnings_calendar,
         filings=filings,
         news=polygon_news or yfinance_news,
         institutional_activity=institutional_activity,

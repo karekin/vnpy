@@ -4,7 +4,10 @@ import csv
 import hashlib
 import json
 import math
-from datetime import datetime, timezone
+import os
+import re
+import time
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -14,6 +17,15 @@ from psycopg.types.json import Jsonb
 from .cn_sources import build_cn_stock_bundle
 from .config import Settings
 from .db import connect
+from .options_chain import OPTION_CHAIN_SCHEMA_SQL, refresh_option_chain_for_symbol
+from .price_map import build_price_map as build_price_map_snapshot
+from .price_map import build_technical_snapshot
+from .price_map_deerflow import (
+    build_deerflow_price_map_prompt,
+    extract_json_object as extract_deerflow_price_json,
+    extract_latest_ai_content_from_history,
+    price_map_from_deerflow_payload,
+)
 from .real_sources import SEC_ARCHIVES_URL, THEME_CATALOG, build_financial_snapshot_from_sec, build_real_bundle
 from .scoring import build_score_components, classify_stage, explain_components
 from .signals import extract_signal
@@ -188,6 +200,42 @@ CREATE TABLE IF NOT EXISTS ods.security_institutional_activity_raw (
     payload_hash TEXT
 );
 
+CREATE TABLE IF NOT EXISTS ods.us_analyst_estimate_raw (
+    market TEXT NOT NULL DEFAULT 'US',
+    symbol TEXT NOT NULL,
+    snapshot_date DATE NOT NULL,
+    fiscal_year_offset INTEGER,
+    period_label TEXT,
+    revenue_estimate NUMERIC(18,2),
+    eps_estimate NUMERIC(18,4),
+    analyst_count INTEGER,
+    currency TEXT,
+    request_status TEXT,
+    source_vendor TEXT NOT NULL,
+    ingest_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw_payload JSONB NOT NULL,
+    payload_hash TEXT,
+    PRIMARY KEY (symbol, snapshot_date, fiscal_year_offset)
+);
+
+CREATE TABLE IF NOT EXISTS ods.us_earnings_calendar_raw (
+    event_id TEXT PRIMARY KEY,
+    market TEXT NOT NULL DEFAULT 'US',
+    symbol TEXT NOT NULL,
+    snapshot_date DATE NOT NULL,
+    earnings_date DATE,
+    fiscal_period TEXT,
+    time_of_day TEXT,
+    eps_estimate NUMERIC(18,4),
+    revenue_estimate NUMERIC(18,2),
+    currency TEXT,
+    request_status TEXT,
+    source_vendor TEXT NOT NULL,
+    ingest_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw_payload JSONB NOT NULL,
+    payload_hash TEXT
+);
+
 CREATE TABLE IF NOT EXISTS ods.user_watch_action_raw (
     action_id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -225,6 +273,30 @@ CREATE TABLE IF NOT EXISTS dwd.security_market_daily (
     PRIMARY KEY (security_id, trade_date)
 );
 
+CREATE TABLE IF NOT EXISTS dwd.security_price_technical_daily (
+    security_id INTEGER NOT NULL,
+    market TEXT NOT NULL DEFAULT 'US',
+    symbol TEXT NOT NULL,
+    trade_date DATE NOT NULL,
+    close NUMERIC(18,4),
+    high_52w NUMERIC(18,4),
+    low_52w NUMERIC(18,4),
+    position_52w NUMERIC(10,4),
+    ma20 NUMERIC(18,4),
+    ma60 NUMERIC(18,4),
+    ma120 NUMERIC(18,4),
+    ma250 NUMERIC(18,4),
+    atr14 NUMERIC(18,4),
+    volatility20 NUMERIC(18,6),
+    support_level NUMERIC(18,4),
+    resistance_level NUMERIC(18,4),
+    volume_price_low NUMERIC(18,4),
+    volume_price_high NUMERIC(18,4),
+    valuation_percentile NUMERIC(10,4),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (security_id, trade_date)
+);
+
 CREATE TABLE IF NOT EXISTS dwd.security_financial_quarterly (
     security_id INTEGER NOT NULL,
     market TEXT NOT NULL DEFAULT 'US',
@@ -243,6 +315,42 @@ CREATE TABLE IF NOT EXISTS dwd.security_financial_quarterly (
     net_cash NUMERIC(18,2),
     shares_outstanding NUMERIC(18,2),
     PRIMARY KEY (security_id, report_period)
+);
+
+CREATE TABLE IF NOT EXISTS dwd.security_estimate_current (
+    security_id INTEGER PRIMARY KEY,
+    market TEXT NOT NULL DEFAULT 'US',
+    symbol TEXT NOT NULL,
+    snapshot_date DATE NOT NULL,
+    fy1_revenue_estimate NUMERIC(18,2),
+    fy2_revenue_estimate NUMERIC(18,2),
+    fy1_eps NUMERIC(18,4),
+    fy2_eps NUMERIC(18,4),
+    fy1_analyst_count INTEGER,
+    fy2_analyst_count INTEGER,
+    currency TEXT,
+    data_quality_flag TEXT NOT NULL,
+    source_vendor TEXT,
+    raw_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS dwd.security_earnings_calendar_current (
+    security_id INTEGER PRIMARY KEY,
+    market TEXT NOT NULL DEFAULT 'US',
+    symbol TEXT NOT NULL,
+    snapshot_date DATE NOT NULL,
+    next_earnings_date DATE,
+    days_to_earnings INTEGER,
+    fiscal_period TEXT,
+    time_of_day TEXT,
+    eps_estimate NUMERIC(18,4),
+    revenue_estimate NUMERIC(18,2),
+    currency TEXT,
+    data_quality_flag TEXT NOT NULL,
+    source_vendor TEXT,
+    raw_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS dwd.security_event_timeline (
@@ -379,6 +487,59 @@ CREATE TABLE IF NOT EXISTS dws.security_candidate_rank_daily (
     PRIMARY KEY (security_id, trade_date)
 );
 
+CREATE TABLE IF NOT EXISTS dws.security_target_range_daily (
+    security_id INTEGER NOT NULL,
+    market TEXT NOT NULL DEFAULT 'US',
+    symbol TEXT NOT NULL,
+    trade_date DATE NOT NULL,
+    scenario TEXT NOT NULL,
+    horizon TEXT NOT NULL,
+    target_low NUMERIC(18,4),
+    target_high NUMERIC(18,4),
+    target_mid NUMERIC(18,4),
+    upside_pct_mid NUMERIC(18,6),
+    method TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    assumptions JSONB NOT NULL DEFAULT '{}'::jsonb,
+    evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (security_id, trade_date, scenario, horizon)
+);
+
+CREATE TABLE IF NOT EXISTS dws.security_key_level_daily (
+    level_id TEXT PRIMARY KEY,
+    security_id INTEGER NOT NULL,
+    market TEXT NOT NULL DEFAULT 'US',
+    symbol TEXT NOT NULL,
+    trade_date DATE NOT NULL,
+    level_type TEXT NOT NULL,
+    level_low NUMERIC(18,4),
+    level_high NUMERIC(18,4),
+    strength TEXT NOT NULL,
+    distance_pct NUMERIC(18,6),
+    source TEXT NOT NULL,
+    note TEXT NOT NULL,
+    evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS dws.security_scenario_path_daily (
+    path_id TEXT PRIMARY KEY,
+    security_id INTEGER NOT NULL,
+    market TEXT NOT NULL DEFAULT 'US',
+    symbol TEXT NOT NULL,
+    trade_date DATE NOT NULL,
+    path_name TEXT NOT NULL,
+    probability INTEGER NOT NULL,
+    confidence TEXT NOT NULL,
+    trigger TEXT NOT NULL,
+    target_scenario TEXT NOT NULL,
+    invalidation TEXT NOT NULL,
+    explanation TEXT NOT NULL,
+    evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS ads.candidate_pool_daily (
     security_id INTEGER NOT NULL,
     market TEXT NOT NULL DEFAULT 'US',
@@ -405,6 +566,63 @@ CREATE TABLE IF NOT EXISTS ads.research_card_current (
     evidence_refs JSONB NOT NULL,
     stage TEXT NOT NULL,
     total_score NUMERIC(10,2) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ads.price_map_current (
+    security_id INTEGER PRIMARY KEY,
+    market TEXT NOT NULL DEFAULT 'US',
+    symbol TEXT NOT NULL,
+    as_of_date DATE NOT NULL,
+    current_price NUMERIC(18,4),
+    posture TEXT NOT NULL,
+    posture_label TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    base_target JSONB NOT NULL,
+    bull_target JSONB NOT NULL,
+    bear_zone JSONB NOT NULL,
+    key_levels JSONB NOT NULL DEFAULT '[]'::jsonb,
+    scenario_paths JSONB NOT NULL DEFAULT '[]'::jsonb,
+    invalidation_rules JSONB NOT NULL DEFAULT '[]'::jsonb,
+    evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+    explanation JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS ads.price_map_history_daily (
+    security_id INTEGER NOT NULL,
+    market TEXT NOT NULL DEFAULT 'US',
+    symbol TEXT NOT NULL,
+    snapshot_date DATE NOT NULL,
+    current_price NUMERIC(18,4),
+    confidence TEXT NOT NULL,
+    method TEXT NOT NULL,
+    base_target JSONB NOT NULL,
+    bull_target JSONB NOT NULL,
+    bear_zone JSONB NOT NULL,
+    explanation JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (security_id, snapshot_date)
+);
+
+CREATE TABLE IF NOT EXISTS ads.price_map_hit_review_daily (
+    security_id INTEGER NOT NULL,
+    market TEXT NOT NULL DEFAULT 'US',
+    symbol TEXT NOT NULL,
+    snapshot_date DATE NOT NULL,
+    review_date DATE NOT NULL,
+    horizon_days INTEGER NOT NULL,
+    base_hit BOOLEAN,
+    bull_hit BOOLEAN,
+    bear_breached BOOLEAN,
+    max_close NUMERIC(18,4),
+    min_close NUMERIC(18,4),
+    base_target_mid NUMERIC(18,4),
+    bull_target_low NUMERIC(18,4),
+    bear_zone_high NUMERIC(18,4),
+    hit_summary TEXT NOT NULL,
+    metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (security_id, snapshot_date, review_date)
 );
 
 CREATE TABLE IF NOT EXISTS ads.watchlist_alert_daily (
@@ -689,6 +907,8 @@ def _sanitize_for_json(value: Any) -> Any:
         return [_sanitize_for_json(item) for item in value]
     if isinstance(value, tuple):
         return [_sanitize_for_json(item) for item in value]
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
     if isinstance(value, float) and math.isnan(value):
         return None
     return value
@@ -869,6 +1089,7 @@ ALTER TABLE IF EXISTS ads.theme_radar_daily ADD COLUMN IF NOT EXISTS market TEXT
 def ensure_schema(settings: Settings) -> None:
     with connect(settings) as conn:
         conn.execute(SCHEMA_SQL)
+        conn.execute(OPTION_CHAIN_SCHEMA_SQL)
         _sync_existing_ods_schema(conn, settings)
 
 
@@ -877,17 +1098,27 @@ def reset_all(settings: Settings) -> None:
     with connect(settings) as conn:
         conn.execute(DROP_AND_RECREATE_SQL)
         conn.execute(SCHEMA_SQL)
+        conn.execute(OPTION_CHAIN_SCHEMA_SQL)
 
 
 def _clear_market_data(conn, market: str) -> None:
+    conn.execute("DELETE FROM ads.price_map_hit_review_daily WHERE market = %s", (market,))
+    conn.execute("DELETE FROM ads.price_map_history_daily WHERE market = %s", (market,))
+    conn.execute("DELETE FROM ads.price_map_current WHERE market = %s", (market,))
     conn.execute("DELETE FROM ads.watchlist_alert_daily WHERE market = %s", (market,))
     conn.execute("DELETE FROM ads.theme_radar_daily WHERE market = %s", (market,))
     conn.execute("DELETE FROM ads.candidate_pool_daily WHERE market = %s", (market,))
     conn.execute("DELETE FROM ads.research_card_current WHERE market = %s", (market,))
+    conn.execute("DELETE FROM dws.security_scenario_path_daily WHERE market = %s", (market,))
+    conn.execute("DELETE FROM dws.security_key_level_daily WHERE market = %s", (market,))
+    conn.execute("DELETE FROM dws.security_target_range_daily WHERE market = %s", (market,))
     conn.execute("DELETE FROM dws.theme_heat_daily WHERE market = %s", (market,))
     conn.execute("DELETE FROM dws.security_candidate_rank_daily WHERE market = %s", (market,))
     conn.execute("DELETE FROM dws.security_score_component_daily WHERE market = %s", (market,))
     conn.execute("DELETE FROM dws.security_feature_daily WHERE market = %s", (market,))
+    conn.execute("DELETE FROM dwd.security_price_technical_daily WHERE market = %s", (market,))
+    conn.execute("DELETE FROM dwd.security_earnings_calendar_current WHERE market = %s", (market,))
+    conn.execute("DELETE FROM dwd.security_estimate_current WHERE market = %s", (market,))
     conn.execute("DELETE FROM dwd.user_alert_rule_current WHERE market = %s", (market,))
     conn.execute("DELETE FROM dwd.user_watchlist_state_current WHERE market = %s", (market,))
     conn.execute("DELETE FROM dwd.security_document_signal WHERE market = %s", (market,))
@@ -896,6 +1127,8 @@ def _clear_market_data(conn, market: str) -> None:
     conn.execute("DELETE FROM dwd.security_market_daily WHERE market = %s", (market,))
     conn.execute("DELETE FROM ods.user_watch_action_raw WHERE market = %s", (market,))
     conn.execute("DELETE FROM ods.security_institutional_activity_raw WHERE market = %s", (market,))
+    conn.execute("DELETE FROM ods.us_earnings_calendar_raw WHERE market = %s", (market,))
+    conn.execute("DELETE FROM ods.us_analyst_estimate_raw WHERE market = %s", (market,))
     conn.execute("DELETE FROM ods.security_news_article_raw WHERE market = %s", (market,))
     conn.execute("DELETE FROM ods.sec_filing_document_raw WHERE market = %s", (market,))
     conn.execute("DELETE FROM ods.security_financial_statement_raw WHERE market = %s", (market,))
@@ -1134,6 +1367,97 @@ def _insert_financial_rows(conn, financials: list[Any]) -> None:
                 _coalesce(_safe_str(_row_get(row, "data_quality_flag")), "parsed" if _row_get(row, "revenue") not in (None, "") else "missing_revenue"),
                 _coalesce(_safe_bool(_row_get(row, "restatement_flag")), _safe_bool(revenue_fact.get("restated"))),
                 _coalesce(_row_get(row, "source_vendor"), "sec-companyfacts"),
+                _json(payload),
+                _payload_hash(payload),
+            ),
+        )
+
+
+def _insert_estimate_rows(conn, estimates: list[Any]) -> None:
+    for row in estimates:
+        payload = _row_get(row, "raw_payload") or (dict(row) if isinstance(row, dict) else dict(getattr(row, "__dict__", {})))
+        fiscal_year_offset = _safe_int(_coalesce(_row_get(row, "fiscal_year_offset"), payload.get("fiscalYearOffset") if isinstance(payload, dict) else None))
+        if fiscal_year_offset is None:
+            fiscal_year_offset = 2 if _safe_str(_row_get(row, "period_label")) == "+1y" else 1
+        conn.execute(
+            """
+            INSERT INTO ods.us_analyst_estimate_raw (
+                market, symbol, snapshot_date, fiscal_year_offset, period_label,
+                revenue_estimate, eps_estimate, analyst_count, currency,
+                request_status, source_vendor, raw_payload, payload_hash
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (symbol, snapshot_date, fiscal_year_offset) DO UPDATE SET
+                market = EXCLUDED.market,
+                period_label = EXCLUDED.period_label,
+                revenue_estimate = EXCLUDED.revenue_estimate,
+                eps_estimate = EXCLUDED.eps_estimate,
+                analyst_count = EXCLUDED.analyst_count,
+                currency = EXCLUDED.currency,
+                request_status = EXCLUDED.request_status,
+                source_vendor = EXCLUDED.source_vendor,
+                raw_payload = EXCLUDED.raw_payload,
+                payload_hash = EXCLUDED.payload_hash
+            """,
+            (
+                _coalesce(_safe_str(_row_get(row, "market")), "US"),
+                _row_get(row, "symbol"),
+                _normalize_date(_row_get(row, "snapshot_date")),
+                fiscal_year_offset,
+                _safe_str(_row_get(row, "period_label")),
+                _blank_to_none(_coalesce(_row_get(row, "next_year_revenue_estimate"), _row_get(row, "revenue_estimate"))),
+                _blank_to_none(_coalesce(_row_get(row, "next_year_eps"), _row_get(row, "eps_estimate"))),
+                _blank_to_none(_row_get(row, "analyst_count")),
+                _coalesce(_safe_str(_row_get(row, "currency")), "USD"),
+                _coalesce(_safe_str(_row_get(row, "request_status")), "unknown"),
+                _coalesce(_row_get(row, "source_vendor"), "analyst-estimate"),
+                _json(payload),
+                _payload_hash(payload),
+            ),
+        )
+
+
+def _insert_earnings_calendar_rows(conn, earnings_calendar: list[Any]) -> None:
+    for row in earnings_calendar:
+        payload = _row_get(row, "raw_payload") or (dict(row) if isinstance(row, dict) else dict(getattr(row, "__dict__", {})))
+        event_id = _coalesce(
+            _safe_str(_row_get(row, "event_id")),
+            f"earnings::{_row_get(row, 'symbol')}::{_normalize_date(_row_get(row, 'snapshot_date'))}",
+        )
+        conn.execute(
+            """
+            INSERT INTO ods.us_earnings_calendar_raw (
+                event_id, market, symbol, snapshot_date, earnings_date, fiscal_period,
+                time_of_day, eps_estimate, revenue_estimate, currency,
+                request_status, source_vendor, raw_payload, payload_hash
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (event_id) DO UPDATE SET
+                market = EXCLUDED.market,
+                symbol = EXCLUDED.symbol,
+                snapshot_date = EXCLUDED.snapshot_date,
+                earnings_date = EXCLUDED.earnings_date,
+                fiscal_period = EXCLUDED.fiscal_period,
+                time_of_day = EXCLUDED.time_of_day,
+                eps_estimate = EXCLUDED.eps_estimate,
+                revenue_estimate = EXCLUDED.revenue_estimate,
+                currency = EXCLUDED.currency,
+                request_status = EXCLUDED.request_status,
+                source_vendor = EXCLUDED.source_vendor,
+                raw_payload = EXCLUDED.raw_payload,
+                payload_hash = EXCLUDED.payload_hash
+            """,
+            (
+                event_id,
+                _coalesce(_safe_str(_row_get(row, "market")), "US"),
+                _row_get(row, "symbol"),
+                _normalize_date(_row_get(row, "snapshot_date")),
+                _normalize_date(_row_get(row, "earnings_date")),
+                _safe_str(_row_get(row, "fiscal_period")),
+                _safe_str(_row_get(row, "time_of_day")),
+                _blank_to_none(_row_get(row, "eps_estimate")),
+                _blank_to_none(_row_get(row, "revenue_estimate")),
+                _coalesce(_safe_str(_row_get(row, "currency")), "USD"),
+                _coalesce(_safe_str(_row_get(row, "request_status")), "unknown"),
+                _coalesce(_row_get(row, "source_vendor"), "earnings-calendar"),
                 _json(payload),
                 _payload_hash(payload),
             ),
@@ -1555,6 +1879,20 @@ def bootstrap_real_data(settings: Settings, reset: bool = True, market: str = "U
                 }
                 for item in us_bundle.financials
             ],
+            "estimates": [
+                {
+                    **dict(item.__dict__),
+                    "market": "US",
+                }
+                for item in us_bundle.estimates
+            ],
+            "earnings_calendar": [
+                {
+                    **dict(item.__dict__),
+                    "market": "US",
+                }
+                for item in us_bundle.earnings_calendar
+            ],
             "filings": [
                 {
                     **dict(item.__dict__),
@@ -1607,6 +1945,10 @@ def bootstrap_real_data(settings: Settings, reset: bool = True, market: str = "U
         _insert_price_rows(conn, bundle["prices"])
         if bundle["financials"]:
             _insert_financial_rows(conn, bundle["financials"])
+        if bundle.get("estimates"):
+            _insert_estimate_rows(conn, bundle["estimates"])
+        if bundle.get("earnings_calendar"):
+            _insert_earnings_calendar_rows(conn, bundle["earnings_calendar"])
         if bundle["filings"]:
             _insert_filings_rows(conn, storage, bundle["filings"])
         if bundle["news"]:
@@ -1634,6 +1976,8 @@ def bootstrap_sample_data(settings: Settings, reset: bool = True) -> None:
     filings = _read_json(data_dir / "filings.json")
     news_items = _enrich_news_rows(data_dir, _read_json(data_dir / "news.json"))
     institutional_activity = _read_json(data_dir / "institutional_activity.json") if (data_dir / "institutional_activity.json").exists() else []
+    estimates = _read_json(data_dir / "estimates.json") if (data_dir / "estimates.json").exists() else []
+    earnings_calendar = _read_json(data_dir / "earnings_calendar.json") if (data_dir / "earnings_calendar.json").exists() else []
     watch_actions = _read_csv(data_dir / "watch_actions.csv")
 
     with connect(settings) as conn:
@@ -1686,6 +2030,10 @@ def bootstrap_sample_data(settings: Settings, reset: bool = True) -> None:
             _insert_price_rows(conn, prices)
         if financials:
             _insert_financial_rows(conn, financials)
+        if estimates:
+            _insert_estimate_rows(conn, estimates)
+        if earnings_calendar:
+            _insert_earnings_calendar_rows(conn, earnings_calendar)
         if filings:
             _insert_filings_rows(conn, storage, filings)
         if news_items:
@@ -1705,6 +2053,8 @@ def build_dwd(settings: Settings) -> None:
                 dwd.user_watchlist_state_current,
                 dwd.security_document_signal,
                 dwd.security_event_timeline,
+                dwd.security_earnings_calendar_current,
+                dwd.security_estimate_current,
                 dwd.security_financial_quarterly,
                 dwd.security_market_daily
             RESTART IDENTITY CASCADE;
@@ -1813,6 +2163,91 @@ def build_dwd(settings: Settings) -> None:
                 f.shares_outstanding
             FROM ods.security_financial_statement_raw f
             JOIN dim.security s ON s.symbol = f.symbol AND s.market = f.market;
+            """
+        )
+
+        conn.execute(
+            """
+            WITH latest_estimate_dates AS (
+                SELECT market, symbol, MAX(snapshot_date) AS snapshot_date
+                FROM ods.us_analyst_estimate_raw
+                GROUP BY market, symbol
+            ),
+            latest_estimates AS (
+                SELECT e.*
+                FROM ods.us_analyst_estimate_raw e
+                JOIN latest_estimate_dates led
+                  ON led.market = e.market
+                 AND led.symbol = e.symbol
+                 AND led.snapshot_date = e.snapshot_date
+            )
+            INSERT INTO dwd.security_estimate_current (
+                security_id, market, symbol, snapshot_date,
+                fy1_revenue_estimate, fy2_revenue_estimate, fy1_eps, fy2_eps,
+                fy1_analyst_count, fy2_analyst_count, currency,
+                data_quality_flag, source_vendor, raw_payload
+            )
+            SELECT
+                s.security_id,
+                s.market,
+                e.symbol,
+                MAX(e.snapshot_date) AS snapshot_date,
+                MAX(e.revenue_estimate) FILTER (WHERE e.fiscal_year_offset = 1) AS fy1_revenue_estimate,
+                MAX(e.revenue_estimate) FILTER (WHERE e.fiscal_year_offset = 2) AS fy2_revenue_estimate,
+                MAX(e.eps_estimate) FILTER (WHERE e.fiscal_year_offset = 1) AS fy1_eps,
+                MAX(e.eps_estimate) FILTER (WHERE e.fiscal_year_offset = 2) AS fy2_eps,
+                MAX(e.analyst_count) FILTER (WHERE e.fiscal_year_offset = 1) AS fy1_analyst_count,
+                MAX(e.analyst_count) FILTER (WHERE e.fiscal_year_offset = 2) AS fy2_analyst_count,
+                COALESCE(MAX(e.currency), 'USD') AS currency,
+                CASE
+                    WHEN COUNT(*) FILTER (WHERE e.request_status = 'ok') > 0 THEN 'ok'
+                    ELSE 'partial'
+                END AS data_quality_flag,
+                MAX(e.source_vendor) AS source_vendor,
+                jsonb_object_agg(COALESCE(e.period_label, e.fiscal_year_offset::text), e.raw_payload) AS raw_payload
+            FROM latest_estimates e
+            JOIN dim.security s ON s.symbol = e.symbol AND s.market = e.market
+            GROUP BY s.security_id, s.market, e.symbol;
+            """
+        )
+
+        conn.execute(
+            """
+            WITH ranked_events AS (
+                SELECT
+                    e.*,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY e.market, e.symbol
+                        ORDER BY
+                            CASE WHEN e.earnings_date >= e.snapshot_date THEN 0 ELSE 1 END,
+                            e.earnings_date NULLS LAST,
+                            e.snapshot_date DESC
+                    ) AS rn
+                FROM ods.us_earnings_calendar_raw e
+            )
+            INSERT INTO dwd.security_earnings_calendar_current (
+                security_id, market, symbol, snapshot_date, next_earnings_date, days_to_earnings,
+                fiscal_period, time_of_day, eps_estimate, revenue_estimate, currency,
+                data_quality_flag, source_vendor, raw_payload
+            )
+            SELECT
+                s.security_id,
+                s.market,
+                e.symbol,
+                e.snapshot_date,
+                e.earnings_date AS next_earnings_date,
+                CASE WHEN e.earnings_date IS NULL THEN NULL ELSE e.earnings_date - e.snapshot_date END AS days_to_earnings,
+                e.fiscal_period,
+                e.time_of_day,
+                e.eps_estimate,
+                e.revenue_estimate,
+                COALESCE(e.currency, 'USD') AS currency,
+                CASE WHEN e.request_status = 'ok' AND e.earnings_date IS NOT NULL THEN 'ok' ELSE 'partial' END AS data_quality_flag,
+                e.source_vendor,
+                e.raw_payload
+            FROM ranked_events e
+            JOIN dim.security s ON s.symbol = e.symbol AND s.market = e.market
+            WHERE e.rn = 1;
             """
         )
 
@@ -2030,9 +2465,13 @@ def build_dws(settings: Settings) -> None:
             """
             TRUNCATE TABLE
                 dws.security_candidate_rank_daily,
+                dws.security_scenario_path_daily,
+                dws.security_key_level_daily,
+                dws.security_target_range_daily,
                 dws.theme_heat_daily,
                 dws.security_score_component_daily,
-                dws.security_feature_daily
+                dws.security_feature_daily,
+                dwd.security_price_technical_daily
             RESTART IDENTITY CASCADE;
             """
         )
@@ -2322,6 +2761,7 @@ def build_ads(settings: Settings) -> None:
         conn.execute(
             """
             TRUNCATE TABLE
+                ads.price_map_current,
                 ads.watchlist_alert_daily,
                 ads.research_card_current,
                 ads.candidate_pool_daily,
@@ -2564,10 +3004,637 @@ def build_ads(settings: Settings) -> None:
             )
 
 
+def _target_range_payload(target) -> dict[str, Any]:
+    return {
+        "scenario": target.scenario,
+        "horizon": target.horizon,
+        "low": target.target_low,
+        "high": target.target_high,
+        "mid": target.target_mid,
+        "upside_pct_mid": target.upside_pct_mid,
+        "method": target.method,
+        "confidence": target.confidence,
+        "assumptions": target.assumptions,
+        "evidence_refs": target.evidence_refs,
+    }
+
+
+def _key_level_payload(level) -> dict[str, Any]:
+    return {
+        "level_type": level.level_type,
+        "label": level.note,
+        "low": level.level_low,
+        "high": level.level_high,
+        "strength": level.strength,
+        "distance_pct": level.distance_pct,
+        "source": level.source,
+        "note": level.note,
+        "evidence_refs": level.evidence_refs,
+    }
+
+
+def _scenario_path_payload(path) -> dict[str, Any]:
+    return {
+        "name": path.path_name,
+        "probability": path.probability,
+        "confidence": path.confidence,
+        "trigger": path.trigger,
+        "target_scenario": path.target_scenario,
+        "invalidation": path.invalidation,
+        "explanation": path.explanation,
+        "evidence_refs": path.evidence_refs,
+    }
+
+
+def _price_map_with_deerflow(
+    *,
+    settings: Settings,
+    market: str,
+    symbol: str,
+    trade_date: Any,
+    technical: Any,
+    latest_market_row: dict[str, Any],
+    financial: dict[str, Any] | None,
+    score: dict[str, Any] | None,
+    option_summary: dict[str, Any] | None,
+    estimate: dict[str, Any] | None,
+    earnings_calendar: dict[str, Any] | None,
+    evidence_refs: list[str],
+):
+    baseline = build_price_map_snapshot(
+        technical,
+        latest_market_row,
+        financial,
+        score,
+        option_summary,
+        estimate,
+        earnings_calendar,
+        evidence_refs,
+    )
+    if not settings.price_map_deerflow_enabled:
+        return baseline
+
+    from vnpy.web.services.deerflow_service import DeerFlowService
+
+    thread_id = f"tenx-price-map-{market.lower()}-{symbol.lower().replace('.', '-')}-{trade_date}"
+    prompt = build_deerflow_price_map_prompt(
+        market=market,
+        symbol=symbol,
+        trade_date=trade_date,
+        technical=technical,
+        market_row=latest_market_row,
+        financial=financial,
+        score_row=score,
+        option_summary=option_summary,
+        estimate=estimate,
+        earnings_calendar=earnings_calendar,
+        evidence_refs=evidence_refs,
+        baseline=baseline,
+    )
+    deerflow = DeerFlowService()
+    result = deerflow.chat(prompt, thread_id=thread_id)
+    if not result.ok:
+        recovered_content = _recover_deerflow_price_map_content(deerflow, thread_id, result.error or "")
+        if recovered_content:
+            try:
+                payload = extract_deerflow_price_json(recovered_content)
+                return price_map_from_deerflow_payload(
+                    fallback=baseline,
+                    payload=payload,
+                    current_price=technical.close,
+                    deerflow_thread_id=thread_id,
+                )
+            except Exception as exc:
+                if settings.price_map_deerflow_required:
+                    raise
+                baseline.explanation["deerflow"] = f"DeerFlow 延迟结果无法解析，已保留本地基线：{exc}"
+                return baseline
+        if settings.price_map_deerflow_required:
+            raise RuntimeError(result.error or "DeerFlow price map analysis failed")
+        baseline.explanation["deerflow"] = f"DeerFlow 价格解析失败，已保留本地基线：{result.error or result.backend}"
+        return baseline
+
+    try:
+        payload = extract_deerflow_price_json(result.content)
+        return price_map_from_deerflow_payload(
+            fallback=baseline,
+            payload=payload,
+            current_price=technical.close,
+            deerflow_thread_id=result.thread_id or thread_id,
+        )
+    except Exception as exc:
+        if settings.price_map_deerflow_required:
+            raise
+        baseline.explanation["deerflow"] = f"DeerFlow 返回无法解析，已保留本地基线：{exc}"
+        return baseline
+
+
+def _recover_deerflow_price_map_content(deerflow: Any, thread_id: str, error: str) -> str | None:
+    if "504" not in error and "timeout" not in error.lower() and "time-out" not in error.lower():
+        return None
+    deadline = time.monotonic() + 180
+    while time.monotonic() < deadline:
+        try:
+            history = deerflow.get_history(thread_id, limit=3)
+            content = extract_latest_ai_content_from_history(history)
+            if content:
+                return content
+        except Exception:
+            pass
+        time.sleep(5)
+    return None
+
+
+def _price_map_symbol_filter() -> list[str]:
+    raw = os.getenv("TENX_PRICE_MAP_SYMBOLS", "").strip()
+    if not raw:
+        return []
+    return [item.strip().upper() for item in re.split(r"[\s,]+", raw) if item.strip()]
+
+
+def build_price_map(settings: Settings) -> None:
+    with connect(settings) as conn:
+        symbol_filter = _price_map_symbol_filter()
+        if symbol_filter:
+            for table in (
+                "ads.watchlist_alert_daily",
+                "ads.price_map_hit_review_daily",
+                "ads.price_map_history_daily",
+                "ads.price_map_current",
+                "dws.security_scenario_path_daily",
+                "dws.security_key_level_daily",
+                "dws.security_target_range_daily",
+                "dwd.security_price_technical_daily",
+            ):
+                conn.execute(f"DELETE FROM {table} WHERE UPPER(symbol) = ANY(%s)", (symbol_filter,))
+        else:
+            conn.execute(
+                """
+                TRUNCATE TABLE
+                    ads.price_map_current,
+                    dws.security_scenario_path_daily,
+                    dws.security_key_level_daily,
+                    dws.security_target_range_daily,
+                    dwd.security_price_technical_daily
+                RESTART IDENTITY CASCADE;
+                """
+            )
+
+        latest_trade_dates = conn.execute(
+            """
+            SELECT market, MAX(trade_date) AS trade_date
+            FROM dwd.security_market_daily
+            GROUP BY market
+            """
+        ).fetchall()
+        latest_trade_date_by_market = {row["market"]: row["trade_date"] for row in latest_trade_dates}
+
+        securities_sql = "SELECT security_id, market, symbol FROM dim.security"
+        securities_params: tuple[Any, ...] = ()
+        if symbol_filter:
+            securities_sql += " WHERE UPPER(symbol) = ANY(%s)"
+            securities_params = (symbol_filter,)
+        securities = conn.execute(f"{securities_sql} ORDER BY market, symbol", securities_params).fetchall()
+        for security in securities:
+            security_id = security["security_id"]
+            market = security["market"]
+            trade_date = latest_trade_date_by_market.get(market)
+            if trade_date is None:
+                continue
+
+            price_rows = conn.execute(
+                """
+                SELECT *
+                FROM dwd.security_market_daily
+                WHERE security_id = %s
+                ORDER BY trade_date
+                """,
+                (security_id,),
+            ).fetchall()
+            technical = build_technical_snapshot([dict(row) for row in price_rows])
+            if technical is None:
+                continue
+
+            latest_market_row = next((row for row in reversed(price_rows) if row["trade_date"] == trade_date), price_rows[-1])
+            financial = conn.execute(
+                """
+                SELECT *
+                FROM dwd.security_financial_quarterly
+                WHERE security_id = %s
+                ORDER BY report_period DESC
+                LIMIT 1
+                """,
+                (security_id,),
+            ).fetchone()
+            score = conn.execute(
+                """
+                SELECT *
+                FROM dws.security_score_component_daily
+                WHERE security_id = %s AND trade_date = %s
+                """,
+                (security_id, trade_date),
+            ).fetchone()
+            evidence_rows = conn.execute(
+                """
+                SELECT object_key
+                FROM dwd.security_event_timeline
+                WHERE security_id = %s
+                ORDER BY event_time DESC
+                LIMIT 3
+                """,
+                (security_id,),
+            ).fetchall()
+            evidence_refs = [row["object_key"] for row in evidence_rows if row["object_key"]]
+            option_summary = None
+            if market == "US":
+                option_row = conn.execute(
+                    """
+                    SELECT *
+                    FROM dws.security_option_chain_summary_daily
+                    WHERE market = %s AND symbol = %s
+                    ORDER BY trade_date DESC
+                    LIMIT 1
+                    """,
+                    (market, security["symbol"]),
+                ).fetchone()
+                option_summary = dict(option_row) if option_row else None
+            estimate = conn.execute(
+                """
+                SELECT *
+                FROM dwd.security_estimate_current
+                WHERE security_id = %s
+                """,
+                (security_id,),
+            ).fetchone()
+            earnings_calendar = conn.execute(
+                """
+                SELECT *
+                FROM dwd.security_earnings_calendar_current
+                WHERE security_id = %s
+                """,
+                (security_id,),
+            ).fetchone()
+            price_map = _price_map_with_deerflow(
+                settings=settings,
+                market=market,
+                symbol=security["symbol"],
+                trade_date=trade_date,
+                technical=technical,
+                latest_market_row=dict(latest_market_row),
+                financial=dict(financial) if financial else None,
+                score=dict(score) if score else None,
+                option_summary=option_summary,
+                estimate=dict(estimate) if estimate else None,
+                earnings_calendar=dict(earnings_calendar) if earnings_calendar else None,
+                evidence_refs=evidence_refs,
+            )
+
+            conn.execute(
+                """
+                INSERT INTO dwd.security_price_technical_daily (
+                    security_id, market, symbol, trade_date, close, high_52w, low_52w, position_52w,
+                    ma20, ma60, ma120, ma250, atr14, volatility20, support_level, resistance_level,
+                    volume_price_low, volume_price_high, valuation_percentile
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    security_id,
+                    market,
+                    security["symbol"],
+                    trade_date,
+                    technical.close,
+                    technical.high_52w,
+                    technical.low_52w,
+                    technical.position_52w,
+                    technical.ma20,
+                    technical.ma60,
+                    technical.ma120,
+                    technical.ma250,
+                    technical.atr14,
+                    technical.volatility20,
+                    technical.support_level,
+                    technical.resistance_level,
+                    technical.volume_price_low,
+                    technical.volume_price_high,
+                    technical.valuation_percentile,
+                ),
+            )
+
+            for target in price_map.targets:
+                conn.execute(
+                    """
+                    INSERT INTO dws.security_target_range_daily (
+                        security_id, market, symbol, trade_date, scenario, horizon, target_low, target_high,
+                        target_mid, upside_pct_mid, method, confidence, assumptions, evidence_refs
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        security_id,
+                        market,
+                        security["symbol"],
+                        trade_date,
+                        target.scenario,
+                        target.horizon,
+                        target.target_low,
+                        target.target_high,
+                        target.target_mid,
+                        target.upside_pct_mid,
+                        target.method,
+                        target.confidence,
+                        _json(target.assumptions),
+                        _json(target.evidence_refs),
+                    ),
+                )
+
+            for level in price_map.key_levels:
+                conn.execute(
+                    """
+                    INSERT INTO dws.security_key_level_daily (
+                        level_id, security_id, market, symbol, trade_date, level_type, level_low, level_high,
+                        strength, distance_pct, source, note, evidence_refs
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        level.level_id,
+                        security_id,
+                        market,
+                        security["symbol"],
+                        trade_date,
+                        level.level_type,
+                        level.level_low,
+                        level.level_high,
+                        level.strength,
+                        level.distance_pct,
+                        level.source,
+                        level.note,
+                        _json(level.evidence_refs),
+                    ),
+                )
+
+            for path in price_map.scenario_paths:
+                conn.execute(
+                    """
+                    INSERT INTO dws.security_scenario_path_daily (
+                        path_id, security_id, market, symbol, trade_date, path_name, probability, confidence,
+                        trigger, target_scenario, invalidation, explanation, evidence_refs
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        path.path_id,
+                        security_id,
+                        market,
+                        security["symbol"],
+                        trade_date,
+                        path.path_name,
+                        path.probability,
+                        path.confidence,
+                        path.trigger,
+                        path.target_scenario,
+                        path.invalidation,
+                        path.explanation,
+                        _json(path.evidence_refs),
+                    ),
+                )
+
+            targets_by_scenario = {target.scenario: target for target in price_map.targets}
+            key_levels = [_key_level_payload(level) for level in price_map.key_levels]
+            scenario_paths = [_scenario_path_payload(path) for path in price_map.scenario_paths]
+            conn.execute(
+                """
+                INSERT INTO ads.price_map_current (
+                    security_id, market, symbol, as_of_date, current_price, posture, posture_label, confidence,
+                    base_target, bull_target, bear_zone, key_levels, scenario_paths, invalidation_rules,
+                    evidence_refs, explanation
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (security_id) DO UPDATE SET
+                    market = EXCLUDED.market,
+                    symbol = EXCLUDED.symbol,
+                    as_of_date = EXCLUDED.as_of_date,
+                    current_price = EXCLUDED.current_price,
+                    posture = EXCLUDED.posture,
+                    posture_label = EXCLUDED.posture_label,
+                    confidence = EXCLUDED.confidence,
+                    base_target = EXCLUDED.base_target,
+                    bull_target = EXCLUDED.bull_target,
+                    bear_zone = EXCLUDED.bear_zone,
+                    key_levels = EXCLUDED.key_levels,
+                    scenario_paths = EXCLUDED.scenario_paths,
+                    invalidation_rules = EXCLUDED.invalidation_rules,
+                    evidence_refs = EXCLUDED.evidence_refs,
+                    explanation = EXCLUDED.explanation,
+                    updated_at = NOW()
+                """,
+                (
+                    security_id,
+                    market,
+                    security["symbol"],
+                    trade_date,
+                    technical.close,
+                    price_map.posture,
+                    price_map.posture_label,
+                    price_map.confidence,
+                    _json(_target_range_payload(targets_by_scenario["base"])),
+                    _json(_target_range_payload(targets_by_scenario["bull"])),
+                    _json(_target_range_payload(targets_by_scenario["bear"])),
+                    _json(key_levels),
+                    _json(scenario_paths),
+                    _json(price_map.invalidation_rules),
+                    _json(price_map.evidence_refs),
+                    _json(price_map.explanation),
+                ),
+            )
+
+            base_payload = _target_range_payload(targets_by_scenario["base"])
+            bull_payload = _target_range_payload(targets_by_scenario["bull"])
+            bear_payload = _target_range_payload(targets_by_scenario["bear"])
+            conn.execute(
+                """
+                INSERT INTO ads.price_map_history_daily (
+                    security_id, market, symbol, snapshot_date, current_price, confidence, method,
+                    base_target, bull_target, bear_zone, explanation
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (security_id, snapshot_date) DO UPDATE SET
+                    market = EXCLUDED.market,
+                    symbol = EXCLUDED.symbol,
+                    current_price = EXCLUDED.current_price,
+                    confidence = EXCLUDED.confidence,
+                    method = EXCLUDED.method,
+                    base_target = EXCLUDED.base_target,
+                    bull_target = EXCLUDED.bull_target,
+                    bear_zone = EXCLUDED.bear_zone,
+                    explanation = EXCLUDED.explanation
+                """,
+                (
+                    security_id,
+                    market,
+                    security["symbol"],
+                    trade_date,
+                    technical.close,
+                    price_map.confidence,
+                    base_payload["method"],
+                    _json(base_payload),
+                    _json(bull_payload),
+                    _json(bear_payload),
+                    _json(price_map.explanation),
+                ),
+            )
+
+            watchlist = conn.execute(
+                """
+                SELECT user_id
+                FROM dwd.user_watchlist_state_current
+                WHERE security_id = %s AND state = 'watching'
+                """,
+                (security_id,),
+            ).fetchall()
+            if not watchlist:
+                continue
+            base = targets_by_scenario["base"]
+            bull = targets_by_scenario["bull"]
+            bear = targets_by_scenario["bear"]
+            alert_type = None
+            severity = "medium"
+            message = None
+            if bear.target_high is not None and technical.close <= bear.target_high:
+                alert_type = "price_enter_bear_zone"
+                severity = "high"
+                message = f"{security['symbol']} 进入 Bear 风险区，建议复核价格结构与核心逻辑。"
+            elif bull.target_low is not None and technical.close >= bull.target_low:
+                alert_type = "price_near_bull_target"
+                message = f"{security['symbol']} 已接近 Bull 目标区，注意估值拥挤与兑现风险。"
+            elif base.target_low is not None and technical.close >= base.target_low:
+                alert_type = "price_near_base_target"
+                message = f"{security['symbol']} 已进入 Base 目标区，建议复核上方空间和无效条件。"
+            elif technical.valuation_percentile is not None and technical.valuation_percentile >= 0.9:
+                alert_type = "valuation_crowded"
+                message = f"{security['symbol']} 估值分位进入拥挤区，目标区间置信度下降。"
+            if alert_type is None or message is None:
+                continue
+            for item in watchlist:
+                conn.execute(
+                    """
+                    INSERT INTO ads.watchlist_alert_daily (
+                        alert_id, user_id, market, symbol, trade_date, alert_type, severity,
+                        alert_message, evidence_refs
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        str(uuid4()),
+                        item["user_id"],
+                        market,
+                        security["symbol"],
+                        trade_date,
+                        alert_type,
+                        severity,
+                        message,
+                        _json(price_map.evidence_refs),
+                    ),
+                )
+        _build_price_map_hit_review(conn)
+
+
+def _json_number(payload: Any, key: str) -> float | None:
+    if not isinstance(payload, dict):
+        return None
+    return _safe_float(payload.get(key))
+
+
+def _build_price_map_hit_review(conn) -> None:
+    histories = conn.execute(
+        """
+        SELECT *
+        FROM ads.price_map_history_daily
+        ORDER BY market, symbol, snapshot_date
+        """
+    ).fetchall()
+    for history in histories:
+        future_prices = conn.execute(
+            """
+            SELECT trade_date, close
+            FROM dwd.security_market_daily
+            WHERE security_id = %s
+              AND trade_date > %s
+              AND trade_date <= %s::date + INTERVAL '180 days'
+              AND close IS NOT NULL
+            ORDER BY trade_date
+            """,
+            (history["security_id"], history["snapshot_date"], history["snapshot_date"]),
+        ).fetchall()
+        if not future_prices:
+            continue
+        closes = [float(row["close"]) for row in future_prices if row["close"] is not None]
+        if not closes:
+            continue
+        review_date = future_prices[-1]["trade_date"]
+        max_close = max(closes)
+        min_close = min(closes)
+        base_mid = _json_number(history["base_target"], "mid")
+        bull_low = _json_number(history["bull_target"], "low")
+        bear_high = _json_number(history["bear_zone"], "high")
+        base_hit = max_close >= base_mid if base_mid is not None else None
+        bull_hit = max_close >= bull_low if bull_low is not None else None
+        bear_breached = min_close <= bear_high if bear_high is not None else None
+        horizon_days = (review_date - history["snapshot_date"]).days
+        hit_summary = (
+            f"{history['symbol']} {history['snapshot_date']} 价格地图复盘："
+            f"{horizon_days} 天内最高 {max_close:.2f}、最低 {min_close:.2f}，"
+            f"Base {'命中' if base_hit else '未命中' if base_hit is False else '无法判断'}，"
+            f"Bull {'命中' if bull_hit else '未命中' if bull_hit is False else '无法判断'}，"
+            f"Bear {'触发' if bear_breached else '未触发' if bear_breached is False else '无法判断'}。"
+        )
+        conn.execute(
+            """
+            INSERT INTO ads.price_map_hit_review_daily (
+                security_id, market, symbol, snapshot_date, review_date, horizon_days,
+                base_hit, bull_hit, bear_breached, max_close, min_close,
+                base_target_mid, bull_target_low, bear_zone_high, hit_summary, metrics
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (security_id, snapshot_date, review_date) DO UPDATE SET
+                horizon_days = EXCLUDED.horizon_days,
+                base_hit = EXCLUDED.base_hit,
+                bull_hit = EXCLUDED.bull_hit,
+                bear_breached = EXCLUDED.bear_breached,
+                max_close = EXCLUDED.max_close,
+                min_close = EXCLUDED.min_close,
+                base_target_mid = EXCLUDED.base_target_mid,
+                bull_target_low = EXCLUDED.bull_target_low,
+                bear_zone_high = EXCLUDED.bear_zone_high,
+                hit_summary = EXCLUDED.hit_summary,
+                metrics = EXCLUDED.metrics,
+                created_at = NOW()
+            """,
+            (
+                history["security_id"],
+                history["market"],
+                history["symbol"],
+                history["snapshot_date"],
+                review_date,
+                horizon_days,
+                base_hit,
+                bull_hit,
+                bear_breached,
+                max_close,
+                min_close,
+                base_mid,
+                bull_low,
+                bear_high,
+                hit_summary,
+                _json(
+                    {
+                        "history_confidence": history["confidence"],
+                        "history_method": history["method"],
+                        "future_close_count": len(closes),
+                    }
+                ),
+            ),
+        )
+
+
 def run_all(settings: Settings) -> None:
     build_dwd(settings)
     build_dws(settings)
     build_ads(settings)
+    build_price_map(settings)
 
 
 def fetch_ads_preview(settings: Settings) -> dict[str, list[dict[str, Any]]]:
@@ -2585,4 +3652,48 @@ def fetch_ads_preview(settings: Settings) -> dict[str, list[dict[str, Any]]]:
             "theme_radar": conn.execute(
                 "SELECT market, theme_name, heat_score, status FROM ads.theme_radar_daily ORDER BY market, heat_score DESC"
             ).fetchall(),
+            "price_maps": conn.execute(
+                "SELECT market, symbol, current_price, posture_label, confidence, base_target, bear_zone FROM ads.price_map_current ORDER BY market, symbol"
+            ).fetchall(),
+            "price_map_hit_reviews": conn.execute(
+                "SELECT market, symbol, snapshot_date, review_date, horizon_days, base_hit, bull_hit, bear_breached, hit_summary FROM ads.price_map_hit_review_daily ORDER BY market, symbol, snapshot_date DESC"
+            ).fetchall(),
         }
+
+
+def fetch_price_map_preview(settings: Settings, market: str, symbol: str) -> dict[str, Any] | None:
+    with connect(settings) as conn:
+        return conn.execute(
+            """
+            SELECT market, symbol, as_of_date, current_price, posture, posture_label, confidence,
+                   base_target, bull_target, bear_zone, key_levels, scenario_paths,
+                   invalidation_rules, evidence_refs, explanation
+            FROM ads.price_map_current
+            WHERE market = %s AND symbol = %s
+            """,
+            (market.upper(), symbol.upper()),
+        ).fetchone()
+
+
+def fetch_price_map_hit_review_preview(settings: Settings, market: str, symbol: str) -> list[dict[str, Any]]:
+    with connect(settings) as conn:
+        return conn.execute(
+            """
+            SELECT market, symbol, snapshot_date, review_date, horizon_days,
+                   base_hit, bull_hit, bear_breached, max_close, min_close,
+                   base_target_mid, bull_target_low, bear_zone_high, hit_summary, metrics
+            FROM ads.price_map_hit_review_daily
+            WHERE market = %s AND symbol = %s
+            ORDER BY snapshot_date DESC, review_date DESC
+            LIMIT 20
+            """,
+            (market.upper(), symbol.upper()),
+        ).fetchall()
+
+
+def refresh_us_option_chains(settings: Settings, symbols: list[str] | None = None) -> list[dict[str, Any]]:
+    target_symbols = symbols or settings.market_universes["US"].symbols
+    results: list[dict[str, Any]] = []
+    for symbol in target_symbols:
+        results.append(refresh_option_chain_for_symbol(symbol, market="US", settings=settings))
+    return results

@@ -17,6 +17,6 @@ export function tenxNavItems(market: string): TenxNavItem[] {
 }
 
 export const tenxMarketTabs: Array<{ label: string; market: TenxMarket }> = [
-  { label: "A股", market: "CN" },
   { label: "US", market: "US" },
+  { label: "A股", market: "CN" },
 ];

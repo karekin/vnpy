@@ -16,6 +16,9 @@ from vnpy.web.contracts.tenx_hunter import (
     TenxFreshnessRow,
     TenxLifecycleStageRow,
     TenxMutationResponse,
+    TenxPriceMapHitReviewRow,
+    TenxPriceMapResponse,
+    TenxPriceSnapshotRow,
     TenxResearchCardResponse,
     TenxRiskItemRow,
     TenxScoreBreakdownRow,
@@ -198,6 +201,94 @@ class TenxHunterService:
         if symbol:
             actions.append(TenxActionRow(id="export-summary", label="导出摘要", kind="export"))
         return actions
+
+    @staticmethod
+    def _price_target_value(payload: Any, key: str) -> float | None:
+        if not isinstance(payload, dict):
+            return None
+        value = payload.get(key)
+        return float(value) if value is not None else None
+
+    def _price_snapshot_from_row(self, row: Any | None) -> TenxPriceSnapshotRow | None:
+        if row is None:
+            return None
+        base = row["base_target"] or {}
+        bull = row["bull_target"] or {}
+        bear = row["bear_zone"] or {}
+        return TenxPriceSnapshotRow(
+            as_of_date=self._format_date(row["as_of_date"]),
+            current_price=float(row["current_price"]) if row["current_price"] is not None else None,
+            posture=row["posture"],
+            posture_label=row["posture_label"],
+            confidence=row["confidence"],
+            base_target_low=self._price_target_value(base, "low"),
+            base_target_high=self._price_target_value(base, "high"),
+            bull_target_low=self._price_target_value(bull, "low"),
+            bull_target_high=self._price_target_value(bull, "high"),
+            bear_zone_low=self._price_target_value(bear, "low"),
+            bear_zone_high=self._price_target_value(bear, "high"),
+            upside_pct_mid=self._price_target_value(base, "upside_pct_mid"),
+            downside_pct_mid=self._price_target_value(bear, "upside_pct_mid"),
+        )
+
+    def _price_map_from_row(self, row: Any | None, hit_reviews: list[Any] | None = None) -> TenxPriceMapResponse | None:
+        if row is None:
+            return None
+        return TenxPriceMapResponse(
+            market=row["market"],
+            symbol=row["symbol"],
+            as_of_date=self._format_date(row["as_of_date"]),
+            current_price=float(row["current_price"]) if row["current_price"] is not None else None,
+            posture=row["posture"],
+            posture_label=row["posture_label"],
+            confidence=row["confidence"],
+            base_target=row["base_target"],
+            bull_target=row["bull_target"],
+            bear_zone=row["bear_zone"],
+            key_levels=row["key_levels"] or [],
+            scenario_paths=row["scenario_paths"] or [],
+            invalidation_rules=row["invalidation_rules"] or [],
+            evidence_refs=row["evidence_refs"] or [],
+            explanation=row["explanation"] or {},
+            hit_reviews=[
+                TenxPriceMapHitReviewRow(
+                    snapshot_date=self._format_date(review["snapshot_date"]),
+                    review_date=self._format_date(review["review_date"]),
+                    horizon_days=int(review["horizon_days"] or 0),
+                    base_hit=review["base_hit"],
+                    bull_hit=review["bull_hit"],
+                    bear_breached=review["bear_breached"],
+                    max_close=float(review["max_close"]) if review["max_close"] is not None else None,
+                    min_close=float(review["min_close"]) if review["min_close"] is not None else None,
+                    hit_summary=review["hit_summary"],
+                )
+                for review in (hit_reviews or [])
+            ],
+        )
+
+    def _fetch_price_map(self, conn: Any, market: str, symbol: str) -> TenxPriceMapResponse | None:
+        row = conn.execute(
+            """
+            SELECT market, symbol, as_of_date, current_price, posture, posture_label, confidence,
+                   base_target, bull_target, bear_zone, key_levels, scenario_paths,
+                   invalidation_rules, evidence_refs, explanation
+            FROM ads.price_map_current
+            WHERE market = %s AND symbol = %s
+            """,
+            (market, symbol.upper()),
+        ).fetchone()
+        reviews = conn.execute(
+            """
+            SELECT snapshot_date, review_date, horizon_days, base_hit, bull_hit,
+                   bear_breached, max_close, min_close, hit_summary
+            FROM ads.price_map_hit_review_daily
+            WHERE market = %s AND symbol = %s
+            ORDER BY snapshot_date DESC, review_date DESC
+            LIMIT 6
+            """,
+            (market, symbol.upper()),
+        ).fetchall()
+        return self._price_map_from_row(row, reviews)
 
     def _score_components_from_row(self, row: Any, market: str) -> ScoreComponents:
         return ScoreComponents(
@@ -456,7 +547,15 @@ class TenxHunterService:
                     COALESCE(a.severity, 'medium') AS severity,
                     COALESCE(a.alert_message, '等待下一次事件验证') AS alert_message,
                     COALESCE(c.total_score, 0) AS total_score,
-                    COALESCE(c.risk_tags, '[]'::jsonb) AS risk_tags
+                    COALESCE(c.risk_tags, '[]'::jsonb) AS risk_tags,
+                    pm.as_of_date AS price_as_of_date,
+                    pm.current_price AS price_current_price,
+                    pm.posture AS price_posture,
+                    pm.posture_label AS price_posture_label,
+                    pm.confidence AS price_confidence,
+                    pm.base_target AS price_base_target,
+                    pm.bull_target AS price_bull_target,
+                    pm.bear_zone AS price_bear_zone
                 FROM dwd.user_watchlist_state_current w
                 JOIN dim.security d ON d.security_id = w.security_id
                 LEFT JOIN LATERAL (
@@ -470,6 +569,7 @@ class TenxHunterService:
                 ) a ON TRUE
                 LEFT JOIN ads.candidate_pool_daily c
                   ON c.security_id = w.security_id AND c.trade_date = %s AND c.market = w.market
+                LEFT JOIN ads.price_map_current pm ON pm.security_id = w.security_id AND pm.market = w.market
                 WHERE w.market = %s AND w.state = 'watching'
                 ORDER BY c.total_score DESC NULLS LAST, w.symbol
                 """,
@@ -490,6 +590,20 @@ class TenxHunterService:
                         next_check="刷新最新数据后复核",
                         risk_level=risk_level,
                         score=score,
+                        price_snapshot=self._price_snapshot_from_row(
+                            {
+                                "as_of_date": row["price_as_of_date"],
+                                "current_price": row["price_current_price"],
+                                "posture": row["price_posture"],
+                                "posture_label": row["price_posture_label"],
+                                "confidence": row["price_confidence"],
+                                "base_target": row["price_base_target"],
+                                "bull_target": row["price_bull_target"],
+                                "bear_zone": row["price_bear_zone"],
+                            }
+                        )
+                        if row["price_posture"] is not None
+                        else None,
                         available_actions=self._available_actions(row["symbol"]),
                     )
                 )
@@ -507,6 +621,7 @@ class TenxHunterService:
                             next_check="加入观察池后继续跟踪财务兑现与主题变化",
                             risk_level=candidate.risk_level,
                             score=candidate.score,
+                            price_snapshot=None,
                             available_actions=self._available_actions(candidate.symbol),
                         )
                     )
@@ -669,6 +784,7 @@ class TenxHunterService:
             ]
             explanation = self._candidate_explanation(row, market)
             freshness = self._freshness(self._format_date(datetime.now(timezone.utc)), market)
+            price_map = self._fetch_price_map(conn, market, symbol)
             risk_items = [
                 TenxRiskItemRow(
                     title=str(item),
@@ -699,9 +815,15 @@ class TenxHunterService:
                 evidence_items=evidence,
                 risk_items=risk_items,
                 next_watch_points=[str(item) for item in self._as_list(row["next_watch_items"])],
+                price_map=price_map,
                 freshness=freshness,
                 available_actions=self._available_actions(row["symbol"]),
             )
+
+    def get_price_map(self, market: str | None, symbol: str) -> TenxPriceMapResponse | None:
+        market = self._normalize_market(market, self._settings)
+        with connect(self._settings) as conn:
+            return self._fetch_price_map(conn, market, symbol)
 
     def list_alerts(self, market: str | None) -> TenxAlertCenterResponse:
         market = self._normalize_market(market, self._settings)

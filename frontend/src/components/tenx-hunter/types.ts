@@ -6,6 +6,7 @@ export type TenxThemeTrend = "rising" | "stable" | "weakening";
 export type TenxThesisStatus = "strengthening" | "needs-review" | "at-risk";
 export type TenxTimelineType = "earnings" | "capex" | "price" | "supply-chain" | "risk" | "filing";
 export type TenxAlertSeverity = "P1" | "P2" | "P3";
+export type TenxPriceConfidence = "low" | "medium" | "high";
 
 export type TenxFreshness = {
   updatedAt: string;
@@ -93,7 +94,89 @@ export type TenxWatchlistItem = {
   nextCheck: string;
   riskLevel: TenxRiskLevel;
   score: number;
+  priceSnapshot?: TenxPriceSnapshot | null;
   availableActions: TenxAction[];
+};
+
+export type TenxTargetRange = {
+  scenario: "bear" | "base" | "bull";
+  horizon: string;
+  low: number | null;
+  high: number | null;
+  mid: number | null;
+  upsidePctMid: number | null;
+  method: string;
+  confidence: TenxPriceConfidence;
+  assumptions: Record<string, unknown>;
+  evidenceRefs: string[];
+};
+
+export type TenxKeyLevel = {
+  levelType: string;
+  label: string;
+  low: number | null;
+  high: number | null;
+  strength: string;
+  distancePct: number | null;
+  source: string;
+  note: string;
+  evidenceRefs: string[];
+};
+
+export type TenxScenarioPath = {
+  name: string;
+  probability: number;
+  confidence: TenxPriceConfidence;
+  trigger: string;
+  targetScenario: string;
+  invalidation: string;
+  explanation: string;
+  evidenceRefs: string[];
+};
+
+export type TenxPriceMap = {
+  market: TenxMarket;
+  symbol: string;
+  asOfDate: string;
+  currentPrice: number | null;
+  posture: string;
+  postureLabel: string;
+  confidence: TenxPriceConfidence;
+  baseTarget: TenxTargetRange;
+  bullTarget: TenxTargetRange;
+  bearZone: TenxTargetRange;
+  keyLevels: TenxKeyLevel[];
+  scenarioPaths: TenxScenarioPath[];
+  invalidationRules: Record<string, unknown>[];
+  evidenceRefs: string[];
+  explanation: Record<string, string>;
+  hitReviews: {
+    snapshotDate: string;
+    reviewDate: string;
+    horizonDays: number;
+    baseHit: boolean | null;
+    bullHit: boolean | null;
+    bearBreached: boolean | null;
+    maxClose: number | null;
+    minClose: number | null;
+    hitSummary: string;
+  }[];
+};
+
+export type TenxPriceSnapshot = {
+  asOfDate: string;
+  currentPrice: number | null;
+  posture: string;
+  postureLabel: string;
+  confidence: TenxPriceConfidence;
+  baseTargetLow: number | null;
+  baseTargetHigh: number | null;
+  bullTargetLow: number | null;
+  bullTargetHigh: number | null;
+  bearZoneLow: number | null;
+  bearZoneHigh: number | null;
+  upsidePctMid: number | null;
+  downsidePctMid: number | null;
 };
 
 export type TenxEvidenceItem = {
@@ -133,6 +216,7 @@ export type TenxResearchCard = {
   evidenceItems: TenxEvidenceItem[];
   riskItems: TenxRiskItem[];
   nextWatchPoints: string[];
+  priceMap?: TenxPriceMap | null;
   freshness: TenxFreshness;
   availableActions: TenxAction[];
 };

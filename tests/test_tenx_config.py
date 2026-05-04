@@ -28,7 +28,7 @@ class TenxConfigTests(unittest.TestCase):
         self.assertIn("Growth", settings.real_universe_name)
         self.assertEqual(settings.real_universe_strategy, "bucketed-growth-research")
         self.assertGreater(len(settings.real_universe_buckets), 1)
-        self.assertEqual(settings.default_market, "CN")
+        self.assertEqual(settings.default_market, "US")
         self.assertIn("CN", settings.market_universes)
         self.assertIn("US", settings.market_universes)
 

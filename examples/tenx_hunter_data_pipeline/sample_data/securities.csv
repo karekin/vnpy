@@ -1,5 +1,8 @@
-security_id,symbol,company_name,exchange_name,cik,currency,listing_status,sector,industry
-1,NVDA,NVIDIA Corp,NASDAQ,1045810,USD,active,Semiconductors,AI Accelerators
-2,SNOW,Snowflake Inc,NYSE,1640147,USD,active,Software,Data Cloud
-3,CRWD,CrowdStrike Holdings,NASDAQ,1535527,USD,active,Cybersecurity,Endpoint Security
-4,ARM,Arm Holdings plc,NASDAQ,1973239,USD,active,Semiconductors,CPU IP
+security_id,market,symbol,company_name,exchange_name,cik,currency,listing_status,sector,industry
+1,US,NVDA,NVIDIA Corp,NASDAQ,1045810,USD,active,Semiconductors,AI Accelerators
+2,US,SNOW,Snowflake Inc,NYSE,1640147,USD,active,Software,Data Cloud
+3,US,CRWD,CrowdStrike Holdings,NASDAQ,1535527,USD,active,Cybersecurity,Endpoint Security
+4,US,ARM,Arm Holdings plc,NASDAQ,1973239,USD,active,Semiconductors,CPU IP
+101,CN,300308.SZ,中际旭创,SZSE,,CNY,active,算力与光模块,光模块
+102,CN,300750.SZ,宁德时代,SZSE,,CNY,active,新能源车与汽车电子,动力电池
+103,CN,688981.SH,中芯国际,SSE,,CNY,active,高端制造与设备,半导体制造

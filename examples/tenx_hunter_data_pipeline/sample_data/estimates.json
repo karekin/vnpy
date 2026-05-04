@@ -1,0 +1,110 @@
+[
+  {
+    "market": "US",
+    "symbol": "NVDA",
+    "snapshot_date": "2026-04-24",
+    "fiscal_year_offset": 1,
+    "period_label": "0y",
+    "next_year_revenue_estimate": 184000.0,
+    "next_year_eps": 4.35,
+    "analyst_count": 42,
+    "currency": "USD",
+    "request_status": "ok",
+    "source_vendor": "sample-consensus",
+    "raw_payload": {
+      "period": "0y",
+      "fiscalYearOffset": 1,
+      "note": "sample FY1 consensus estimate for local acceptance"
+    }
+  },
+  {
+    "market": "US",
+    "symbol": "NVDA",
+    "snapshot_date": "2026-04-24",
+    "fiscal_year_offset": 2,
+    "period_label": "+1y",
+    "next_year_revenue_estimate": 222000.0,
+    "next_year_eps": 5.25,
+    "analyst_count": 39,
+    "currency": "USD",
+    "request_status": "ok",
+    "source_vendor": "sample-consensus",
+    "raw_payload": {
+      "period": "+1y",
+      "fiscalYearOffset": 2,
+      "note": "sample FY2 consensus estimate for local acceptance"
+    }
+  },
+  {
+    "market": "US",
+    "symbol": "SNOW",
+    "snapshot_date": "2026-04-24",
+    "fiscal_year_offset": 1,
+    "period_label": "0y",
+    "next_year_revenue_estimate": 4180.0,
+    "next_year_eps": 1.18,
+    "analyst_count": 31,
+    "currency": "USD",
+    "request_status": "ok",
+    "source_vendor": "sample-consensus",
+    "raw_payload": {
+      "period": "0y",
+      "fiscalYearOffset": 1,
+      "note": "sample FY1 consensus estimate for local acceptance"
+    }
+  },
+  {
+    "market": "US",
+    "symbol": "SNOW",
+    "snapshot_date": "2026-04-24",
+    "fiscal_year_offset": 2,
+    "period_label": "+1y",
+    "next_year_revenue_estimate": 5260.0,
+    "next_year_eps": 1.62,
+    "analyst_count": 29,
+    "currency": "USD",
+    "request_status": "ok",
+    "source_vendor": "sample-consensus",
+    "raw_payload": {
+      "period": "+1y",
+      "fiscalYearOffset": 2,
+      "note": "sample FY2 consensus estimate for local acceptance"
+    }
+  },
+  {
+    "market": "US",
+    "symbol": "CRWD",
+    "snapshot_date": "2026-04-24",
+    "fiscal_year_offset": 1,
+    "period_label": "0y",
+    "next_year_revenue_estimate": 4860.0,
+    "next_year_eps": 4.02,
+    "analyst_count": 36,
+    "currency": "USD",
+    "request_status": "ok",
+    "source_vendor": "sample-consensus",
+    "raw_payload": {
+      "period": "0y",
+      "fiscalYearOffset": 1,
+      "note": "sample FY1 consensus estimate for local acceptance"
+    }
+  },
+  {
+    "market": "US",
+    "symbol": "CRWD",
+    "snapshot_date": "2026-04-24",
+    "fiscal_year_offset": 2,
+    "period_label": "+1y",
+    "next_year_revenue_estimate": 6120.0,
+    "next_year_eps": 5.1,
+    "analyst_count": 34,
+    "currency": "USD",
+    "request_status": "ok",
+    "source_vendor": "sample-consensus",
+    "raw_payload": {
+      "period": "+1y",
+      "fiscalYearOffset": 2,
+      "note": "sample FY2 consensus estimate for local acceptance"
+    }
+  }
+]

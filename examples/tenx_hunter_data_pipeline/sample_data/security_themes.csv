@@ -5,3 +5,6 @@ security_id,theme_id,source_note
 3,cybersecurity,CrowdStrike is an endpoint security leader
 4,semis,Arm is central to CPU IP ecosystem
 4,ai_infra,Arm benefits from AI device and datacenter roadmap
+101,ai_compute,中际旭创处于算力光模块主线
+102,ev_supply_chain,宁德时代处于新能源车供应链主线
+103,advanced_manufacturing,中芯国际处于高端制造与半导体设备主线

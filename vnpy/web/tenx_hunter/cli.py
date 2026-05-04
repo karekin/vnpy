@@ -6,7 +6,18 @@ from pathlib import Path
 import sys
 
 from .config import load_settings
-from .pipeline import bootstrap_real_data, bootstrap_sample_data, ensure_schema, fetch_ads_preview, reset_all, run_all
+from .pipeline import (
+    bootstrap_real_data,
+    bootstrap_sample_data,
+    build_price_map,
+    ensure_schema,
+    fetch_ads_preview,
+    fetch_price_map_hit_review_preview,
+    fetch_price_map_preview,
+    refresh_us_option_chains,
+    reset_all,
+    run_all,
+)
 
 
 def _repo_root() -> Path:
@@ -21,6 +32,15 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("bootstrap", help="Load bundled sample ODS/DIM data")
     subparsers.add_parser("bootstrap-real", help="Fetch live SEC + Polygon/yfinance data into ODS/DIM")
     subparsers.add_parser("run-all", help="Build DWD -> DWS -> ADS from current ODS data")
+    subparsers.add_parser("price-map", help="Build price map targets and alerts from current DWD/DWS data")
+    refresh_options = subparsers.add_parser("refresh-options", help="Refresh US option chain summaries for a symbol list")
+    refresh_options.add_argument("symbols", nargs="*", help="Optional symbols. Defaults to the configured US universe.")
+    show_price_map = subparsers.add_parser("show-price-map", help="Print a symbol price map as JSON")
+    show_price_map.add_argument("symbol")
+    show_price_map.add_argument("--market", default=None)
+    show_price_map_review = subparsers.add_parser("show-price-map-review", help="Print price map historical hit reviews as JSON")
+    show_price_map_review.add_argument("symbol")
+    show_price_map_review.add_argument("--market", default=None)
     subparsers.add_parser("demo", help="bootstrap sample + run-all + show-ads")
     subparsers.add_parser("demo-real", help="bootstrap real sources + run-all + show-ads")
     subparsers.add_parser("show-ads", help="Print ADS preview as JSON")
@@ -56,6 +76,18 @@ def _show_ads() -> None:
     print(json.dumps(preview, ensure_ascii=False, indent=2, default=str))
 
 
+def _show_price_map(symbol: str, market: str | None) -> None:
+    settings = load_settings()
+    payload = fetch_price_map_preview(settings, market or settings.default_market, symbol)
+    print(json.dumps(payload or {}, ensure_ascii=False, indent=2, default=str))
+
+
+def _show_price_map_review(symbol: str, market: str | None) -> None:
+    settings = load_settings()
+    payload = fetch_price_map_hit_review_preview(settings, market or settings.default_market, symbol)
+    print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+
+
 def _bootstrap_sample() -> None:
     settings = load_settings()
     bootstrap_sample_data(settings, reset=True)
@@ -73,6 +105,18 @@ def _run_all() -> None:
     settings = load_settings()
     run_all(settings)
     print("run-all complete")
+
+
+def _price_map() -> None:
+    settings = load_settings()
+    build_price_map(settings)
+    print("price-map complete")
+
+
+def _refresh_options(symbols: list[str]) -> None:
+    settings = load_settings()
+    results = refresh_us_option_chains(settings, symbols or None)
+    print(json.dumps(results, ensure_ascii=False, indent=2, default=str))
 
 
 def _demo_sample() -> None:
@@ -129,6 +173,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if command == "run-all":
         _run_all()
+        return 0
+    if command == "price-map":
+        _price_map()
+        return 0
+    if command == "refresh-options":
+        _refresh_options(args.symbols)
+        return 0
+    if command == "show-price-map":
+        _show_price_map(args.symbol, args.market)
+        return 0
+    if command == "show-price-map-review":
+        _show_price_map_review(args.symbol, args.market)
         return 0
     if command == "demo":
         _demo_sample()

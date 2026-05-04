@@ -12,6 +12,7 @@ from vnpy.web.contracts.tenx_hunter import (
     TenxDeerFlowHistoryRequest,
     TenxDeerFlowSearchRequest,
     TenxMutationResponse,
+    TenxPriceMapResponse,
     TenxResearchCardResponse,
     TenxWatchlistMutationRequest,
     TenxWatchlistUpdateRequest,
@@ -51,6 +52,14 @@ def get_tenx_research_card(symbol: str, market: str = Query("CN")) -> TenxResear
     if card is None:
         raise HTTPException(status_code=404, detail=f"research card not found: {market}:{symbol}")
     return card
+
+
+@router.get("/price-map/{symbol}", response_model=TenxPriceMapResponse)
+def get_tenx_price_map(symbol: str, market: str = Query("CN")) -> TenxPriceMapResponse:
+    price_map = services.tenx_service.get_price_map(market, symbol)
+    if price_map is None:
+        raise HTTPException(status_code=404, detail=f"price map not found: {market}:{symbol}")
+    return price_map
 
 
 @router.get("/alerts", response_model=TenxAlertCenterResponse)

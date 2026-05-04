@@ -5,7 +5,7 @@ import TenxCopilotPanel from "@/components/tenx-hunter/TenxCopilotPanel";
 import { fromMarketSlug, getTenxErrorMessage, getTimelineForSymbol, loadTenxResearchCard, loadTenxWorkspaceSnapshot, marketLabel } from "@/components/tenx-hunter/api";
 import TenxDataStateCard from "@/components/tenx-hunter/TenxDataStateCard";
 import TenxPageShell from "@/components/tenx-hunter/TenxPageShell";
-import { TenxSectionCard, getStageTone } from "@/components/tenx-hunter/TenxCards";
+import { TenxPriceMapPanel, TenxSectionCard, getStageTone } from "@/components/tenx-hunter/TenxCards";
 import type { TenxResearchCard, TenxWorkspaceSnapshot } from "@/components/tenx-hunter/types";
 
 export default async function TenxHunterResearchDetailMarketPage({
@@ -129,6 +129,8 @@ export default async function TenxHunterResearchDetailMarketPage({
             </div>
           </div>
         </TenxSectionCard>
+
+        <TenxPriceMapPanel priceMap={card.priceMap} />
 
         <TenxSectionCard title="Score Breakdown" description="分数必须拆解成可复核的结构。">
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">

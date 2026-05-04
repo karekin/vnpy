@@ -1,5 +1,8 @@
-symbol,report_period,fiscal_quarter,fiscal_year,period_type,filed_date,revenue,gross_margin,op_margin,fcf_margin,cash,debt,shares_outstanding,revenue_yoy,source_filing_id,form_type,currency,data_quality_flag,restatement_flag,source_vendor
-NVDA,2025-12-31,FQ4-2025,2025,quarterly,2025-11-20,39331.00,0.76,0.53,0.42,41200.00,9800.00,24600.00,0.78,0001045810-25-000101,10-Q,USD,parsed,,sec-companyfacts
-SNOW,2025-12-31,FQ4-2025,2025,quarterly,2025-11-27,980.00,0.69,0.08,0.16,5260.00,2150.00,334.00,0.29,0001640147-25-000088,10-Q,USD,parsed,,sec-companyfacts
-CRWD,2025-12-31,FQ4-2025,2025,quarterly,2025-11-26,1120.00,0.75,0.20,0.24,4320.00,780.00,256.00,0.32,0001535527-25-000091,10-Q,USD,parsed,,sec-companyfacts
-ARM,2025-12-31,FQ4-2025,2025,quarterly,2025-11-21,975.00,0.96,0.31,0.27,2680.00,120.00,1010.00,0.35,0001973239-25-000072,6-K,USD,parsed,,sec-companyfacts
+market,symbol,report_period,fiscal_quarter,fiscal_year,period_type,filed_date,revenue,gross_margin,op_margin,fcf_margin,cash,debt,shares_outstanding,revenue_yoy,source_filing_id,form_type,currency,data_quality_flag,restatement_flag,source_vendor
+US,NVDA,2025-12-31,FQ4-2025,2025,quarterly,2025-11-20,39331.00,0.76,0.53,0.42,41200.00,9800.00,24600.00,0.78,0001045810-25-000101,10-Q,USD,parsed,,sec-companyfacts
+US,SNOW,2025-12-31,FQ4-2025,2025,quarterly,2025-11-27,980.00,0.69,0.08,0.16,5260.00,2150.00,334.00,0.29,0001640147-25-000088,10-Q,USD,parsed,,sec-companyfacts
+US,CRWD,2025-12-31,FQ4-2025,2025,quarterly,2025-11-26,1120.00,0.75,0.20,0.24,4320.00,780.00,256.00,0.32,0001535527-25-000091,10-Q,USD,parsed,,sec-companyfacts
+US,ARM,2025-12-31,FQ4-2025,2025,quarterly,2025-11-21,975.00,0.96,0.31,0.27,2680.00,120.00,1010.00,0.35,0001973239-25-000072,6-K,USD,parsed,,sec-companyfacts
+CN,300308.SZ,2025-12-31,FQ4-2025,2025,annual,2026-03-30,24000000000.00,0.31,0.17,0.14,4500000000.00,2200000000.00,800000000.00,0.36,sample-cn-300308,annual,CNY,parsed,,sample-cn
+CN,300750.SZ,2025-12-31,FQ4-2025,2025,annual,2026-03-28,410000000000.00,0.24,0.13,0.10,28000000000.00,86000000000.00,4400000000.00,0.22,sample-cn-300750,annual,CNY,parsed,,sample-cn
+CN,688981.SH,2025-12-31,FQ4-2025,2025,annual,2026-03-27,62000000000.00,0.21,0.09,0.08,36000000000.00,18000000000.00,7900000000.00,0.18,sample-cn-688981,annual,CNY,parsed,,sample-cn

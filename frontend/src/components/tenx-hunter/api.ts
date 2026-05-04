@@ -5,6 +5,8 @@ import type {
   TenxFreshness,
   TenxMarket,
   TenxOverviewMetric,
+  TenxPriceMap,
+  TenxPriceSnapshot,
   TenxResearchCard,
   TenxTheme,
   TenxTimelineEvent,
@@ -12,13 +14,21 @@ import type {
   TenxWorkspaceSnapshot,
 } from "@/components/tenx-hunter/types";
 
-const configuredApiBase = [
-  process.env.NEXT_PUBLIC_TENX_HUNTER_API_URL,
-  process.env.NEXT_PUBLIC_API_URL,
-  "http://127.0.0.1:8000",
-].find((item) => typeof item === "string" && item.trim().length > 0);
+function runtimeEnv(name: string) {
+  return typeof process !== "undefined" ? process.env[name] : undefined;
+}
 
-const apiBase = (configuredApiBase ?? "http://127.0.0.1:8000").replace(/\/$/, "");
+function configuredServerApiBase() {
+  const configured = [
+    runtimeEnv("TENX_INTERNAL_API_URL"),
+    runtimeEnv("TENX_DEERFLOW_API_URL"),
+    runtimeEnv("NEXT_PUBLIC_TENX_HUNTER_API_URL"),
+    runtimeEnv("NEXT_PUBLIC_API_URL"),
+    "http://127.0.0.1:8000",
+  ].find((item) => typeof item === "string" && item.trim().length > 0);
+
+  return (configured ?? "http://127.0.0.1:8000").replace(/\/$/, "");
+}
 
 export class TenxApiError extends Error {
   status?: number;
@@ -37,7 +47,7 @@ function buildUrl(path: string) {
     return path;
   }
 
-  return `${apiBase}${path}`;
+  return `${configuredServerApiBase()}${path}`;
 }
 
 function toMarketParam(market: string) {
@@ -148,6 +158,7 @@ type TenxWatchlistApi = {
   next_check: string;
   risk_level: TenxWatchlistItem["riskLevel"];
   score: number;
+  price_snapshot?: TenxPriceSnapshotApi | null;
   available_actions: TenxApiAction[];
 };
 
@@ -216,8 +227,90 @@ type TenxResearchCardApi = {
     note: string;
   }[];
   next_watch_points: string[];
+  price_map?: TenxPriceMapApi | null;
   freshness: TenxApiFreshness;
   available_actions: TenxApiAction[];
+};
+
+type TenxTargetRangeApi = {
+  scenario: "bear" | "base" | "bull";
+  horizon: string;
+  low: number | null;
+  high: number | null;
+  mid: number | null;
+  upside_pct_mid: number | null;
+  method: string;
+  confidence: "low" | "medium" | "high";
+  assumptions: Record<string, unknown>;
+  evidence_refs: string[];
+};
+
+type TenxKeyLevelApi = {
+  level_type: string;
+  label: string;
+  low: number | null;
+  high: number | null;
+  strength: string;
+  distance_pct: number | null;
+  source: string;
+  note: string;
+  evidence_refs: string[];
+};
+
+type TenxScenarioPathApi = {
+  name: string;
+  probability: number;
+  confidence: "low" | "medium" | "high";
+  trigger: string;
+  target_scenario: string;
+  invalidation: string;
+  explanation: string;
+  evidence_refs: string[];
+};
+
+type TenxPriceMapApi = {
+  market: TenxMarket;
+  symbol: string;
+  as_of_date: string;
+  current_price: number | null;
+  posture: string;
+  posture_label: string;
+  confidence: "low" | "medium" | "high";
+  base_target: TenxTargetRangeApi;
+  bull_target: TenxTargetRangeApi;
+  bear_zone: TenxTargetRangeApi;
+  key_levels: TenxKeyLevelApi[];
+  scenario_paths: TenxScenarioPathApi[];
+  invalidation_rules: Record<string, unknown>[];
+  evidence_refs: string[];
+  explanation: Record<string, string>;
+  hit_reviews: {
+    snapshot_date: string;
+    review_date: string;
+    horizon_days: number;
+    base_hit: boolean | null;
+    bull_hit: boolean | null;
+    bear_breached: boolean | null;
+    max_close: number | null;
+    min_close: number | null;
+    hit_summary: string;
+  }[];
+};
+
+type TenxPriceSnapshotApi = {
+  as_of_date: string;
+  current_price: number | null;
+  posture: string;
+  posture_label: string;
+  confidence: "low" | "medium" | "high";
+  base_target_low: number | null;
+  base_target_high: number | null;
+  bull_target_low: number | null;
+  bull_target_high: number | null;
+  bear_zone_low: number | null;
+  bear_zone_high: number | null;
+  upside_pct_mid: number | null;
+  downside_pct_mid: number | null;
 };
 
 type TenxAlertCenterApi = {
@@ -309,6 +402,91 @@ function mapTheme(item: TenxThemeApi): TenxTheme {
   };
 }
 
+function mapTargetRange(item: TenxTargetRangeApi) {
+  return {
+    scenario: item.scenario,
+    horizon: item.horizon,
+    low: item.low,
+    high: item.high,
+    mid: item.mid,
+    upsidePctMid: item.upside_pct_mid,
+    method: item.method,
+    confidence: item.confidence,
+    assumptions: item.assumptions,
+    evidenceRefs: item.evidence_refs,
+  };
+}
+
+function mapPriceSnapshot(item?: TenxPriceSnapshotApi | null): TenxPriceSnapshot | null {
+  if (!item) return null;
+  return {
+    asOfDate: item.as_of_date,
+    currentPrice: item.current_price,
+    posture: item.posture,
+    postureLabel: item.posture_label,
+    confidence: item.confidence,
+    baseTargetLow: item.base_target_low,
+    baseTargetHigh: item.base_target_high,
+    bullTargetLow: item.bull_target_low,
+    bullTargetHigh: item.bull_target_high,
+    bearZoneLow: item.bear_zone_low,
+    bearZoneHigh: item.bear_zone_high,
+    upsidePctMid: item.upside_pct_mid,
+    downsidePctMid: item.downside_pct_mid,
+  };
+}
+
+function mapPriceMap(item?: TenxPriceMapApi | null): TenxPriceMap | null {
+  if (!item) return null;
+  return {
+    market: item.market,
+    symbol: item.symbol,
+    asOfDate: item.as_of_date,
+    currentPrice: item.current_price,
+    posture: item.posture,
+    postureLabel: item.posture_label,
+    confidence: item.confidence,
+    baseTarget: mapTargetRange(item.base_target),
+    bullTarget: mapTargetRange(item.bull_target),
+    bearZone: mapTargetRange(item.bear_zone),
+    keyLevels: item.key_levels.map((level) => ({
+      levelType: level.level_type,
+      label: level.label,
+      low: level.low,
+      high: level.high,
+      strength: level.strength,
+      distancePct: level.distance_pct,
+      source: level.source,
+      note: level.note,
+      evidenceRefs: level.evidence_refs,
+    })),
+    scenarioPaths: item.scenario_paths.map((path) => ({
+      name: path.name,
+      probability: path.probability,
+      confidence: path.confidence,
+      trigger: path.trigger,
+      targetScenario: path.target_scenario,
+      invalidation: path.invalidation,
+      explanation: path.explanation,
+      evidenceRefs: path.evidence_refs,
+    })),
+    invalidationRules: item.invalidation_rules,
+    evidenceRefs: item.evidence_refs,
+    explanation: item.explanation,
+    hitReviews: (item.hit_reviews ?? []).map((review) => ({
+      snapshotDate: review.snapshot_date,
+      reviewDate: review.review_date,
+      horizonDays: review.horizon_days,
+      baseHit: review.base_hit,
+      bullHit: review.bull_hit,
+      bearBreached: review.bear_breached,
+      maxClose: review.max_close,
+      minClose: review.min_close,
+      hitSummary: review.hit_summary,
+    })),
+  };
+}
+
 function mapWatchlist(item: TenxWatchlistApi): TenxWatchlistItem {
   return {
     market: item.market,
@@ -320,6 +498,7 @@ function mapWatchlist(item: TenxWatchlistApi): TenxWatchlistItem {
     nextCheck: item.next_check,
     riskLevel: item.risk_level,
     score: item.score,
+    priceSnapshot: mapPriceSnapshot(item.price_snapshot),
     availableActions: mapActions(item.available_actions),
   };
 }
@@ -402,6 +581,7 @@ function mapResearchCard(payload: TenxResearchCardApi): TenxResearchCard {
       note: item.note,
     })),
     nextWatchPoints: payload.next_watch_points,
+    priceMap: mapPriceMap(payload.price_map),
     freshness: mapFreshness(payload.freshness),
     availableActions: mapActions(payload.available_actions),
   };
@@ -440,6 +620,20 @@ export async function loadTenxResearchCard(market: TenxMarket, symbol: string): 
       buildUrl(`/api/v1/tenx-hunter/research/${encodeURIComponent(symbol)}?market=${encodeURIComponent(toMarketParam(market))}`),
     );
     return mapResearchCard(payload);
+  } catch (error) {
+    if (error instanceof TenxApiError && error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export async function loadTenxPriceMap(market: TenxMarket, symbol: string): Promise<TenxPriceMap | null> {
+  try {
+    const payload = await requestJson<TenxPriceMapApi>(
+      buildUrl(`/api/v1/tenx-hunter/price-map/${encodeURIComponent(symbol)}?market=${encodeURIComponent(toMarketParam(market))}`),
+    );
+    return mapPriceMap(payload);
   } catch (error) {
     if (error instanceof TenxApiError && error.status === 404) {
       return null;

@@ -1,0 +1,53 @@
+[
+  {
+    "event_id": "sample-earnings-NVDA-2026-05-20",
+    "market": "US",
+    "symbol": "NVDA",
+    "snapshot_date": "2026-04-24",
+    "earnings_date": "2026-05-20",
+    "fiscal_period": "FY2027 Q1",
+    "time_of_day": "after_market",
+    "eps_estimate": 1.05,
+    "revenue_estimate": 43000.0,
+    "currency": "USD",
+    "request_status": "ok",
+    "source_vendor": "sample-calendar",
+    "raw_payload": {
+      "note": "sample earnings calendar event for local acceptance"
+    }
+  },
+  {
+    "event_id": "sample-earnings-SNOW-2026-05-27",
+    "market": "US",
+    "symbol": "SNOW",
+    "snapshot_date": "2026-04-24",
+    "earnings_date": "2026-05-27",
+    "fiscal_period": "FY2027 Q1",
+    "time_of_day": "after_market",
+    "eps_estimate": 0.29,
+    "revenue_estimate": 1020.0,
+    "currency": "USD",
+    "request_status": "ok",
+    "source_vendor": "sample-calendar",
+    "raw_payload": {
+      "note": "sample earnings calendar event for local acceptance"
+    }
+  },
+  {
+    "event_id": "sample-earnings-CRWD-2026-06-03",
+    "market": "US",
+    "symbol": "CRWD",
+    "snapshot_date": "2026-04-24",
+    "earnings_date": "2026-06-03",
+    "fiscal_period": "FY2027 Q1",
+    "time_of_day": "after_market",
+    "eps_estimate": 0.92,
+    "revenue_estimate": 1180.0,
+    "currency": "USD",
+    "request_status": "ok",
+    "source_vendor": "sample-calendar",
+    "raw_payload": {
+      "note": "sample earnings calendar event for local acceptance"
+    }
+  }
+]

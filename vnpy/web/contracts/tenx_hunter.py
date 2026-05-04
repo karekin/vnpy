@@ -13,6 +13,7 @@ TenxThemeTrend = Literal["rising", "stable", "weakening"]
 TenxThesisStatus = Literal["strengthening", "needs-review", "at-risk"]
 TenxTimelineType = Literal["earnings", "capex", "price", "supply-chain", "risk", "filing"]
 TenxAlertSeverity = Literal["P1", "P2", "P3"]
+TenxPriceConfidence = Literal["low", "medium", "high"]
 
 
 class TenxFreshnessRow(BaseModel):
@@ -99,6 +100,89 @@ class TenxThemeRow(BaseModel):
     freshness: TenxFreshnessRow
 
 
+class TenxTargetRangeRow(BaseModel):
+    scenario: Literal["bear", "base", "bull"]
+    horizon: str
+    low: float | None = None
+    high: float | None = None
+    mid: float | None = None
+    upside_pct_mid: float | None = None
+    method: str
+    confidence: TenxPriceConfidence
+    assumptions: dict[str, Any] = Field(default_factory=dict)
+    evidence_refs: list[str] = Field(default_factory=list)
+
+
+class TenxKeyLevelRow(BaseModel):
+    level_type: str
+    label: str
+    low: float | None = None
+    high: float | None = None
+    strength: str
+    distance_pct: float | None = None
+    source: str
+    note: str
+    evidence_refs: list[str] = Field(default_factory=list)
+
+
+class TenxScenarioPathRow(BaseModel):
+    name: str
+    probability: int
+    confidence: TenxPriceConfidence
+    trigger: str
+    target_scenario: str
+    invalidation: str
+    explanation: str
+    evidence_refs: list[str] = Field(default_factory=list)
+
+
+class TenxPriceMapHitReviewRow(BaseModel):
+    snapshot_date: str
+    review_date: str
+    horizon_days: int
+    base_hit: bool | None = None
+    bull_hit: bool | None = None
+    bear_breached: bool | None = None
+    max_close: float | None = None
+    min_close: float | None = None
+    hit_summary: str
+
+
+class TenxPriceMapResponse(BaseModel):
+    market: TenxMarket
+    symbol: str
+    as_of_date: str
+    current_price: float | None = None
+    posture: str
+    posture_label: str
+    confidence: TenxPriceConfidence
+    base_target: TenxTargetRangeRow
+    bull_target: TenxTargetRangeRow
+    bear_zone: TenxTargetRangeRow
+    key_levels: list[TenxKeyLevelRow] = Field(default_factory=list)
+    scenario_paths: list[TenxScenarioPathRow] = Field(default_factory=list)
+    invalidation_rules: list[dict[str, Any]] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    explanation: dict[str, str] = Field(default_factory=dict)
+    hit_reviews: list[TenxPriceMapHitReviewRow] = Field(default_factory=list)
+
+
+class TenxPriceSnapshotRow(BaseModel):
+    as_of_date: str
+    current_price: float | None = None
+    posture: str
+    posture_label: str
+    confidence: TenxPriceConfidence
+    base_target_low: float | None = None
+    base_target_high: float | None = None
+    bull_target_low: float | None = None
+    bull_target_high: float | None = None
+    bear_zone_low: float | None = None
+    bear_zone_high: float | None = None
+    upside_pct_mid: float | None = None
+    downside_pct_mid: float | None = None
+
+
 class TenxWatchlistItemRow(BaseModel):
     market: TenxMarket
     symbol: str
@@ -109,6 +193,7 @@ class TenxWatchlistItemRow(BaseModel):
     next_check: str
     risk_level: TenxRiskLevel
     score: int
+    price_snapshot: TenxPriceSnapshotRow | None = None
     available_actions: list[TenxActionRow]
 
 
@@ -175,6 +260,7 @@ class TenxResearchCardResponse(BaseModel):
     evidence_items: list[TenxEvidenceItemRow]
     risk_items: list[TenxRiskItemRow]
     next_watch_points: list[str]
+    price_map: TenxPriceMapResponse | None = None
     freshness: TenxFreshnessRow
     available_actions: list[TenxActionRow]
 

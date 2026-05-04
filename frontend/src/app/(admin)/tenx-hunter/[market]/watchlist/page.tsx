@@ -3,7 +3,7 @@ import StatusTag from "@/components/cb-quant/StatusTag";
 import { fromMarketSlug, getTenxErrorMessage, loadTenxWorkspaceSnapshot, marketLabel } from "@/components/tenx-hunter/api";
 import TenxDataStateCard from "@/components/tenx-hunter/TenxDataStateCard";
 import TenxPageShell from "@/components/tenx-hunter/TenxPageShell";
-import { TenxSectionCard, getRiskTone } from "@/components/tenx-hunter/TenxCards";
+import { TenxPriceSnapshotStrip, TenxSectionCard, getRiskTone } from "@/components/tenx-hunter/TenxCards";
 import type { TenxWorkspaceSnapshot } from "@/components/tenx-hunter/types";
 
 export default async function TenxHunterWatchlistMarketPage({ params }: { params: Promise<{ market: string }> }) {
@@ -53,6 +53,7 @@ export default async function TenxHunterWatchlistMarketPage({ params }: { params
                     </div>
                     <p className="mt-3 text-sm leading-6 text-gray-600 dark:text-gray-300">{item.lastEvent}</p>
                     <div className="mt-3 text-sm text-gray-500 dark:text-gray-400">下一观察点：{item.nextCheck}</div>
+                    <TenxPriceSnapshotStrip snapshot={item.priceSnapshot} market={market} />
                   </div>
                   <div className="flex flex-wrap gap-2 lg:justify-end">
                     <StatusTag label={item.alertType} tone="blue" />
