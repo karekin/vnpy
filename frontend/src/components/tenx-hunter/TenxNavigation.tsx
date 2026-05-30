@@ -14,6 +14,7 @@ export default function TenxNavigation({ market }: Props) {
   const pathname = usePathname();
   const items = tenxNavItems(market);
   const normalizedMarket = fromMarketSlug(market);
+  const marketRootPath = `/tenx-hunter/${normalizedMarket.toLowerCase()}`;
 
   return (
     <div className="mb-6 space-y-3 rounded-2xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-white/[0.03]">
@@ -41,8 +42,8 @@ export default function TenxNavigation({ market }: Props) {
         {items.map((item) => {
           const active =
             pathname === item.path ||
-            pathname.startsWith(`${item.path}/`) ||
-            (item.path.endsWith(`/${market}`) && pathname.startsWith(`${item.path}/research/`));
+            (item.path !== marketRootPath && pathname.startsWith(`${item.path}/`)) ||
+            (item.path === marketRootPath && pathname.startsWith(`${item.path}/research/`));
           return (
             <Link
               key={item.path}

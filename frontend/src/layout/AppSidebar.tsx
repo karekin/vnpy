@@ -21,10 +21,16 @@ type NavItem = {
 
 const navItems: NavItem[] = [
   {
+    name: "Investment Copilot",
+    icon: <AiIcon />,
+    path: "/investment-copilot",
+  },
+  {
     name: "TenX Hunter",
     icon: <AiIcon />,
     subItems: [
       { name: "Workspace", path: "/tenx-hunter/us" },
+      { name: "Hot Monitor", path: "/tenx-hunter/us/hot-monitor" },
       { name: "Discover", path: "/tenx-hunter/us/discover" },
       { name: "Themes", path: "/tenx-hunter/us/themes" },
       { name: "Watchlist", path: "/tenx-hunter/us/watchlist" },

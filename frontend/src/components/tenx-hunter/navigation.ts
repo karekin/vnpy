@@ -9,6 +9,7 @@ export function tenxNavItems(market: string): TenxNavItem[] {
   const base = `/tenx-hunter/${market.toLowerCase()}`;
   return [
     { name: "Workspace", path: base },
+    ...(market.toUpperCase() === "US" ? [{ name: "Hot Monitor", path: `${base}/hot-monitor` }] : []),
     { name: "Discover", path: `${base}/discover` },
     { name: "Themes", path: `${base}/themes` },
     { name: "Watchlist", path: `${base}/watchlist` },

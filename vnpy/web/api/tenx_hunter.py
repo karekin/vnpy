@@ -23,6 +23,29 @@ import vnpy.web.services as services
 router = APIRouter(prefix="/tenx-hunter", tags=["tenx-hunter"])
 
 
+def _has_multipart_support() -> bool:
+    try:
+        from python_multipart import __version__ as python_multipart_version
+
+        assert python_multipart_version > "0.0.12"
+        return True
+    except (ImportError, AssertionError):
+        pass
+
+    try:
+        from multipart import __version__ as multipart_version
+        from multipart.multipart import parse_options_header
+
+        assert multipart_version
+        assert parse_options_header
+        return True
+    except (ImportError, AssertionError):
+        return False
+
+
+_HAS_MULTIPART = _has_multipart_support()
+
+
 def _raise_deerflow_http_error(error: requests.HTTPError) -> None:
     response = error.response
     status_code = response.status_code if response is not None else 502
@@ -160,15 +183,26 @@ def deerflow_uploads(thread_id: str = Query(...)) -> dict:
         _raise_deerflow_http_error(error)
 
 
-@router.post("/deerflow/uploads")
-def deerflow_upload_files(
-    thread_id: str = Query(...),
-    files: list[UploadFile] = File(...),
-) -> dict:
-    try:
-        return services.deerflow_agent_service.upload_files(thread_id, files)
-    except requests.HTTPError as error:
-        _raise_deerflow_http_error(error)
+if _HAS_MULTIPART:
+
+    @router.post("/deerflow/uploads")
+    def deerflow_upload_files(
+        thread_id: str = Query(...),
+        files: list[UploadFile] = File(...),
+    ) -> dict:
+        try:
+            return services.deerflow_agent_service.upload_files(thread_id, files)
+        except requests.HTTPError as error:
+            _raise_deerflow_http_error(error)
+
+else:
+
+    @router.post("/deerflow/uploads")
+    def deerflow_upload_files_unavailable(thread_id: str = Query(...)) -> dict:
+        raise HTTPException(
+            status_code=503,
+            detail="DeerFlow file uploads require the optional python-multipart package.",
+        )
 
 
 @router.get("/deerflow/artifact")
