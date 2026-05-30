@@ -83,6 +83,7 @@ def _snapshot_to_payload(snapshot: AllocationSnapshot) -> dict[str, Any]:
         "single_stock_values": {key: str(value) for key, value in snapshot.single_stock_values.items()},
         "latest_rsi_by_symbol": {key: str(value) for key, value in snapshot.latest_rsi_by_symbol.items()},
         "open_leaps_symbols": list(snapshot.open_leaps_symbols),
+        "source_inputs": {key: str(value) for key, value in snapshot.source_inputs.items()},
         "snapshot_at": snapshot.snapshot_at.isoformat(),
     }
 
@@ -100,6 +101,7 @@ def _snapshot_from_payload(payload: dict[str, Any]) -> AllocationSnapshot:
         single_stock_values={key: decimal_from(value) for key, value in (payload.get("single_stock_values") or {}).items()},
         latest_rsi_by_symbol={key: decimal_from(value) for key, value in (payload.get("latest_rsi_by_symbol") or {}).items()},
         open_leaps_symbols=list(payload.get("open_leaps_symbols") or []),
+        source_inputs={str(key): str(value) for key, value in (payload.get("source_inputs") or {}).items()},
         snapshot_at=datetime.fromisoformat(str(payload["snapshot_at"])) if payload.get("snapshot_at") else datetime.now().astimezone(),
     )
 

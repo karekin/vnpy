@@ -65,6 +65,7 @@ class AllocationSnapshot:
     single_stock_values: dict[str, Decimal] = field(default_factory=dict)
     latest_rsi_by_symbol: dict[str, Decimal] = field(default_factory=dict)
     open_leaps_symbols: list[str] = field(default_factory=list)
+    source_inputs: dict[str, str] = field(default_factory=dict)
     snapshot_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 

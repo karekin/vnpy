@@ -161,6 +161,7 @@ class SmartAllocationService:
             single_stock_values={key: decimal_from(value) for key, value in payload.get("single_stock_values", {}).items()},
             latest_rsi_by_symbol={key: decimal_from(value) for key, value in payload.get("latest_rsi_by_symbol", {}).items()},
             open_leaps_symbols=list(payload.get("open_leaps_symbols", [])),
+            source_inputs={str(key): str(value) for key, value in payload.get("source_inputs", {}).items()},
         )
         self._snapshots[profile.id] = snapshot
         self._store.insert_snapshot(profile.id, snapshot)
@@ -267,6 +268,7 @@ class SmartAllocationService:
             single_stock_values=snapshot.single_stock_values,
             latest_rsi_by_symbol=snapshot.latest_rsi_by_symbol,
             open_leaps_symbols=snapshot.open_leaps_symbols,
+            source_inputs=snapshot.source_inputs,
         )
 
     def list_cashflow_events(self, profile_id: str | None = None) -> list[CashflowEvent]:
@@ -648,6 +650,7 @@ class SmartAllocationService:
             single_stock_values={key: _float(value) for key, value in snapshot.single_stock_values.items()},
             latest_rsi_by_symbol={key: _float(value) for key, value in snapshot.latest_rsi_by_symbol.items()},
             open_leaps_symbols=snapshot.open_leaps_symbols,
+            source_inputs=snapshot.source_inputs,
             snapshot_at=snapshot.snapshot_at.isoformat(),
         )
 

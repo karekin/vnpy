@@ -29,17 +29,17 @@ def test_calculate_allocation_targets_should_match_400k_reference_case() -> None
     targets = calculate_allocation_targets(profile, Decimal("400000"))
 
     assert targets.dca_ratio == Decimal("0.58")
-    assert targets.cash_ratio == Decimal("0.05")
-    assert targets.options_ratio == Decimal("0.37")
+    assert targets.cash_ratio == Decimal("0.17")
+    assert targets.options_ratio == Decimal("0.25")
     assert targets.dca_value == Decimal("232000.00")
-    assert targets.cash_value == Decimal("20000.00")
-    assert targets.options_value == Decimal("148000.00")
+    assert targets.cash_value == Decimal("68000.00")
+    assert targets.options_value == Decimal("100000.00")
     assert targets.qqqm_value == Decimal("69600.00")
     assert targets.voo_value == Decimal("69600.00")
     assert targets.quality_stock_value == Decimal("92800.00")
     assert targets.single_stock_limit == Decimal("23200.00")
-    assert targets.wheel_value == Decimal("118400.00")
-    assert targets.leaps_value == Decimal("29600.00")
+    assert targets.wheel_value == Decimal("60000.00")
+    assert targets.leaps_value == Decimal("40000.00")
     assert targets.margin_limit == Decimal("100000.00")
 
 
@@ -49,9 +49,21 @@ def test_calculate_allocation_targets_should_cap_dca_and_raise_cash_without_inco
     targets = calculate_allocation_targets(retired, Decimal("100000"))
 
     assert targets.dca_ratio == Decimal("0.70")
-    assert targets.cash_ratio == Decimal("0.10")
-    assert targets.options_ratio == Decimal("0.20")
+    assert targets.cash_ratio == Decimal("0.15")
+    assert targets.options_ratio == Decimal("0.15")
     assert targets.dca_ratio + targets.cash_ratio + targets.options_ratio == Decimal("1.00")
+
+
+def test_calculate_allocation_targets_should_cap_young_stable_options() -> None:
+    profile = AllocationProfile(age=28, income_status=IncomeStatus.STABLE)
+
+    targets = calculate_allocation_targets(profile, Decimal("100000"))
+
+    assert targets.dca_ratio == Decimal("0.48")
+    assert targets.cash_ratio == Decimal("0.27")
+    assert targets.options_ratio == Decimal("0.25")
+    assert targets.wheel_value == Decimal("15000.00")
+    assert targets.leaps_value == Decimal("10000.00")
 
 
 def test_guardrails_should_flag_concentration_margin_and_leaps_discipline() -> None:
@@ -77,6 +89,22 @@ def test_guardrails_should_flag_concentration_margin_and_leaps_discipline() -> N
     assert "margin_limit" in codes
     assert "leaps_rsi_discipline" in codes
     assert any(item.blocking for item in violations if item.rule_code == "margin_limit")
+
+
+def test_guardrails_should_not_flag_index_etf_concentration() -> None:
+    profile = AllocationProfile(age=38, income_status=IncomeStatus.STABLE)
+    targets = calculate_allocation_targets(profile, Decimal("100000"))
+    snapshot = AllocationSnapshot(
+        total_equity=Decimal("100000"),
+        cash_value=Decimal("5000"),
+        dca_value=Decimal("48000"),
+        options_value=Decimal("47000"),
+        single_stock_values={"VOO.US": Decimal("30000"), "QQQ.US": Decimal("20000")},
+    )
+
+    violations = run_guardrail_checks(profile, snapshot, targets)
+
+    assert "single_stock_limit" not in {item.rule_code for item in violations}
 
 
 def test_rebalance_should_trigger_when_deviation_reaches_threshold() -> None:
@@ -108,8 +136,8 @@ def test_waterfall_should_top_up_cash_before_dca_injection() -> None:
     transfers = plan_waterfall_transfer(profile, snapshot, targets, event)
 
     assert transfers[0].target_bucket == "cash"
-    assert transfers[0].amount == Decimal("2000.00")
-    assert sum(item.amount for item in transfers if item.target_bucket == "dca") == Decimal("8000.00")
+    assert transfers[0].amount == Decimal("10000")
+    assert sum(item.amount for item in transfers if item.target_bucket == "dca") == Decimal("0")
 
 
 def test_smart_allocation_service_should_build_dashboard_from_manual_snapshot(tmp_path: Path) -> None:
@@ -124,12 +152,14 @@ def test_smart_allocation_service_should_build_dashboard_from_manual_snapshot(tm
             "options_value": 148000,
             "wheel_value": 118400,
             "leaps_value": 29600,
+            "source_inputs": {"hsbcTotalHkd": "144367.35", "schwabNetLiquidationUsd": "9027.61"},
         },
     )
 
     assert dashboard.targets.dca_value == 232000
-    assert dashboard.targets.cash_value == 20000
-    assert dashboard.risk_level == "green"
+    assert dashboard.targets.cash_value == 68000
+    assert dashboard.snapshot.source_inputs["hsbcTotalHkd"] == "144367.35"
+    assert dashboard.risk_level == "orange"
     events = service.list_cashflow_events(profile.id)
     assert events[0].event_type == "snapshot_waterfall_audit"
     assert events[0].source_bucket == "system"
@@ -194,6 +224,7 @@ def test_smart_allocation_store_should_persist_profile_snapshot_and_cashflow(tmp
             "cash_value": 0,
             "dca_value": 232000,
             "options_value": 168000,
+            "source_inputs": {"hkdUsdRate": "7.8352"},
         },
     )
     first.record_cashflow_event(profile.id, event_type="leaps_profit_realized", amount=10000)
@@ -204,6 +235,7 @@ def test_smart_allocation_store_should_persist_profile_snapshot_and_cashflow(tmp
 
     assert dashboard.profile.id == profile.id
     assert dashboard.snapshot.cash_value == 10000
+    assert dashboard.snapshot.source_inputs["hkdUsdRate"] == "7.8352"
     assert events[0].event_type == "leaps_profit_realized"
     assert any(item.event_type == "snapshot_waterfall_audit" for item in events)
 
@@ -229,7 +261,7 @@ def test_cashflow_event_should_move_snapshot_forward(tmp_path: Path) -> None:
     assert transfers[0].target_bucket == "cash"
     assert dashboard.snapshot.cash_value == 15000
     assert dashboard.snapshot.total_equity == 405000
-    assert dashboard.targets.cash_value == 20250
+    assert dashboard.targets.cash_value == 68850
 
 
 def test_recommendation_status_should_persist(tmp_path: Path) -> None:
@@ -388,7 +420,7 @@ def test_service_should_skip_reference_fixture_active_profile(tmp_path: Path) ->
     assert dashboard.data_warnings == []
 
 
-def test_daily_wheel_recommendation_should_include_pool_sources_and_mrvl(tmp_path: Path) -> None:
+def test_daily_wheel_recommendation_should_hide_unaffordable_blocked_symbols(tmp_path: Path) -> None:
     service = SmartAllocationService(store=SmartAllocationStore(tmp_path / "smart_allocation.db"))
     profile = service.create_profile(age=28, income_status="stable")
     service.refresh_snapshot(
@@ -404,10 +436,14 @@ def test_daily_wheel_recommendation_should_include_pool_sources_and_mrvl(tmp_pat
     )
 
     recommendation = service.get_daily_wheel_recommendation(profile.id)
-    by_symbol = {item.symbol: item for item in recommendation.candidates}
+    all_candidates = service.list_wheel_candidates(profile.id)
+    by_symbol = {item.symbol: item for item in all_candidates}
 
     assert recommendation.pool_sources
     assert any(source.name == "系统内置高流动性观察池" for source in recommendation.pool_sources)
+    assert recommendation.candidates == []
+    assert recommendation.candidate_count == 0
+    assert recommendation.actionable_count == 0
     assert "MRVL.US" in by_symbol
     assert by_symbol["MRVL.US"].status == "blocked"
     assert by_symbol["MRVL.US"].estimated_cash_required == 15000
@@ -422,8 +458,8 @@ def test_call_spread_recommendation_should_use_budget_and_option_chain() -> None
     )
     snapshot = AllocationSnapshot(
         total_equity=Decimal("12550.56"),
-        cash_value=Decimal("3045.87"),
-        dca_value=Decimal("9504.69"),
+        cash_value=Decimal("4500"),
+        dca_value=Decimal("8050.56"),
         options_value=Decimal("0"),
         wheel_value=Decimal("0"),
         leaps_value=Decimal("0"),
@@ -471,7 +507,7 @@ def test_call_spread_recommendation_should_use_budget_and_option_chain() -> None
     by_symbol = {item.symbol: item for item in recommendation.candidates}
 
     assert recommendation.options_available > Decimal("0")
-    assert recommendation.per_trade_limit == Decimal("1000.00")
+    assert recommendation.per_trade_limit == Decimal("555.68")
     assert by_symbol["PLTR.US"].status == "candidate"
     assert by_symbol["PLTR.US"].long_strike == Decimal("140")
     assert by_symbol["PLTR.US"].short_strike == Decimal("160")

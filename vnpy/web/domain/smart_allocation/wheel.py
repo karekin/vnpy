@@ -28,9 +28,16 @@ DEFAULT_WHEEL_UNIVERSE: tuple[tuple[str, str, Decimal], ...] = (
 WHEEL_METHODOLOGY: tuple[str, ...] = (
     "候选池 = 手动 Wheel 候选池 + 优质个股白名单 + 当前持仓反向观察 + 系统内置高流动性观察池。",
     "先做账户级过滤：一张现金担保 Put 不能超过 Wheel 剩余额度，也不能突破单股集中度上限。",
-    "再做风险过滤：保证金触线、已有持仓超限、现金担保不足时标记 blocked。",
+    "每日推荐只展示当前账户可执行的 candidate；超预算、超单股上限或保证金触线的标的只进入阻断摘要，不作为推荐。",
     "当前版本是每日规则扫描；接入真实期权链后继续过滤 DTE、Delta、IV、成交量、未平仓量和 bid/ask spread。",
 )
+
+INDEX_ETF_SYMBOLS = {"QQQ.US", "QQQM.US", "SPY.US", "VOO.US"}
+
+
+def _is_concentration_exempt_symbol(profile: AllocationProfile, symbol: str) -> bool:
+    normalized = symbol.upper()
+    return normalized in INDEX_ETF_SYMBOLS or normalized in {profile.qqqm_symbol.upper(), profile.voo_symbol.upper()}
 
 
 def build_wheel_candidates(
@@ -106,7 +113,8 @@ def build_daily_wheel_recommendation(
     snapshot: AllocationSnapshot,
     targets: AllocationTargets,
 ) -> WheelDailyRecommendation:
-    candidates = tuple(build_wheel_candidates(profile, snapshot, targets))
+    scanned_candidates = tuple(build_wheel_candidates(profile, snapshot, targets))
+    candidates = tuple(item for item in scanned_candidates if _is_daily_recommendable(item))
     actionable_count = sum(1 for item in candidates if item.status == "candidate")
     return WheelDailyRecommendation(
         scan_date=datetime.now(timezone.utc).date().isoformat(),
@@ -126,6 +134,10 @@ def _cash_required_for_symbol(symbol: str, candidates: dict[str, tuple[str, Deci
     if known:
         return known[1]
     return Decimal("25000")
+
+
+def _is_daily_recommendable(candidate: WheelCandidate) -> bool:
+    return candidate.status == "candidate" and candidate.max_contracts > 0 and not candidate.blockers
 
 
 def _classify_wheel_candidate(
@@ -150,7 +162,11 @@ def _classify_wheel_candidate(
     if snapshot.margin_used >= targets.margin_limit:
         blockers.append("保证金已触及红线，停止新增 Sell Put。")
         score -= 30
-    if symbol in snapshot.single_stock_values and snapshot.single_stock_values[symbol] > targets.single_stock_limit:
+    if (
+        not _is_concentration_exempt_symbol(profile, symbol)
+        and symbol in snapshot.single_stock_values
+        and snapshot.single_stock_values[symbol] > targets.single_stock_limit
+    ):
         blockers.append("当前持仓已超过单股集中度上限，不应继续增加该标的风险。")
         score -= 25
 

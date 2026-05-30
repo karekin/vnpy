@@ -38,6 +38,7 @@ class SmartAllocationSnapshotRequest(BaseModel):
     single_stock_values: dict[str, float] = Field(default_factory=dict)
     latest_rsi_by_symbol: dict[str, float] = Field(default_factory=dict)
     open_leaps_symbols: list[str] = Field(default_factory=list)
+    source_inputs: dict[str, str] = Field(default_factory=dict)
 
 
 class SmartAllocationTargetsResponse(BaseModel):

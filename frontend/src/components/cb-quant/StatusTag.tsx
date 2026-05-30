@@ -20,7 +20,7 @@ const toneClassMap: Record<Tone, string> = {
 export default function StatusTag({ label, tone = "slate" }: StatusTagProps) {
   return (
     <span
-      className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ${toneClassMap[tone]}`}
+      className={`inline-flex max-w-full break-words rounded-full px-2 py-1 text-center text-xs font-medium leading-tight ${toneClassMap[tone]}`}
     >
       {label}
     </span>

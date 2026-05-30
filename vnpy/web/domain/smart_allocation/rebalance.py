@@ -10,6 +10,13 @@ from vnpy.web.domain.smart_allocation.models import (
     RebalanceRecommendation,
 )
 
+INDEX_ETF_SYMBOLS = {"QQQ.US", "QQQM.US", "SPY.US", "VOO.US"}
+
+
+def _is_concentration_exempt_symbol(profile: AllocationProfile, symbol: str) -> bool:
+    normalized = symbol.upper()
+    return normalized in INDEX_ETF_SYMBOLS or normalized in {profile.qqqm_symbol.upper(), profile.voo_symbol.upper()}
+
 
 def _ratio(value: Decimal, total: Decimal) -> float:
     if total <= 0:
@@ -71,6 +78,8 @@ def generate_recommendations(
         )
 
     for symbol, value in snapshot.single_stock_values.items():
+        if _is_concentration_exempt_symbol(profile, symbol):
+            continue
         excess = value - targets.single_stock_limit
         if excess > 0:
             recommendations.append(

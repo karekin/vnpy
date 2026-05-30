@@ -46,15 +46,52 @@ type SingleStockRow = {
   value: string;
 };
 
+type SnapshotSourceForm = {
+  hkdUsdRate: string;
+  hsbcTotalHkd: string;
+  hsbcInvestmentHkd: string;
+  schwabNetLiquidationUsd: string;
+  schwabCashSweepUsd: string;
+  schwabStockValueUsd: string;
+  wheelValueUsd: string;
+  leapsValueUsd: string;
+  marginUsedUsd: string;
+};
+
 type OptionGuideTopic = "wheel" | "callSpread";
 
 const DEFAULT_SINGLE_STOCK_ROWS: SingleStockRow[] = [
-  { id: "stock-nvda", symbol: "NVDA.US", value: "1043.10" },
-  { id: "stock-dram", symbol: "DRAM.US", value: "111.90" },
-  { id: "stock-uco", symbol: "UCO.US", value: "427.90" },
+  { id: "stock-voo", symbol: "VOO.US", value: "7290.00" },
+  { id: "stock-qqq", symbol: "QQQ.US", value: "674.20" },
+  { id: "stock-7709", symbol: "7709.HK", value: "727.49" },
+  { id: "stock-0493", symbol: "0493.HK", value: "1.66" },
+  { id: "stock-amd", symbol: "AMD.US", value: "1237.75" },
+  { id: "stock-dram", symbol: "DRAM.US", value: "107.45" },
+  { id: "stock-mrvl", symbol: "MRVL.US", value: "983.55" },
+  { id: "stock-pltr", symbol: "PLTR.US", value: "249.27" },
+  { id: "stock-snxx", symbol: "SNXX.US", value: "714.11" },
 ];
 
+const DEFAULT_SNAPSHOT_SOURCE_FORM: SnapshotSourceForm = {
+  hkdUsdRate: "7.8352",
+  hsbcTotalHkd: "144367.35",
+  hsbcInvestmentHkd: "68114.10",
+  schwabNetLiquidationUsd: "9027.61",
+  schwabCashSweepUsd: "5735.48",
+  schwabStockValueUsd: "3292.13",
+  wheelValueUsd: "0",
+  leapsValueUsd: "0",
+  marginUsedUsd: "1163.54",
+};
+
+const SNAPSHOT_SOURCE_KEYS = Object.keys(DEFAULT_SNAPSHOT_SOURCE_FORM) as (keyof SnapshotSourceForm)[];
+
 const DEFAULT_CNY_USD_RATE = 7.2;
+const STABLE_INCOME_BASE_CASH_RATIO = 0.05;
+const NON_STABLE_INCOME_BASE_CASH_RATIO = 0.1;
+const STABLE_INCOME_OPTIONS_CAP_RATIO = 0.25;
+const NON_STABLE_INCOME_OPTIONS_CAP_RATIO = 0.15;
+const WHEEL_OPTIONS_RATIO = 0.6;
 
 function money(value: number) {
   return `$${value.toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
@@ -77,6 +114,27 @@ function amount(value: number) {
   return Number.isFinite(value) ? value.toFixed(2) : "0.00";
 }
 
+function snapshotSourceFormFromSnapshot(snapshot: SmartAllocationDashboard["snapshot"]): SnapshotSourceForm {
+  return SNAPSHOT_SOURCE_KEYS.reduce<SnapshotSourceForm>(
+    (form, key) => ({
+      ...form,
+      [key]: snapshot.source_inputs?.[key] || DEFAULT_SNAPSHOT_SOURCE_FORM[key],
+    }),
+    { ...DEFAULT_SNAPSHOT_SOURCE_FORM },
+  );
+}
+
+function singleStockRowsFromSnapshot(snapshot: SmartAllocationDashboard["snapshot"]): SingleStockRow[] {
+  const rows = Object.entries(snapshot.single_stock_values)
+    .filter(([, value]) => value > 0)
+    .map(([symbol, value]) => ({
+      id: `stock-${symbol.replace(/[^a-z0-9]/gi, "-").toLowerCase()}`,
+      symbol,
+      value: amount(value),
+    }));
+  return rows.length ? rows : DEFAULT_SINGLE_STOCK_ROWS;
+}
+
 function riskTone(level: SmartAllocationRiskLevel) {
   if (level === "red") return "border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300";
   if (level === "orange") return "border-orange-200 bg-orange-50 text-orange-700 dark:border-orange-900/60 dark:bg-orange-950/30 dark:text-orange-300";
@@ -84,16 +142,78 @@ function riskTone(level: SmartAllocationRiskLevel) {
   return "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300";
 }
 
-function statusCardTone(status: "normal" | "warning" | "abnormal") {
-  if (status === "abnormal") return "border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/25 dark:text-red-300";
-  if (status === "warning") return "border-yellow-200 bg-yellow-50 text-yellow-700 dark:border-yellow-900/60 dark:bg-yellow-950/25 dark:text-yellow-300";
-  return "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/25 dark:text-emerald-300";
-}
-
 function statusText(status: "normal" | "warning" | "abnormal") {
   if (status === "abnormal") return "异常";
   if (status === "warning") return "警告";
   return "正常";
+}
+
+function waterLevelTone(status: "normal" | "warning" | "abnormal") {
+  if (status === "abnormal") {
+    return {
+      border: "border-red-200 dark:border-red-900/60",
+      fill: "bg-red-400/20 dark:bg-red-500/20",
+      text: "text-red-700 dark:text-red-300",
+      badge: "bg-red-50 text-red-700 dark:bg-red-950/45 dark:text-red-300",
+    };
+  }
+  if (status === "warning") {
+    return {
+      border: "border-yellow-200 dark:border-yellow-900/60",
+      fill: "bg-yellow-300/35 dark:bg-yellow-500/20",
+      text: "text-yellow-700 dark:text-yellow-300",
+      badge: "bg-yellow-50 text-yellow-700 dark:bg-yellow-950/45 dark:text-yellow-300",
+    };
+  }
+  return {
+    border: "border-emerald-200 dark:border-emerald-900/60",
+    fill: "bg-emerald-300/35 dark:bg-emerald-500/20",
+    text: "text-emerald-700 dark:text-emerald-300",
+    badge: "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/45 dark:text-emerald-300",
+  };
+}
+
+function waterLevelPercent(value: number, target: number) {
+  if (target <= 0) return value > 0 ? 100 : 0;
+  if (value <= 0) return 0;
+  return Math.min(100, Math.max(8, (value / target) * 100));
+}
+
+function WaterfallLevelCard({
+  title,
+  subtitle,
+  status,
+  value,
+  target,
+  children,
+}: {
+  title: string;
+  subtitle: string;
+  status: "normal" | "warning" | "abnormal";
+  value: number;
+  target: number;
+  children: React.ReactNode;
+}) {
+  const tone = waterLevelTone(status);
+  const level = waterLevelPercent(value, target);
+
+  return (
+    <div className={`relative min-h-[230px] min-w-0 overflow-hidden rounded-xl border bg-white p-4 shadow-sm dark:bg-gray-950 ${tone.border}`}>
+      <div className={`absolute inset-x-0 bottom-0 ${tone.fill}`} style={{ height: `${level}%` }} />
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-white/60 dark:bg-white/10" style={{ bottom: `${level}%` }} />
+      <div className="relative z-10 flex min-h-[198px] flex-col">
+        <div className="flex items-start justify-between gap-3">
+          <div className={tone.text}>
+            <p className="text-sm font-semibold">{title}</p>
+            <p className="mt-1 text-xs opacity-80">{subtitle}</p>
+          </div>
+          <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${tone.badge}`}>{statusText(status)}</span>
+        </div>
+        <p className={`mt-4 text-2xl font-semibold ${tone.text}`}>{money(value)}</p>
+        <div className={`mt-4 space-y-2 text-xs ${tone.text}`}>{children}</div>
+      </div>
+    </div>
+  );
 }
 
 function wheelStatusTone(status: string) {
@@ -126,12 +246,14 @@ function BucketRow({
   name,
   actual,
   target,
-  ratio,
+  actualRatio,
+  targetRatio,
 }: {
   name: string;
   actual: number;
   target: number;
-  ratio: number;
+  actualRatio: number;
+  targetRatio: number;
 }) {
   const width = target > 0 ? Math.min(140, Math.max(2, (actual / target) * 100)) : 0;
   return (
@@ -139,7 +261,7 @@ function BucketRow({
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
         <span className="font-medium text-gray-800 dark:text-gray-100">{name}</span>
         <span className="text-gray-500 dark:text-gray-400">
-          实际 {money(actual)} / 目标 {money(target)} / {pct(ratio)}
+          实际 {money(actual)}（{pct(actualRatio)}） / 目标 {money(target)}（{pct(targetRatio)}）
         </span>
       </div>
       <div className="h-2 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800">
@@ -285,11 +407,15 @@ function cashflowAuditText(value: string) {
 function calculateTargets(ageValue: string, incomeStatus: "stable" | "unstable" | "retired", totalEquity: number) {
   const age = Math.max(0, Math.min(120, Math.trunc(num(ageValue))));
   const dcaRatio = Math.min(age + 20, 70) / 100;
-  const cashRatio = incomeStatus === "stable" ? 0.05 : 0.1;
-  const optionsRatio = Math.max(0, 1 - dcaRatio - cashRatio);
+  const baseCashRatio = incomeStatus === "stable" ? STABLE_INCOME_BASE_CASH_RATIO : NON_STABLE_INCOME_BASE_CASH_RATIO;
+  const optionsCapRatio = incomeStatus === "stable" ? STABLE_INCOME_OPTIONS_CAP_RATIO : NON_STABLE_INCOME_OPTIONS_CAP_RATIO;
+  const rawOptionsRatio = Math.max(0, 1 - dcaRatio - baseCashRatio);
+  const optionsRatio = Math.min(rawOptionsRatio, optionsCapRatio);
+  const cashRatio = 1 - dcaRatio - optionsRatio;
   const dcaValue = totalEquity * dcaRatio;
   const cashValue = totalEquity * cashRatio;
   const optionsValue = totalEquity * optionsRatio;
+  const wheelValue = optionsValue * WHEEL_OPTIONS_RATIO;
   return {
     dca_ratio: dcaRatio,
     cash_ratio: cashRatio,
@@ -301,8 +427,8 @@ function calculateTargets(ageValue: string, incomeStatus: "stable" | "unstable" 
     voo_value: dcaValue * 0.3,
     quality_stock_value: dcaValue * 0.4,
     single_stock_limit: dcaValue * 0.1,
-    wheel_value: optionsValue * 0.8,
-    leaps_value: optionsValue * 0.2,
+    wheel_value: wheelValue,
+    leaps_value: optionsValue - wheelValue,
     margin_limit: totalEquity * 0.25,
   };
 }
@@ -333,18 +459,8 @@ export default function SmartAllocationDashboard({
     latest_rsi_by_symbol: "",
     open_leaps_symbols: initialDashboard.snapshot.open_leaps_symbols.join(", "),
   });
-  const [singleStockRows, setSingleStockRows] = useState<SingleStockRow[]>(DEFAULT_SINGLE_STOCK_ROWS);
-  const [snapshotSourceForm, setSnapshotSourceForm] = useState({
-    hkdUsdRate: "7.8",
-    hsbcTotalHkd: "74378.54",
-    hsbcInvestmentHkd: "61790",
-    schwabNetLiquidationUsd: "3014.85",
-    schwabCashSweepUsd: "1431.95",
-    schwabStockValueUsd: "1582.90",
-    wheelValueUsd: "0",
-    leapsValueUsd: "0",
-    marginUsedUsd: "0",
-  });
+  const [singleStockRows, setSingleStockRows] = useState<SingleStockRow[]>(() => singleStockRowsFromSnapshot(initialDashboard.snapshot));
+  const [snapshotSourceForm, setSnapshotSourceForm] = useState<SnapshotSourceForm>(() => snapshotSourceFormFromSnapshot(initialDashboard.snapshot));
   const [externalIncomeForm, setExternalIncomeForm] = useState({
     incomeCny: "10000",
   });
@@ -371,7 +487,7 @@ export default function SmartAllocationDashboard({
   const showWheelStrategy = shouldShow("wheel") || (isOptionStrategiesView && optionStrategyTab === "wheel");
   const showCallSpreadStrategy = shouldShow("callSpread") || (isOptionStrategiesView && optionStrategyTab === "callSpread");
   const derivedSnapshot = useMemo(() => {
-    const hkdUsdRate = num(snapshotSourceForm.hkdUsdRate) || 7.8;
+    const hkdUsdRate = num(snapshotSourceForm.hkdUsdRate) || 7.8352;
     const hsbcTotalUsd = num(snapshotSourceForm.hsbcTotalHkd) / hkdUsdRate;
     const hsbcInvestmentUsd = num(snapshotSourceForm.hsbcInvestmentHkd) / hkdUsdRate;
     const hsbcCashUsd = Math.max(hsbcTotalUsd - hsbcInvestmentUsd, 0);
@@ -428,15 +544,15 @@ export default function SmartAllocationDashboard({
   const ageNumber = Math.max(0, Math.min(120, Math.trunc(num(profileAge))));
   const blockingGuardrailCount = dashboard.guardrails.filter((item) => item.blocking).length;
   const targetFormulaItems = [
-    `定投 = min(${ageNumber} + 20, 70)% = ${pct(displayTargets.dca_ratio)}`,
-    `现金 = ${incomeStatus === "stable" ? "5%" : "10%"}（${incomeStatusText(incomeStatus)}）`,
-    `期权 = 100% - 定投 - 现金 = ${pct(displayTargets.options_ratio)}`,
+    `目标定投 = min(${ageNumber} + 20, 70)% = ${pct(displayTargets.dca_ratio)}`,
+    `目标期权 = min(100% - 定投 - 基础现金, ${incomeStatus === "stable" ? "25%" : "15%"}) = ${pct(displayTargets.options_ratio)}`,
+    `目标现金 = 剩余安全垫 = ${pct(displayTargets.cash_ratio)}（${incomeStatusText(incomeStatus)}）`,
   ];
   const guardrailFormulaItems = [
     "单股上限 = 定投仓位 x 10%",
     "保证金上限 = 总权益 x 25%",
-    "Wheel 目标 = 期权仓位 x 80%",
-    "LEAPS 目标 = 期权仓位 x 20%",
+    "Wheel 目标 = 期权仓位 x 60%",
+    "LEAPS 目标 = 期权仓位 x 40%",
     `仓位偏离 >= ${pct(dashboard.profile.rebalance_threshold)} 触发再平衡`,
   ];
   const healthRuleText = "max(0, 100 - 红线数 x 15 - 阻断红线数 x 20)";
@@ -561,7 +677,9 @@ export default function SmartAllocationDashboard({
   const hasLeapsStarted = displaySnapshot.leaps_value > 0 || displayOpenLeapsSymbols.length > 0 || cashflowEvents.some((item) => item.event_type === "leaps_profit_realized");
   const optionIncomeStage = hasWheelStarted ? "策略已启动，等待权利金流水" : "未启动 Wheel";
   const leapsStage = hasLeapsStarted ? "策略已启动，等待退出纪律" : "未启动 LEAPS";
-  const cashStage = displaySnapshot.cash_value >= displayTargets.cash_value ? "现金已补满" : "现金待补足";
+  const cashSafetyValue = Math.min(displaySnapshot.cash_value, displayTargets.cash_value);
+  const cashExcessValue = Math.max(displaySnapshot.cash_value - displayTargets.cash_value, 0);
+  const cashStage = displaySnapshot.cash_value >= displayTargets.cash_value ? "安全垫已补满" : "安全垫待补足";
   const dcaStage = waterfallPreview.dcaOverflow > 0 ? "可生成定投注入草案" : "暂无期权利润溢出";
   const optionBucketMismatch = Math.abs(displaySnapshot.options_value - displaySnapshot.wheel_value - displaySnapshot.leaps_value) > 1;
   const optionProfitStatus: "normal" | "warning" | "abnormal" = optionBucketMismatch
@@ -603,6 +721,7 @@ export default function SmartAllocationDashboard({
           : "下一笔开仓仍按现金担保、单标的上限和事件风险逐项检查。";
   const candidateWheelCount = wheelCandidates.filter((item) => item.status === "candidate").length;
   const topWheelCandidates = wheelCandidates.slice(0, 8);
+  const dailyWheelRows = wheelDailyRecommendation?.candidates ?? wheelCandidates.filter((item) => item.status === "candidate" && item.max_contracts > 0 && item.blockers.length === 0);
   const callSpreadCandidates = callSpreadDailyRecommendation?.candidates ?? [];
   const topCallSpreadCandidates = callSpreadCandidates.slice(0, 10);
   const callSpreadActionableCount = callSpreadDailyRecommendation?.actionable_count ?? callSpreadCandidates.filter((item) => item.status === "candidate").length;
@@ -812,7 +931,7 @@ export default function SmartAllocationDashboard({
       await updateSmartAllocationProfile(dashboard.profile.id, {
         age: Number(profileAge),
         income_status: incomeStatus,
-        name: "智能仓位方案",
+        name: "踏潮账户结构与目标（2026-05-04 汇丰+嘉信）",
         rebalance_threshold: 0.05,
         allow_bull_market_leaps_relaxation: false,
         quality_stock_symbols: splitSymbols(qualitySymbols),
@@ -831,6 +950,7 @@ export default function SmartAllocationDashboard({
         single_stock_values: parseNumberMap(nextSnapshotForm.single_stock_values),
         latest_rsi_by_symbol: parseNumberMap(nextSnapshotForm.latest_rsi_by_symbol),
         open_leaps_symbols: splitSymbols(nextSnapshotForm.open_leaps_symbols),
+        source_inputs: snapshotSourceForm,
       });
       setDashboard(next);
       await refreshCashflowEvents();
@@ -1117,7 +1237,7 @@ export default function SmartAllocationDashboard({
             </div>
             <div className="grid gap-3 text-sm md:grid-cols-3">
               {[
-                ["hkdUsdRate", "港币兑美元，例 7.8"],
+                ["hkdUsdRate", "USD/HKD，例 7.8"],
                 ["hsbcTotalHkd", "汇丰总资产 HKD"],
                 ["hsbcInvestmentHkd", "汇丰投资市值 HKD"],
                 ["schwabNetLiquidationUsd", "嘉信净清仓价值 USD"],
@@ -1244,7 +1364,7 @@ export default function SmartAllocationDashboard({
               </div>
             </div>
             <p className="mt-3 text-xs leading-5 text-gray-500 dark:text-gray-400">
-              口径：汇丰现金 = 汇丰总资产 - 汇丰投资市值；嘉信现金使用“现金转存计划账户”，不是“期权购买力/股票购买力”。截图里没有期权持仓时，Wheel 和 LEAPS 填 0。
+              口径：汇丰现金 = 汇丰总资产 - 汇丰投资市值；嘉信现金使用“现金转存计划账户”，不是“期权购买力/股票购买力”。Wheel 和 LEAPS 只填明确归类到期权策略的市值，不从嘉信净清仓价值里反推。
             </p>
           </div>
         </Section>
@@ -1262,9 +1382,27 @@ export default function SmartAllocationDashboard({
             ))}
           </div>
           <div className="space-y-5">
-            <BucketRow name="定投仓位" actual={displaySnapshot.dca_value} target={displayTargets.dca_value} ratio={displayTargets.dca_ratio} />
-            <BucketRow name="现金仓位" actual={displaySnapshot.cash_value} target={displayTargets.cash_value} ratio={displayTargets.cash_ratio} />
-            <BucketRow name="期权仓位" actual={displaySnapshot.options_value} target={displayTargets.options_value} ratio={displayTargets.options_ratio} />
+            <BucketRow
+              name="定投仓位"
+              actual={displaySnapshot.dca_value}
+              target={displayTargets.dca_value}
+              actualRatio={displaySnapshot.total_equity > 0 ? displaySnapshot.dca_value / displaySnapshot.total_equity : 0}
+              targetRatio={displayTargets.dca_ratio}
+            />
+            <BucketRow
+              name="现金仓位"
+              actual={displaySnapshot.cash_value}
+              target={displayTargets.cash_value}
+              actualRatio={displaySnapshot.total_equity > 0 ? displaySnapshot.cash_value / displaySnapshot.total_equity : 0}
+              targetRatio={displayTargets.cash_ratio}
+            />
+            <BucketRow
+              name="期权仓位"
+              actual={displaySnapshot.options_value}
+              target={displayTargets.options_value}
+              actualRatio={displaySnapshot.total_equity > 0 ? displaySnapshot.options_value / displaySnapshot.total_equity : 0}
+              targetRatio={displayTargets.options_ratio}
+            />
           </div>
         </Section>
 
@@ -1668,7 +1806,12 @@ export default function SmartAllocationDashboard({
               <span>状态</span>
               <span>账户级结论</span>
             </div>
-            {(wheelDailyRecommendation?.candidates ?? wheelCandidates).map((item) => (
+            {dailyWheelRows.length === 0 ? (
+              <div className="border-t border-gray-200 px-4 py-5 text-sm text-gray-600 dark:border-gray-800 dark:text-gray-300">
+                当前 Wheel 账户约束下暂无可核验的现金担保 Put：单张担保需要同时低于 Wheel 可用额度和单股上限。超预算标的已从推荐表移除，避免把买不了的标的当作下一步。
+              </div>
+            ) : null}
+            {dailyWheelRows.map((item) => (
               <div key={item.symbol} className="grid min-w-[980px] grid-cols-[1fr_90px_1fr_1fr_1.4fr] gap-3 border-t border-gray-200 px-4 py-3 text-sm text-gray-700 dark:border-gray-800 dark:text-gray-200">
                 <div>
                   <p className="font-semibold text-gray-900 dark:text-white">{item.symbol}</p>
@@ -1830,52 +1973,41 @@ export default function SmartAllocationDashboard({
       <div className={isDedicatedWaterfallView ? "grid gap-6" : "grid gap-6 xl:grid-cols-2"}>
         {shouldShow("waterfall") ? (
         <Section title="现金流瀑布" description="基于真实账户快照判断现金安全垫；只有已发生的 Wheel 权利金和 LEAPS 已实现盈利才进入瀑布分配。">
-          <div className="grid gap-4 xl:grid-cols-3">
-            <div className={`rounded-xl border p-4 ${statusCardTone(optionProfitStatus)}`}>
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold">期权利润池</p>
-                  <p className="mt-1 text-xs opacity-80">只统计已发生的 Wheel 权利金 / LEAPS 已实现盈利</p>
-                </div>
-                <span className="rounded-full bg-white/70 px-2.5 py-1 text-xs font-semibold dark:bg-gray-950/30">{statusText(optionProfitStatus)}</span>
-              </div>
-              <p className="mt-4 text-2xl font-semibold">{money(waterfallPreview.amountValue)}</p>
-              <div className="mt-4 space-y-2 text-xs opacity-80">
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+            <WaterfallLevelCard
+              title="期权利润池"
+              subtitle="只统计已发生的 Wheel 权利金 / LEAPS 已实现盈利"
+              status={optionProfitStatus}
+              value={waterfallPreview.amountValue}
+              target={Math.max(displayTargets.options_value, waterfallPreview.amountValue, 1)}
+            >
                 <p>Wheel：{money(displaySnapshot.wheel_value)}，{optionIncomeStage}</p>
                 <p>LEAPS：{money(displaySnapshot.leaps_value)}，{leapsStage}</p>
                 <p>账户期权仓位：{money(displaySnapshot.options_value)}，不等于可分配利润</p>
-              </div>
-            </div>
-            <div className={`rounded-xl border p-4 ${statusCardTone(cashBucketStatus)}`}>
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold">现金池</p>
-                  <p className="mt-1 text-xs opacity-80">安全垫 / LEAPS 等待区</p>
-                </div>
-                <span className="rounded-full bg-white/70 px-2.5 py-1 text-xs font-semibold dark:bg-gray-950/30">{statusText(cashBucketStatus)}</span>
-              </div>
-              <p className="mt-4 text-2xl font-semibold">{money(displaySnapshot.cash_value)}</p>
-              <div className="mt-4 space-y-2 text-xs opacity-80">
-                <p>目标：{money(displayTargets.cash_value)}，{cashStage}</p>
+            </WaterfallLevelCard>
+            <WaterfallLevelCard
+              title="现金安全垫"
+              subtitle="与账户结构现金仓位同源，水位按目标封顶"
+              status={cashBucketStatus}
+              value={cashSafetyValue}
+              target={displayTargets.cash_value}
+            >
+                <p>账户现金总额：{money(displaySnapshot.cash_value)}</p>
+                <p>安全垫目标：{money(displayTargets.cash_value)}，{cashStage}</p>
+                <p>超额现金 / LEAPS 等待：{money(cashExcessValue)}</p>
                 <p>缺口：{money(waterfallPreview.cashGap)}</p>
-                <p>本次可补：{money(waterfallPreview.cashTopup)}</p>
-              </div>
-            </div>
-            <div className={`rounded-xl border p-4 ${statusCardTone(dcaBucketStatus)}`}>
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold">定投池</p>
-                  <p className="mt-1 text-xs opacity-80">QQQM / VOO / 优质个股</p>
-                </div>
-                <span className="rounded-full bg-white/70 px-2.5 py-1 text-xs font-semibold dark:bg-gray-950/30">{statusText(dcaBucketStatus)}</span>
-              </div>
-              <p className="mt-4 text-2xl font-semibold">{money(displaySnapshot.dca_value)}</p>
-              <div className="mt-4 space-y-2 text-xs opacity-80">
+            </WaterfallLevelCard>
+            <WaterfallLevelCard
+              title="定投池"
+              subtitle="QQQM / VOO / 优质个股"
+              status={dcaBucketStatus}
+              value={displaySnapshot.dca_value}
+              target={displayTargets.dca_value}
+            >
                 <p>目标：{money(displayTargets.dca_value)}，{dcaStage}</p>
                 <p>期权利润溢出：{money(waterfallPreview.dcaOverflow)}</p>
                 {hasBlockingSingleStock ? <p>单股集中度触发阻断，先处理超限标的。</p> : null}
-              </div>
-            </div>
+            </WaterfallLevelCard>
           </div>
 
           <div className="mt-5 rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-gray-900/40">

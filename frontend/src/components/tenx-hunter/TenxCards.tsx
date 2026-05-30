@@ -65,33 +65,33 @@ export function TenxPriceSnapshotStrip({ snapshot, market }: { snapshot?: TenxPr
   }
 
   return (
-    <div className="mt-4 grid gap-3 md:grid-cols-4">
-      <div className="rounded-xl bg-gray-50 p-3 dark:bg-gray-900/60">
+    <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="min-w-0 rounded-xl bg-gray-50 p-3 dark:bg-gray-900/60">
         <div className="text-xs text-gray-500 dark:text-gray-400">价格姿态</div>
         <div className="mt-2 flex items-center gap-2">
           <StatusTag label={snapshot.postureLabel} tone={getPricePostureTone(snapshot.posture)} />
           <span className="text-xs text-gray-500 dark:text-gray-400">{snapshot.confidence}</span>
         </div>
       </div>
-      <div className="rounded-xl bg-gray-50 p-3 dark:bg-gray-900/60">
+      <div className="min-w-0 rounded-xl bg-gray-50 p-3 dark:bg-gray-900/60">
         <div className="text-xs text-gray-500 dark:text-gray-400">Base 目标区</div>
-        <div className="mt-1 text-sm font-semibold text-gray-900 dark:text-white">
+        <div className="mt-1 text-sm font-semibold leading-5 text-gray-900 [overflow-wrap:anywhere] dark:text-white">
           {formatRange({ low: snapshot.baseTargetLow, high: snapshot.baseTargetHigh }, market)}
         </div>
         <div className="mt-1 text-xs text-green-600 dark:text-green-300">{formatPercent(snapshot.upsidePctMid)}</div>
       </div>
-      <div className="rounded-xl bg-gray-50 p-3 dark:bg-gray-900/60">
+      <div className="min-w-0 rounded-xl bg-gray-50 p-3 dark:bg-gray-900/60">
         <div className="text-xs text-gray-500 dark:text-gray-400">Bear 风险区</div>
-        <div className="mt-1 text-sm font-semibold text-gray-900 dark:text-white">
+        <div className="mt-1 text-sm font-semibold leading-5 text-gray-900 [overflow-wrap:anywhere] dark:text-white">
           {snapshot.bearZoneLow !== null && snapshot.bearZoneHigh !== null
             ? `${formatPrice(snapshot.bearZoneLow, market)}-${formatPrice(snapshot.bearZoneHigh, market)}`
             : "N/A"}
         </div>
         <div className="mt-1 text-xs text-red-600 dark:text-red-300">{formatPercent(snapshot.downsidePctMid)}</div>
       </div>
-      <div className="rounded-xl bg-gray-50 p-3 dark:bg-gray-900/60">
+      <div className="min-w-0 rounded-xl bg-gray-50 p-3 dark:bg-gray-900/60">
         <div className="text-xs text-gray-500 dark:text-gray-400">Bull 上沿</div>
-        <div className="mt-1 text-sm font-semibold text-gray-900 dark:text-white">
+        <div className="mt-1 text-sm font-semibold leading-5 text-gray-900 [overflow-wrap:anywhere] dark:text-white">
           {formatRange({ low: snapshot.bullTargetLow, high: snapshot.bullTargetHigh }, market)}
         </div>
         <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">{snapshot.asOfDate}</div>

@@ -124,6 +124,7 @@ export function refreshSmartAllocationSnapshot(payload: {
   single_stock_values: Record<string, number>;
   latest_rsi_by_symbol: Record<string, number>;
   open_leaps_symbols: string[];
+  source_inputs?: Record<string, string>;
 }) {
   return requestJson<SmartAllocationDashboard>(buildUrls("/api/v1/smart-allocation/snapshots/refresh"), {
     method: "POST",

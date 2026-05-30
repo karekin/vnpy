@@ -49,12 +49,15 @@ def build_tradeable_mask(df: pd.DataFrame) -> pd.Series:
     1. 收盘价必须有效
     2. 若已有 `is_tradeable` 列，直接复用
     3. 否则要求成交量或成交额至少一项大于 0
+    4. 若历史测试/旧数据缺少流动性字段，则退回到收盘价有效口径
     """
     close_ok = pd.to_numeric(df.get("close_price"), errors="coerce").fillna(0.0) > 0
     if "is_tradeable" in df.columns:
         return close_ok & df["is_tradeable"].fillna(False).astype(bool)
-    volume = pd.to_numeric(df.get("volume_hand"), errors="coerce").fillna(0.0)
-    amount = pd.to_numeric(df.get("turnover_amount_wan"), errors="coerce").fillna(0.0)
+    if "volume_hand" not in df.columns and "turnover_amount_wan" not in df.columns:
+        return close_ok
+    volume = pd.to_numeric(df["volume_hand"], errors="coerce").fillna(0.0) if "volume_hand" in df.columns else pd.Series(0.0, index=df.index)
+    amount = pd.to_numeric(df["turnover_amount_wan"], errors="coerce").fillna(0.0) if "turnover_amount_wan" in df.columns else pd.Series(0.0, index=df.index)
     return close_ok & ((volume > 0) | (amount > 0))
 
 

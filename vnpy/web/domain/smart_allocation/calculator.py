@@ -6,6 +6,11 @@ from vnpy.web.domain.smart_allocation.models import AllocationProfile, Allocatio
 
 
 CENT = Decimal("0.01")
+STABLE_INCOME_BASE_CASH_RATIO = Decimal("0.05")
+NON_STABLE_INCOME_BASE_CASH_RATIO = Decimal("0.10")
+STABLE_INCOME_OPTIONS_CAP_RATIO = Decimal("0.25")
+NON_STABLE_INCOME_OPTIONS_CAP_RATIO = Decimal("0.15")
+WHEEL_OPTIONS_RATIO = Decimal("0.60")
 
 
 def money(value: Decimal) -> Decimal:
@@ -24,12 +29,16 @@ def decimal_from(value: Decimal | float | int | str) -> Decimal:
 
 def calculate_allocation_targets(profile: AllocationProfile, total_equity: Decimal) -> AllocationTargets:
     dca_ratio = Decimal(min(profile.age + 20, 70)) / Decimal("100")
-    cash_ratio = Decimal("0.05") if profile.income_status == IncomeStatus.STABLE else Decimal("0.10")
-    options_ratio = Decimal("1.00") - dca_ratio - cash_ratio
+    base_cash_ratio = STABLE_INCOME_BASE_CASH_RATIO if profile.income_status == IncomeStatus.STABLE else NON_STABLE_INCOME_BASE_CASH_RATIO
+    options_cap_ratio = STABLE_INCOME_OPTIONS_CAP_RATIO if profile.income_status == IncomeStatus.STABLE else NON_STABLE_INCOME_OPTIONS_CAP_RATIO
+    raw_options_ratio = max(Decimal("0"), Decimal("1.00") - dca_ratio - base_cash_ratio)
+    options_ratio = min(raw_options_ratio, options_cap_ratio)
+    cash_ratio = Decimal("1.00") - dca_ratio - options_ratio
 
     dca_value = money(total_equity * dca_ratio)
     cash_value = money(total_equity * cash_ratio)
     options_value = money(total_equity * options_ratio)
+    wheel_value = money(options_value * WHEEL_OPTIONS_RATIO)
 
     return AllocationTargets(
         dca_ratio=ratio(dca_ratio),
@@ -42,7 +51,7 @@ def calculate_allocation_targets(profile: AllocationProfile, total_equity: Decim
         voo_value=money(dca_value * Decimal("0.30")),
         quality_stock_value=money(dca_value * Decimal("0.40")),
         single_stock_limit=money(dca_value * Decimal("0.10")),
-        wheel_value=money(options_value * Decimal("0.80")),
-        leaps_value=money(options_value * Decimal("0.20")),
+        wheel_value=wheel_value,
+        leaps_value=money(options_value - wheel_value),
         margin_limit=money(total_equity * Decimal("0.25")),
     )

@@ -10,6 +10,13 @@ from vnpy.web.domain.smart_allocation.models import (
     RiskLevel,
 )
 
+INDEX_ETF_SYMBOLS = {"QQQ.US", "QQQM.US", "SPY.US", "VOO.US"}
+
+
+def _is_concentration_exempt_symbol(profile: AllocationProfile, symbol: str) -> bool:
+    normalized = symbol.upper()
+    return normalized in INDEX_ETF_SYMBOLS or normalized in {profile.qqqm_symbol.upper(), profile.voo_symbol.upper()}
+
 
 def _actual_ratio(value: Decimal, total: Decimal) -> Decimal:
     if total <= 0:
@@ -84,6 +91,8 @@ def run_guardrail_checks(
     )
 
     for symbol, value in snapshot.single_stock_values.items():
+        if _is_concentration_exempt_symbol(profile, symbol):
+            continue
         if value > targets.single_stock_limit:
             violations.append(
                 GuardrailViolation(

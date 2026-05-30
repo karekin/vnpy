@@ -19,6 +19,13 @@ DEFAULT_CALL_SPREAD_UNIVERSE: tuple[tuple[str, str], ...] = (
     ("SPY.US", "系统默认高流动性 ETF 观察池"),
 )
 
+INDEX_ETF_SYMBOLS = {"QQQ.US", "QQQM.US", "SPY.US", "VOO.US"}
+
+
+def _is_concentration_exempt_symbol(symbol: str) -> bool:
+    return symbol.upper() in INDEX_ETF_SYMBOLS
+
+
 CALL_SPREAD_METHODOLOGY: tuple[str, ...] = (
     "Call Spread 与 Wheel 并列，但风控口径不同：最大亏损是净权利金，不是一张 Put 的现金担保金额。",
     "可用资金取期权目标缺口、现金超额和保证金余量三者最小值，避免把长期仓位或应急现金误当期权弹药。",
@@ -201,7 +208,7 @@ def _build_candidate(
     blockers: list[str] = []
     if budget.per_trade_limit <= 0:
         blockers.append("期权可用资金不足，不能新增 Call Spread。")
-    if holding_value > targets.single_stock_limit:
+    if not _is_concentration_exempt_symbol(normalized_symbol) and holding_value > targets.single_stock_limit:
         blockers.append("当前该标的持仓已超过单股集中度上限，暂不新增方向性风险。")
     spread = _select_best_spread(rows=rows, underlying_price=underlying_price, per_trade_limit=budget.per_trade_limit)
     if spread is None:
