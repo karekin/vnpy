@@ -568,9 +568,11 @@ class TenxHunterService:
                 """
                 SELECT symbol
                 FROM dwd.user_watchlist_state_current
-                WHERE market = %s AND state = 'watching'
+                WHERE user_id = %s
+                  AND market = %s
+                  AND state = 'watching'
                 """,
-                (market,),
+                (DEFAULT_USER_ID, market),
             ).fetchall()
             watch_symbols = {str(row["symbol"]) for row in watch_state_rows}
 
@@ -580,15 +582,18 @@ class TenxHunterService:
                 FROM (
                     SELECT symbol
                     FROM ads.watchlist_alert_daily
-                    WHERE market = %s
+                    WHERE user_id = %s
+                      AND market = %s
                     UNION ALL
                     SELECT symbol
                     FROM dwd.user_alert_rule_current
-                    WHERE market = %s AND status <> 'archived'
+                    WHERE user_id = %s
+                      AND market = %s
+                      AND status <> 'archived'
                 ) alerts
                 GROUP BY symbol
                 """,
-                (market, market),
+                (DEFAULT_USER_ID, market, DEFAULT_USER_ID, market),
             ).fetchall()
             alert_counts = {str(row["symbol"]): int(row["alert_count"] or 0) for row in alert_count_rows}
             alert_symbols = {symbol for symbol, count in alert_counts.items() if count > 0}
@@ -598,12 +603,13 @@ class TenxHunterService:
                     symbol,
                     rule_payload->>'due_at' AS due_at
                 FROM dwd.user_alert_rule_current
-                WHERE market = %s
+                WHERE user_id = %s
+                  AND market = %s
                   AND status <> 'archived'
                   AND COALESCE(rule_payload->>'due_at', '') <> ''
                 ORDER BY symbol, updated_at DESC
                 """,
-                (market,),
+                (DEFAULT_USER_ID, market),
             ).fetchall()
             alert_due_by_symbol = {str(row["symbol"]): str(row["due_at"]) for row in alert_due_rows if row["due_at"]}
 
@@ -938,10 +944,12 @@ class TenxHunterService:
                 LEFT JOIN ads.candidate_pool_daily c
                   ON c.security_id = w.security_id AND c.trade_date = %s AND c.market = w.market
                 LEFT JOIN ads.price_map_current pm ON pm.security_id = w.security_id AND pm.market = w.market
-                WHERE w.market = %s AND w.state = 'watching'
+                WHERE w.user_id = %s
+                  AND w.market = %s
+                  AND w.state = 'watching'
                 ORDER BY c.total_score DESC NULLS LAST, w.symbol
                 """,
-                (latest_trade_date, market),
+                (latest_trade_date, DEFAULT_USER_ID, market),
             ).fetchall()
             watchlist: list[TenxWatchlistItemRow] = []
             for row in watchlist_rows:
@@ -1388,17 +1396,19 @@ class TenxHunterService:
                        alert_type, 'system' AS source, created_at, '查看研究卡片并复核' AS next_action,
                        'active' AS status, '{}'::jsonb AS rule_payload
                 FROM ads.watchlist_alert_daily
-                WHERE market = %s
+                WHERE user_id = %s
+                  AND market = %s
                 UNION ALL
                 SELECT rule_id AS id, market, symbol, title, note AS summary,
                        severity, rule_type AS alert_type, 'user-draft' AS source, updated_at AS created_at,
                        COALESCE(rule_payload->>'next_action', '完善提醒规则') AS next_action,
                        status, rule_payload
                 FROM dwd.user_alert_rule_current
-                WHERE market = %s
+                WHERE user_id = %s
+                  AND market = %s
                 ORDER BY created_at DESC
                 """,
-                (market, market),
+                (DEFAULT_USER_ID, market, DEFAULT_USER_ID, market),
             ).fetchall()
             freshness = self._freshness(self._format_timestamp(datetime.now(timezone.utc)), market)
             items: list[TenxAlertItemRow] = []
