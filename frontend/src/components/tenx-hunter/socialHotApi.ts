@@ -1,10 +1,15 @@
-function configuredApiBase() {
+function runtimeEnv(name: string) {
+  return typeof process !== "undefined" ? process.env[name] : undefined;
+}
+
+function configuredServerApiBase() {
   const configured = [
-    process.env.SOCIAL_HOT_INTERNAL_API_URL,
-    process.env.TENX_INTERNAL_API_URL,
-    process.env.NEXT_PUBLIC_SOCIAL_HOT_API_URL,
-    process.env.NEXT_PUBLIC_TENX_HUNTER_API_URL,
-    process.env.NEXT_PUBLIC_API_URL,
+    runtimeEnv("SOCIAL_HOT_INTERNAL_API_URL"),
+    runtimeEnv("TENX_INTERNAL_API_URL"),
+    runtimeEnv("TENX_DEERFLOW_API_URL"),
+    runtimeEnv("NEXT_PUBLIC_SOCIAL_HOT_API_URL"),
+    runtimeEnv("NEXT_PUBLIC_TENX_HUNTER_API_URL"),
+    runtimeEnv("NEXT_PUBLIC_API_URL"),
     "http://127.0.0.1:8000",
   ].find((item) => typeof item === "string" && item.trim().length > 0);
 
@@ -12,7 +17,11 @@ function configuredApiBase() {
 }
 
 function buildUrl(path: string) {
-  return `${configuredApiBase()}${path}`;
+  if (typeof window !== "undefined") {
+    return path;
+  }
+
+  return `${configuredServerApiBase()}${path}`;
 }
 
 export class SocialHotApiError extends Error {

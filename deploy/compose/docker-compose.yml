@@ -274,6 +274,8 @@ services:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://position-api:8000}
       NEXT_PUBLIC_SMART_ALLOCATION_API_URL: ${NEXT_PUBLIC_SMART_ALLOCATION_API_URL:-http://position-api:8000}
       NEXT_PUBLIC_TENX_HUNTER_API_URL: ${NEXT_PUBLIC_TENX_HUNTER_API_URL:-http://position-api:8000}
+      TENX_INTERNAL_API_URL: ${TENX_INTERNAL_API_URL:-http://position-api:8000}
+      SOCIAL_HOT_INTERNAL_API_URL: ${SOCIAL_HOT_INTERNAL_API_URL:-http://position-api:8000}
       TENX_DEERFLOW_API_URL: ${TENX_DEERFLOW_API_URL:-http://position-api:8000}
     depends_on:
       position-api:
