@@ -65,6 +65,8 @@ class OdsSchemaTests(unittest.TestCase):
     def test_schema_sql_adds_market_dimension_to_core_tables(self) -> None:
         self.assertIn("market TEXT NOT NULL DEFAULT 'US'", pipeline.SCHEMA_SQL)
         self.assertIn("CREATE TABLE IF NOT EXISTS dwd.user_alert_rule_current", pipeline.SCHEMA_SQL)
+        self.assertIn("CREATE TABLE IF NOT EXISTS dwd.user_research_report_current", pipeline.SCHEMA_SQL)
+        self.assertIn("CREATE TABLE IF NOT EXISTS dwd.user_discover_candidate_current", pipeline.SCHEMA_SQL)
 
     def test_sync_sql_drops_non_core_ods_tables(self) -> None:
         self.assertIn("DROP TABLE IF EXISTS ods.sec_submissions_raw CASCADE;", pipeline.ODS_SCHEMA_SYNC_SQL)

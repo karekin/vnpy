@@ -7,6 +7,10 @@ def test_tenx_api_module_imports_without_multipart_dependency() -> None:
     paths = {route.path for route in tenx_hunter.router.routes}
 
     assert "/tenx-hunter/workspace" in paths
+    assert "/tenx-hunter/market-sentiment" in paths
+    assert "/tenx-hunter/political-signals" in paths
+    assert "/tenx-hunter/discover" in paths
+    assert "/tenx-hunter/reports/{symbol}" in paths
     assert "/tenx-hunter/deerflow/uploads" in paths
 
 

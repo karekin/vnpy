@@ -17,6 +17,8 @@ from vnpy.web.services.cb_tushare_service import CbTushareService
 
 if TYPE_CHECKING:
     from vnpy.web.services.investment_copilot_service import InvestmentCopilotService
+    from vnpy.web.services.market_sentiment_service import MarketSentimentService
+    from vnpy.web.services.political_signal_service import PoliticalSignalService
     from vnpy.web.services.smart_allocation_service import SmartAllocationService
     from vnpy.web.services.social_hot_stocks_service import SocialHotStocksService
     from vnpy.web.services.tenx_hunter_service import TenxHunterService
@@ -31,10 +33,12 @@ _deerflow_agent_service: DeerFlowService | None = None
 _allocation_service: SmartAllocationService | None = None
 _investment_copilot_service: InvestmentCopilotService | None = None
 _social_hot_service: SocialHotStocksService | None = None
+_sentiment_service: MarketSentimentService | None = None
+_political_service: PoliticalSignalService | None = None
 
 
 def __getattr__(name: str):
-    global _history_service, _quant_service, _market_service, _catalog_service, _tushare_service, _tenx_service, _deerflow_agent_service, _allocation_service, _investment_copilot_service, _social_hot_service
+    global _history_service, _quant_service, _market_service, _catalog_service, _tushare_service, _tenx_service, _deerflow_agent_service, _allocation_service, _investment_copilot_service, _social_hot_service, _sentiment_service, _political_service
 
     if name == "history_service":
         if _history_service is None:
@@ -100,6 +104,26 @@ def __getattr__(name: str):
 
             _social_hot_service = SocialHotStocksService()
         return _social_hot_service
+    if name == "MarketSentimentService":
+        from vnpy.web.services.market_sentiment_service import MarketSentimentService
+
+        return MarketSentimentService
+    if name == "sentiment_service":
+        if _sentiment_service is None:
+            from vnpy.web.services.market_sentiment_service import MarketSentimentService
+
+            _sentiment_service = MarketSentimentService()
+        return _sentiment_service
+    if name == "PoliticalSignalService":
+        from vnpy.web.services.political_signal_service import PoliticalSignalService
+
+        return PoliticalSignalService
+    if name == "political_service":
+        if _political_service is None:
+            from vnpy.web.services.political_signal_service import PoliticalSignalService
+
+            _political_service = PoliticalSignalService()
+        return _political_service
     raise AttributeError(name)
 
 
@@ -113,6 +137,8 @@ __all__ = [
     "SmartAllocationService",
     "InvestmentCopilotService",
     "SocialHotStocksService",
+    "MarketSentimentService",
+    "PoliticalSignalService",
     "history_service",
     "quant_service",
     "market_service",
@@ -123,4 +149,6 @@ __all__ = [
     "allocation_service",
     "investment_copilot_service",
     "social_hot_service",
+    "sentiment_service",
+    "political_service",
 ]

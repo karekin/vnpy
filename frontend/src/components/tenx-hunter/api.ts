@@ -1,13 +1,17 @@
 import type {
   TenxAlertCenter,
   TenxAlertItem,
+  TenxAlertSeverity,
   TenxCandidate,
   TenxFreshness,
   TenxMarket,
+  TenxMarketSentiment,
   TenxOverviewMetric,
+  TenxPoliticalSignal,
   TenxPriceMap,
   TenxPriceSnapshot,
   TenxResearchCard,
+  TenxResearchReport,
   TenxTheme,
   TenxTimelineEvent,
   TenxWatchlistItem,
@@ -86,6 +90,94 @@ type TenxApiAction = {
   enabled: boolean;
 };
 
+type TenxMarketSentimentMetricApi = {
+  key: string;
+  label: string;
+  category: string;
+  value: number | null;
+  display_value: string;
+  score: number | null;
+  tone: TenxMarketSentiment["regime"];
+  status_label: string;
+  detail: string;
+  source: string;
+  source_url: string;
+  updated_at: string;
+  previous_value: number | null;
+  change: number | null;
+  history: Array<{
+    date: string;
+    value: number;
+  }>;
+};
+
+type TenxMarketSentimentApi = {
+  market: TenxMarket;
+  snapshot_at: string;
+  composite_score: number | null;
+  regime: TenxMarketSentiment["regime"];
+  regime_label: string;
+  summary: string;
+  risk_posture: string;
+  data_quality: string;
+  freshness: TenxApiFreshness;
+  metrics: TenxMarketSentimentMetricApi[];
+  notes: string[];
+};
+
+type TenxPoliticalDisclosureApi = {
+  source: string;
+  source_url: string;
+  filing_type: string;
+  latest_filing_date: string;
+  transaction_window: string;
+  total_trades: number | null;
+  purchases: number | null;
+  sales: number | null;
+  late_filings: number | null;
+  late_filing_pct: number | null;
+  detail: string;
+};
+
+type TenxPoliticalTradeApi = {
+  date: string;
+  symbol: string;
+  description: string;
+  trade_type: string;
+  amount: string;
+  is_late: boolean;
+  source_url: string;
+};
+
+type TenxPoliticalMentionApi = {
+  symbol: string;
+  name: string;
+  event_date: string;
+  event_type: string;
+  status: TenxPoliticalSignal["mentions"][number]["status"];
+  evidence_grade: TenxPoliticalSignal["mentions"][number]["evidenceGrade"];
+  headline: string;
+  summary: string;
+  source: string;
+  source_url: string;
+  verification_note: string;
+  next_action: string;
+  watchlist_rule: string;
+};
+
+type TenxPoliticalSignalApi = {
+  market: TenxMarket;
+  person: string;
+  snapshot_at: string;
+  thesis: string;
+  freshness: TenxApiFreshness;
+  disclosure: TenxPoliticalDisclosureApi;
+  recent_trades: TenxPoliticalTradeApi[];
+  mentions: TenxPoliticalMentionApi[];
+  monitoring_rules: string[];
+  notes: string[];
+};
+
 type TenxApiScoreBreakdown = {
   key: string;
   label: string;
@@ -132,6 +224,15 @@ type TenxCandidateApi = {
   score_drivers: string[];
   why_selected: TenxApiWhySelected;
   score_breakdown: TenxApiScoreBreakdown[];
+  flow_status?: TenxCandidate["flowStatus"];
+  flow_status_label?: string;
+  promotion_summary?: string;
+  promotion_checks?: Array<{
+    key: string;
+    label: string;
+    passed: boolean;
+    detail: string;
+  }>;
   freshness: TenxApiFreshness;
   available_actions: TenxApiAction[];
 };
@@ -159,6 +260,9 @@ type TenxWatchlistApi = {
   risk_level: TenxWatchlistItem["riskLevel"];
   score: number;
   price_snapshot?: TenxPriceSnapshotApi | null;
+  tracking_status?: string;
+  active_alert_count?: number;
+  next_alert_due?: string | null;
   available_actions: TenxApiAction[];
 };
 
@@ -230,6 +334,19 @@ type TenxResearchCardApi = {
   price_map?: TenxPriceMapApi | null;
   freshness: TenxApiFreshness;
   available_actions: TenxApiAction[];
+};
+
+type TenxResearchReportApi = {
+  report_id: string;
+  market: TenxMarket;
+  symbol: string;
+  title: string;
+  source_filename: string;
+  content_markdown: string;
+  word_count: number;
+  status: string;
+  created_at: string;
+  updated_at: string;
 };
 
 type TenxTargetRangeApi = {
@@ -328,6 +445,15 @@ type TenxAlertCenterApi = {
     source: string;
     created_at: string;
     next_action: string;
+    evidence_grade?: string;
+    confidence?: string;
+    status?: string;
+    due_at?: string | null;
+    source_note?: string;
+    event_layer?: string[];
+    structure_layer?: string[];
+    execution_layer?: string[];
+    invalidation_signals?: string[];
   }[];
 };
 
@@ -349,7 +475,89 @@ function mapActions(items: TenxApiAction[]) {
   }));
 }
 
+function mapMarketSentiment(payload: TenxMarketSentimentApi): TenxMarketSentiment {
+  return {
+    market: payload.market,
+    snapshotAt: payload.snapshot_at,
+    compositeScore: payload.composite_score,
+    regime: payload.regime,
+    regimeLabel: payload.regime_label,
+    summary: payload.summary,
+    riskPosture: payload.risk_posture,
+    dataQuality: payload.data_quality,
+    freshness: mapFreshness(payload.freshness),
+    metrics: payload.metrics.map((metric) => ({
+      key: metric.key,
+      label: metric.label,
+      category: metric.category,
+      value: metric.value,
+      displayValue: metric.display_value,
+      score: metric.score,
+      tone: metric.tone,
+      statusLabel: metric.status_label,
+      detail: metric.detail,
+      source: metric.source,
+      sourceUrl: metric.source_url,
+      updatedAt: metric.updated_at,
+      previousValue: metric.previous_value,
+      change: metric.change,
+      history: metric.history,
+    })),
+    notes: payload.notes,
+  };
+}
+
+function mapPoliticalSignal(payload: TenxPoliticalSignalApi): TenxPoliticalSignal {
+  return {
+    market: payload.market,
+    person: payload.person,
+    snapshotAt: payload.snapshot_at,
+    thesis: payload.thesis,
+    freshness: mapFreshness(payload.freshness),
+    disclosure: {
+      source: payload.disclosure.source,
+      sourceUrl: payload.disclosure.source_url,
+      filingType: payload.disclosure.filing_type,
+      latestFilingDate: payload.disclosure.latest_filing_date,
+      transactionWindow: payload.disclosure.transaction_window,
+      totalTrades: payload.disclosure.total_trades,
+      purchases: payload.disclosure.purchases,
+      sales: payload.disclosure.sales,
+      lateFilings: payload.disclosure.late_filings,
+      lateFilingPct: payload.disclosure.late_filing_pct,
+      detail: payload.disclosure.detail,
+    },
+    recentTrades: payload.recent_trades.map((trade) => ({
+      date: trade.date,
+      symbol: trade.symbol,
+      description: trade.description,
+      tradeType: trade.trade_type,
+      amount: trade.amount,
+      isLate: trade.is_late,
+      sourceUrl: trade.source_url,
+    })),
+    mentions: payload.mentions.map((mention) => ({
+      symbol: mention.symbol,
+      name: mention.name,
+      eventDate: mention.event_date,
+      eventType: mention.event_type,
+      status: mention.status,
+      evidenceGrade: mention.evidence_grade,
+      headline: mention.headline,
+      summary: mention.summary,
+      source: mention.source,
+      sourceUrl: mention.source_url,
+      verificationNote: mention.verification_note,
+      nextAction: mention.next_action,
+      watchlistRule: mention.watchlist_rule,
+    })),
+    monitoringRules: payload.monitoring_rules,
+    notes: payload.notes,
+  };
+}
+
 function mapCandidate(item: TenxCandidateApi): TenxCandidate {
+  const flowStatus = item.flow_status ?? "candidate";
   return {
     market: item.market,
     symbol: item.symbol,
@@ -382,6 +590,15 @@ function mapCandidate(item: TenxCandidateApi): TenxCandidate {
       summary: entry.summary,
       positiveNotes: entry.positive_notes,
       negativeNotes: entry.negative_notes,
+    })),
+    flowStatus,
+    flowStatusLabel: item.flow_status_label ?? "候选验证",
+    promotionSummary: item.promotion_summary ?? "继续补证据后再判断是否进入观察池。",
+    promotionChecks: (item.promotion_checks ?? []).map((check) => ({
+      key: check.key,
+      label: check.label,
+      passed: check.passed,
+      detail: check.detail,
     })),
     freshness: mapFreshness(item.freshness),
     availableActions: mapActions(item.available_actions),
@@ -499,6 +716,9 @@ function mapWatchlist(item: TenxWatchlistApi): TenxWatchlistItem {
     riskLevel: item.risk_level,
     score: item.score,
     priceSnapshot: mapPriceSnapshot(item.price_snapshot),
+    trackingStatus: item.tracking_status ?? "事件追踪中",
+    activeAlertCount: item.active_alert_count ?? 0,
+    nextAlertDue: item.next_alert_due ?? null,
     availableActions: mapActions(item.available_actions),
   };
 }
@@ -587,6 +807,21 @@ function mapResearchCard(payload: TenxResearchCardApi): TenxResearchCard {
   };
 }
 
+function mapResearchReport(payload: TenxResearchReportApi): TenxResearchReport {
+  return {
+    reportId: payload.report_id,
+    market: payload.market,
+    symbol: payload.symbol,
+    title: payload.title,
+    sourceFilename: payload.source_filename,
+    contentMarkdown: payload.content_markdown,
+    wordCount: payload.word_count,
+    status: payload.status,
+    createdAt: payload.created_at,
+    updatedAt: payload.updated_at,
+  };
+}
+
 function mapAlertCenter(payload: TenxAlertCenterApi): TenxAlertCenter {
   return {
     market: payload.market,
@@ -603,6 +838,15 @@ function mapAlertCenter(payload: TenxAlertCenterApi): TenxAlertCenter {
       source: item.source,
       createdAt: item.created_at,
       nextAction: item.next_action,
+      evidenceGrade: item.evidence_grade ?? "D",
+      confidence: item.confidence ?? "low",
+      status: item.status ?? "draft",
+      dueAt: item.due_at ?? null,
+      sourceNote: item.source_note ?? "",
+      eventLayer: item.event_layer ?? [],
+      structureLayer: item.structure_layer ?? [],
+      executionLayer: item.execution_layer ?? [],
+      invalidationSignals: item.invalidation_signals ?? [],
     })),
   };
 }
@@ -612,6 +856,20 @@ export async function loadTenxWorkspaceSnapshot(market: TenxMarket): Promise<Ten
     buildUrl(`/api/v1/tenx-hunter/workspace?market=${encodeURIComponent(toMarketParam(market))}`),
   );
   return mapWorkspaceSnapshot(payload);
+}
+
+export async function loadTenxMarketSentiment(market: TenxMarket): Promise<TenxMarketSentiment> {
+  const payload = await requestJson<TenxMarketSentimentApi>(
+    buildUrl(`/api/v1/tenx-hunter/market-sentiment?market=${encodeURIComponent(toMarketParam(market))}`),
+  );
+  return mapMarketSentiment(payload);
+}
+
+export async function loadTenxPoliticalSignals(market: TenxMarket): Promise<TenxPoliticalSignal> {
+  const payload = await requestJson<TenxPoliticalSignalApi>(
+    buildUrl(`/api/v1/tenx-hunter/political-signals?market=${encodeURIComponent(toMarketParam(market))}&person=trump`),
+  );
+  return mapPoliticalSignal(payload);
 }
 
 export async function loadTenxResearchCard(market: TenxMarket, symbol: string): Promise<TenxResearchCard | null> {
@@ -626,6 +884,77 @@ export async function loadTenxResearchCard(market: TenxMarket, symbol: string): 
     }
     throw error;
   }
+}
+
+export async function loadTenxResearchReport(market: TenxMarket, symbol: string): Promise<TenxResearchReport | null> {
+  try {
+    const payload = await requestJson<TenxResearchReportApi>(
+      buildUrl(`/api/v1/tenx-hunter/reports/${encodeURIComponent(symbol)}?market=${encodeURIComponent(toMarketParam(market))}`),
+    );
+    return mapResearchReport(payload);
+  } catch (error) {
+    if (error instanceof TenxApiError && error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export async function uploadTenxResearchReport(
+  market: TenxMarket,
+  symbol: string,
+  file: File,
+): Promise<{ ok: boolean; message: string; report: TenxResearchReport }> {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(
+    buildUrl(`/api/v1/tenx-hunter/reports/${encodeURIComponent(symbol)}?market=${encodeURIComponent(toMarketParam(market))}`),
+    {
+      method: "POST",
+      body: formData,
+    },
+  );
+  if (!response.ok) {
+    throw new TenxApiError(`TenX report upload failed with HTTP ${response.status}.`, response.url, response.status);
+  }
+  const payload = (await response.json()) as { ok: boolean; message: string; report: TenxResearchReportApi };
+  return {
+    ok: payload.ok,
+    message: payload.message,
+    report: mapResearchReport(payload.report),
+  };
+}
+
+export async function createDiscoverCandidate(
+  market: TenxMarket,
+  payload: {
+    symbol: string;
+    name?: string;
+    source?: string;
+    stage?: TenxCandidate["stage"];
+    theme?: string;
+    thesis?: string;
+    note?: string;
+    triggerScene?: string;
+    sourcePayload?: Record<string, unknown>;
+  },
+) {
+  return requestJson<{ ok: boolean; message: string }>(buildUrl("/api/v1/tenx-hunter/discover"), {
+    method: "POST",
+    body: JSON.stringify({
+      market: toMarketParam(market),
+      symbol: payload.symbol,
+      name: payload.name,
+      source: payload.source ?? "manual",
+      stage: payload.stage ?? "discovery",
+      theme: payload.theme,
+      thesis: payload.thesis,
+      note: payload.note,
+      trigger_scene: payload.triggerScene ?? "manual-discover-intake",
+      source_payload: payload.sourcePayload ?? {},
+    }),
+  });
 }
 
 export async function loadTenxPriceMap(market: TenxMarket, symbol: string): Promise<TenxPriceMap | null> {
@@ -661,17 +990,29 @@ export async function createWatchlistEntry(market: TenxMarket, symbol: string, a
   });
 }
 
-export async function createAlertDraft(market: TenxMarket, symbol: string, title: string, note: string) {
+type TenxAlertDraftOptions = {
+  severity?: TenxAlertSeverity;
+  alertType?: string;
+  rulePayload?: Record<string, unknown>;
+};
+
+export async function createAlertDraft(
+  market: TenxMarket,
+  symbol: string,
+  title: string,
+  note: string,
+  options: TenxAlertDraftOptions = {},
+) {
   return requestJson<{ ok: boolean; message: string }>(buildUrl("/api/v1/tenx-hunter/alerts"), {
     method: "POST",
     body: JSON.stringify({
       market: toMarketParam(market),
       symbol,
-      severity: "P2",
-      alert_type: "custom",
+      severity: options.severity ?? "P2",
+      alert_type: options.alertType ?? "custom",
       title,
       note,
-      rule_payload: {},
+      rule_payload: options.rulePayload ?? {},
     }),
   });
 }

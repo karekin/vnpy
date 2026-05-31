@@ -3,7 +3,7 @@ import StatusTag from "@/components/cb-quant/StatusTag";
 import { fromMarketSlug, getRelatedCandidatesForTheme, getTenxErrorMessage, loadTenxWorkspaceSnapshot, marketLabel } from "@/components/tenx-hunter/api";
 import TenxDataStateCard from "@/components/tenx-hunter/TenxDataStateCard";
 import TenxPageShell from "@/components/tenx-hunter/TenxPageShell";
-import { TenxSectionCard, getStageTone } from "@/components/tenx-hunter/TenxCards";
+import { TenxSectionCard } from "@/components/tenx-hunter/TenxCards";
 import type { TenxWorkspaceSnapshot } from "@/components/tenx-hunter/types";
 
 export default async function TenxHunterThemesMarketPage({ params }: { params: Promise<{ market: string }> }) {
@@ -17,7 +17,7 @@ export default async function TenxHunterThemesMarketPage({ params }: { params: P
       <TenxPageShell
         market={market}
         title="TenX Hunter · Themes"
-        subtitle="主题页先回答主线是什么，再进入个股研究。"
+        subtitle="主题页只回答主线和归因，个股晋级交给 Discover。"
         marketLabel={marketLabel(market)}
       >
         <TenxDataStateCard
@@ -34,54 +34,69 @@ export default async function TenxHunterThemesMarketPage({ params }: { params: P
     <TenxPageShell
       market={market}
       title="TenX Hunter · Themes"
-      subtitle="先看赛道，再选公司。"
+      subtitle="主题页是主线雷达，不再重复做候选列表。需要看个股状态时跳回 Discover。"
       marketLabel={`${marketLabel(market)} · Theme Radar`}
     >
-      <div className="space-y-6">
-        {snapshot.themes.map((theme) => {
-          const related = getRelatedCandidatesForTheme(theme.slug, snapshot);
-          return (
-            <TenxSectionCard
-              key={theme.slug}
-              title={theme.name}
-              description={theme.driver}
-              action={<StatusTag label={`${theme.heat} heat`} tone={theme.trend === "rising" ? "green" : theme.trend === "stable" ? "blue" : "yellow"} />}
-            >
-              <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.2fr_1fr]">
-                <div>
-                  <div className="text-sm font-semibold text-gray-700 dark:text-gray-200">主题证据</div>
-                  <ul className="mt-3 space-y-3 text-sm leading-6 text-gray-600 dark:text-gray-300">
-                    {theme.evidence.map((point) => (
-                      <li key={point} className="rounded-xl bg-gray-50 px-4 py-3 dark:bg-gray-900/60">
-                        {point}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-                <div>
-                  <div className="text-sm font-semibold text-gray-700 dark:text-gray-200">相关候选</div>
-                  <div className="mt-3 space-y-3">
-                    {related.map((candidate) => (
-                      <div key={candidate.symbol} className="rounded-xl border border-gray-200 p-4 dark:border-gray-800">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <Link href={`/tenx-hunter/${pathMarket}/research/${candidate.symbol}`} className="font-semibold text-gray-900 hover:text-brand-600 dark:text-white dark:hover:text-brand-300">
-                              {candidate.symbol}
-                            </Link>
-                            <div className="mt-1 text-sm text-gray-500 dark:text-gray-400">{candidate.name}</div>
-                          </div>
-                          <StatusTag label={candidate.lifecycleStage.label} tone={getStageTone(candidate.stage)} />
-                        </div>
-                        <p className="mt-3 text-sm leading-6 text-gray-600 dark:text-gray-300">{candidate.whySelected.summary}</p>
-                      </div>
-                    ))}
+      <TenxSectionCard
+        title="Theme Radar"
+        description="主线优先：热度、驱动、证据和相关候选数量。"
+        action={<StatusTag label={`${snapshot.themes.length} themes`} tone="blue" />}
+      >
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          {snapshot.themes.map((theme) => {
+            const related = getRelatedCandidatesForTheme(theme.slug, snapshot);
+            const topSymbols = related.slice(0, 5).map((candidate) => candidate.symbol);
+            return (
+              <article key={theme.slug} className="rounded-xl border border-gray-200 p-4 dark:border-gray-800">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-base font-semibold text-gray-900 dark:text-white">{theme.name}</h3>
+                      <StatusTag label={theme.trend} tone={theme.trend === "rising" ? "green" : theme.trend === "stable" ? "blue" : "yellow"} />
+                    </div>
+                    <p className="mt-2 text-sm leading-6 text-gray-600 dark:text-gray-300">{theme.driver}</p>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <div className="text-2xl font-semibold text-gray-900 dark:text-white">{theme.heat}</div>
+                    <div className="text-xs text-gray-500 dark:text-gray-400">heat</div>
                   </div>
                 </div>
-              </div>
-            </TenxSectionCard>
-          );
-        })}
-      </div>
+                <div className="mt-4 grid grid-cols-1 gap-3 text-sm md:grid-cols-[1.3fr_1fr]">
+                  <div className="rounded-lg bg-gray-50 p-3 dark:bg-gray-900/60">
+                    <div className="text-xs font-semibold text-gray-500 dark:text-gray-400">主题证据</div>
+                    <ul className="mt-2 space-y-1.5 text-gray-600 dark:text-gray-300">
+                      {theme.evidence.slice(0, 3).map((point) => (
+                        <li key={point}>{point}</li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div className="rounded-lg bg-gray-50 p-3 dark:bg-gray-900/60">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-xs font-semibold text-gray-500 dark:text-gray-400">相关候选</div>
+                      <StatusTag label={`${related.length}`} tone="slate" />
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {topSymbols.length ? topSymbols.map((symbol) => (
+                        <StatusTag key={`${theme.slug}-${symbol}`} label={symbol} tone="blue" />
+                      )) : (
+                        <span className="text-sm text-gray-500 dark:text-gray-400">暂无候选</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-4 flex justify-end">
+                  <Link
+                    href={`/tenx-hunter/${pathMarket}/discover?theme=${encodeURIComponent(theme.name)}`}
+                    className="text-sm font-medium text-brand-600 hover:text-brand-700 dark:text-brand-300 dark:hover:text-brand-200"
+                  >
+                    查看候选状态
+                  </Link>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </TenxSectionCard>
     </TenxPageShell>
   );
 }

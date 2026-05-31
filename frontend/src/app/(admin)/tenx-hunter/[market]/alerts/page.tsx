@@ -1,19 +1,34 @@
-import StatusTag from "@/components/cb-quant/StatusTag";
 import { fromMarketSlug, getTenxErrorMessage, loadTenxAlerts, marketLabel } from "@/components/tenx-hunter/api";
+import {
+  AlertList,
+  buildAlertFilterCounts,
+  filterAlerts,
+  getSearchParamValue,
+  normalizeAlertFilter,
+  sortAlerts,
+} from "@/components/tenx-hunter/TenxAlertViews";
 import TenxDataStateCard from "@/components/tenx-hunter/TenxDataStateCard";
 import TenxPageShell from "@/components/tenx-hunter/TenxPageShell";
 import { TenxSectionCard } from "@/components/tenx-hunter/TenxCards";
 import type { TenxAlertCenter } from "@/components/tenx-hunter/types";
+import { redirect } from "next/navigation";
 
-function severityTone(severity: "P1" | "P2" | "P3") {
-  if (severity === "P1") return "red" as const;
-  if (severity === "P2") return "yellow" as const;
-  return "slate" as const;
-}
-
-export default async function TenxHunterAlertsMarketPage({ params }: { params: Promise<{ market: string }> }) {
+export default async function TenxHunterAlertsMarketPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ market: string }>;
+  searchParams?: Promise<{ alert?: string | string[]; filter?: string | string[] }>;
+}) {
   const { market: marketSlug } = await params;
+  const resolvedSearchParams = searchParams ? await searchParams : {};
+  const legacyAlertId = getSearchParamValue(resolvedSearchParams.alert);
+  if (legacyAlertId) {
+    redirect(`/tenx-hunter/${marketSlug}/alerts/${encodeURIComponent(legacyAlertId)}`);
+  }
+
   const market = fromMarketSlug(marketSlug);
+  const normalizedMarketSlug = market.toLowerCase();
   let alerts: TenxAlertCenter;
   try {
     alerts = await loadTenxAlerts(market);
@@ -34,6 +49,11 @@ export default async function TenxHunterAlertsMarketPage({ params }: { params: P
     );
   }
 
+  const alertItems = sortAlerts(alerts.items);
+  const activeFilter = normalizeAlertFilter(resolvedSearchParams.filter);
+  const filteredAlerts = filterAlerts(alertItems, activeFilter);
+  const filterCounts = buildAlertFilterCounts(alertItems);
+
   return (
     <TenxPageShell
       market={market}
@@ -41,31 +61,19 @@ export default async function TenxHunterAlertsMarketPage({ params }: { params: P
       subtitle="把值得打断注意力的逻辑变化集中起来。"
       marketLabel={`${marketLabel(market)} · Alert Center`}
     >
-      <TenxSectionCard title="Alert Center" description={`最新刷新：${alerts.freshness.updatedAt}`}>
-        <div className="space-y-4">
-          {alerts.items.map((item) => (
-            <div key={item.id} className="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <StatusTag label={item.severity} tone={severityTone(item.severity)} />
-                    <StatusTag label={item.alertType} tone="blue" />
-                    <div className="text-sm text-gray-500 dark:text-gray-400">{item.symbol}</div>
-                  </div>
-                  <div className="mt-2 text-base font-semibold text-gray-900 dark:text-white">{item.title}</div>
-                  <div className="mt-2 text-sm leading-6 text-gray-600 dark:text-gray-300">{item.summary}</div>
-                </div>
-                <div className="text-right text-sm text-gray-500 dark:text-gray-400">
-                  <div>{item.createdAt}</div>
-                  <div className="mt-2">{item.source}</div>
-                </div>
-              </div>
-              <div className="mt-3 rounded-xl bg-gray-50 px-4 py-3 text-sm text-gray-600 dark:bg-gray-900/60 dark:text-gray-300">
-                下一步：{item.nextAction}
-              </div>
-            </div>
-          ))}
-        </div>
+      <TenxSectionCard title="Alert Center" description="点击事件进入详情页复核。">
+        {alertItems.length ? (
+          <AlertList
+            items={filteredAlerts}
+            marketSlug={normalizedMarketSlug}
+            activeFilter={activeFilter}
+            counts={filterCounts}
+          />
+        ) : (
+          <div className="rounded-xl bg-gray-50 px-4 py-6 text-sm leading-6 text-gray-600 dark:bg-gray-900/60 dark:text-gray-300">
+            暂无事件提醒。
+          </div>
+        )}
       </TenxSectionCard>
     </TenxPageShell>
   );

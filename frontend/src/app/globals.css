@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@source "../../node_modules/streamdown/dist/*.js";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -912,4 +913,19 @@ pre[class*="language-"] {
 }
 pre[class*="language-"].line-numbers {
   padding-left: 2.8em !important;
+}
+
+.tenx-research-markdown [data-streamdown="mermaid"] [aria-label="Mermaid chart"] {
+  width: 100%;
+  min-width: 720px;
+}
+
+.tenx-research-markdown [data-streamdown="mermaid"] [aria-label="Mermaid chart"] svg.flowchart {
+  width: 100%;
+  height: auto;
+}
+
+.tenx-research-markdown [data-streamdown="mermaid"] > div,
+.tenx-research-markdown [data-streamdown="mermaid-block"] > div:last-child {
+  overflow-x: auto;
 }

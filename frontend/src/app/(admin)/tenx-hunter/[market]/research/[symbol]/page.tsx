@@ -2,11 +2,12 @@ import { notFound } from "next/navigation";
 import StatusTag from "@/components/cb-quant/StatusTag";
 import TenxActionDrawer from "@/components/tenx-hunter/TenxActionDrawer";
 import TenxCopilotPanel from "@/components/tenx-hunter/TenxCopilotPanel";
-import { fromMarketSlug, getTenxErrorMessage, getTimelineForSymbol, loadTenxResearchCard, loadTenxWorkspaceSnapshot, marketLabel } from "@/components/tenx-hunter/api";
+import { fromMarketSlug, getTenxErrorMessage, getTimelineForSymbol, loadTenxResearchCard, loadTenxResearchReport, loadTenxWorkspaceSnapshot, marketLabel } from "@/components/tenx-hunter/api";
 import TenxDataStateCard from "@/components/tenx-hunter/TenxDataStateCard";
 import TenxPageShell from "@/components/tenx-hunter/TenxPageShell";
 import { TenxPriceMapPanel, TenxSectionCard, getStageTone } from "@/components/tenx-hunter/TenxCards";
-import type { TenxResearchCard, TenxWorkspaceSnapshot } from "@/components/tenx-hunter/types";
+import TenxResearchReportPanel from "@/components/tenx-hunter/TenxResearchReportPanel";
+import type { TenxResearchCard, TenxResearchReport, TenxWorkspaceSnapshot } from "@/components/tenx-hunter/types";
 
 export default async function TenxHunterResearchDetailMarketPage({
   params,
@@ -49,6 +50,12 @@ export default async function TenxHunterResearchDetailMarketPage({
   }
 
   const timeline = snapshot ? getTimelineForSymbol(card.symbol, snapshot) : [];
+  let researchReport: TenxResearchReport | null = null;
+  try {
+    researchReport = await loadTenxResearchReport(market, card.symbol);
+  } catch {
+    researchReport = null;
+  }
 
   return (
     <TenxCopilotPanel market={market} workspace={snapshot} researchCard={card}>
@@ -110,6 +117,7 @@ export default async function TenxHunterResearchDetailMarketPage({
               </div>
             </TenxSectionCard>
             <TenxActionDrawer market={market} symbol={card.symbol} />
+            <TenxResearchReportPanel market={market} symbol={card.symbol} initialReport={researchReport} />
           </div>
         </div>
 

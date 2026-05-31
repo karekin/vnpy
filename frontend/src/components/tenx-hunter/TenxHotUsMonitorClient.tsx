@@ -8,8 +8,9 @@ import {
   formatSignedPercent,
   type TenxHotStockRow,
 } from "@/components/tenx-hunter/hotMonitor";
+import { createDiscoverCandidate, getTenxErrorMessage } from "@/components/tenx-hunter/api";
 import { getSocialHotErrorMessage, loadSocialHotStocks, type SocialHotStocksResponse } from "@/components/tenx-hunter/socialHotApi";
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ExternalLink, Flame, RefreshCw, Search, TrendingDown, TrendingUp } from "lucide-react";
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ExternalLink, Flame, GitBranch, Plus, RefreshCw, Search, TrendingDown, TrendingUp } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 
@@ -65,57 +66,109 @@ function HeatSparkline({ row }: { row: TenxHotStockRow }) {
   );
 }
 
-function DesktopHotTable({ rows }: { rows: TenxHotStockRow[] }) {
+function HotRowActions({
+  row,
+  onAddCandidate,
+  pendingSymbol,
+}: {
+  row: TenxHotStockRow;
+  onAddCandidate: (row: TenxHotStockRow) => void;
+  pendingSymbol: string | null;
+}) {
+  const isPending = pendingSymbol === row.symbol;
+
+  return (
+    <div className="inline-flex h-10 items-center overflow-hidden rounded-lg border border-gray-200 bg-white shadow-xs dark:border-gray-700 dark:bg-gray-900">
+      <Link
+        href={`/tenx-hunter/us/discover?symbol=${encodeURIComponent(row.symbol)}`}
+        aria-label={`${row.symbol} 进入候选验证`}
+        title="进入候选验证"
+        className="inline-flex h-10 items-center gap-1.5 px-3 text-sm font-medium text-gray-600 transition hover:bg-brand-50 hover:text-brand-600 dark:text-gray-300 dark:hover:bg-brand-500/15 dark:hover:text-brand-300"
+      >
+        <GitBranch className="h-4 w-4" aria-hidden="true" />
+        <span className="hidden 2xl:inline">验证</span>
+      </Link>
+      <button
+        type="button"
+        onClick={() => onAddCandidate(row)}
+        disabled={isPending}
+        aria-label={`${row.symbol} 加入发现池`}
+        title="加入发现池"
+        className="inline-flex h-10 min-w-[104px] items-center justify-center gap-1.5 border-x border-gray-200 bg-brand-500 px-3 text-sm font-semibold text-white transition hover:bg-brand-600 disabled:cursor-not-allowed disabled:bg-brand-300 dark:border-gray-700 dark:bg-brand-500 dark:hover:bg-brand-400 dark:disabled:bg-brand-500/45"
+      >
+        <Plus className="h-4 w-4" aria-hidden="true" />
+        <span className="whitespace-nowrap">{isPending ? "加入中" : "加入发现"}</span>
+      </button>
+      <Link
+        href={`/tenx-hunter/us/research/${row.symbol}`}
+        aria-label={`打开 ${row.symbol} 研究卡`}
+        title="打开研究卡"
+        className="inline-flex h-10 items-center gap-1.5 px-3 text-sm font-medium text-gray-600 transition hover:bg-brand-50 hover:text-brand-600 dark:text-gray-300 dark:hover:bg-brand-500/15 dark:hover:text-brand-300"
+      >
+        <Search className="h-4 w-4" aria-hidden="true" />
+        <span className="hidden 2xl:inline">研究</span>
+      </Link>
+    </div>
+  );
+}
+
+function DesktopHotTable({
+  rows,
+  onAddCandidate,
+  pendingSymbol,
+}: {
+  rows: TenxHotStockRow[];
+  onAddCandidate: (row: TenxHotStockRow) => void;
+  pendingSymbol: string | null;
+}) {
   return (
     <div className="hidden overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] xl:block">
       <table className="min-w-full table-fixed divide-y divide-gray-200 dark:divide-gray-800">
         <thead className="bg-gray-50 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:bg-gray-900/60 dark:text-gray-400">
           <tr>
-            <th className="w-20 px-5 py-4 text-left">排名</th>
-            <th className="w-[28%] px-5 py-4 text-left">股票名称</th>
-            <th className="w-24 px-5 py-4 text-left">代码</th>
-            <th className="w-32 px-5 py-4 text-right">提及次数</th>
-            <th className="w-36 px-5 py-4 text-right">24h 变化</th>
-            <th className="w-32 px-5 py-4 text-right">点赞数</th>
-            <th className="w-32 px-5 py-4 text-right">排名变化</th>
-            <th className="w-36 px-5 py-4 text-right">操作</th>
+            <th className="w-[42%] px-5 py-4 text-left">股票</th>
+            <th className="w-32 px-4 py-4 text-right">提及</th>
+            <th className="w-32 px-4 py-4 text-right">24h</th>
+            <th className="w-36 px-4 py-4 text-right">互动 / 排名</th>
+            <th className="w-64 px-5 py-4 text-right">操作</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
           {rows.map((row) => (
             <tr key={row.symbol} className="transition hover:bg-gray-50/80 dark:hover:bg-white/[0.04]">
               <td className="px-5 py-4">
-                <HotRankBadge rank={row.rank} />
-              </td>
-              <td className="px-5 py-4">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-gray-900 dark:text-white">{row.name}</div>
-                  <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">ApeWisdom · Reddit 股票社区</div>
+                <div className="flex min-w-0 items-center gap-3">
+                  <HotRankBadge rank={row.rank} />
+                  <div className="min-w-0">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <Link
+                        href={`/tenx-hunter/us/research/${row.symbol}`}
+                        className="shrink-0 text-sm font-semibold text-gray-900 transition hover:text-brand-600 dark:text-white dark:hover:text-brand-300"
+                      >
+                        {row.symbol}
+                      </Link>
+                      <span className="truncate text-sm font-medium text-gray-700 dark:text-gray-200">{row.name}</span>
+                    </div>
+                    <div className="mt-1 truncate text-xs text-gray-500 dark:text-gray-400">ApeWisdom · Reddit 股票社区</div>
+                  </div>
                 </div>
               </td>
-              <td className="px-5 py-4 text-sm font-semibold text-gray-900 dark:text-white">{row.symbol}</td>
-              <td className="px-5 py-4 text-right">
+              <td className="px-4 py-4 text-right">
                 <div className="text-lg font-semibold text-gray-900 dark:text-white">{formatCompactNumber(row.mentions)}</div>
                 <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">前值 {row.mentions24hAgo ?? "N/A"}</div>
               </td>
-              <td className={`px-5 py-4 text-right text-sm font-semibold ${changeTone(row.mentionChange)}`}>
+              <td className={`px-4 py-4 text-right text-sm font-semibold ${changeTone(row.mentionChange)}`}>
                 <div>{formatSignedNumber(row.mentionChange)}</div>
                 <div className="mt-1 text-xs">{formatSignedPercent(row.mentionChangePct)}</div>
               </td>
-              <td className="px-5 py-4 text-right text-sm font-semibold text-gray-900 dark:text-white">
-                {formatCompactNumber(row.upvotes)}
+              <td className="px-4 py-4 text-right">
+                <div className="text-sm font-semibold text-gray-900 dark:text-white">{formatCompactNumber(row.upvotes)}</div>
+                <div className={`mt-1 text-xs font-semibold ${changeTone(row.rankChange)}`}>排名 {formatSignedNumber(row.rankChange)}</div>
               </td>
-              <td className={`px-5 py-4 text-right text-sm font-semibold ${changeTone(row.rankChange)}`}>
-                {formatSignedNumber(row.rankChange)}
-              </td>
-              <td className="px-5 py-4 text-right">
-                <Link
-                  href={`/tenx-hunter/us/research/${row.symbol}`}
-                  className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 transition hover:border-brand-300 hover:text-brand-600 dark:border-gray-700 dark:text-gray-300 dark:hover:border-brand-400 dark:hover:text-brand-300"
-                >
-                  <Search className="h-4 w-4" aria-hidden="true" />
-                  研究
-                </Link>
+              <td className="px-5 py-4">
+                <div className="flex justify-end">
+                  <HotRowActions row={row} onAddCandidate={onAddCandidate} pendingSymbol={pendingSymbol} />
+                </div>
               </td>
             </tr>
           ))}
@@ -125,7 +178,15 @@ function DesktopHotTable({ rows }: { rows: TenxHotStockRow[] }) {
   );
 }
 
-function MobileHotList({ rows }: { rows: TenxHotStockRow[] }) {
+function MobileHotList({
+  rows,
+  onAddCandidate,
+  pendingSymbol,
+}: {
+  rows: TenxHotStockRow[];
+  onAddCandidate: (row: TenxHotStockRow) => void;
+  pendingSymbol: string | null;
+}) {
   return (
     <div className="space-y-3 xl:hidden">
       {rows.map((row) => (
@@ -163,6 +224,24 @@ function MobileHotList({ rows }: { rows: TenxHotStockRow[] }) {
               <div className="text-xs text-gray-500 dark:text-gray-400">排名变化</div>
               <div className={`mt-1 font-semibold ${changeTone(row.rankChange)}`}>{formatSignedNumber(row.rankChange)}</div>
             </div>
+          </div>
+          <div className="mt-4 flex flex-wrap justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => onAddCandidate(row)}
+              disabled={pendingSymbol === row.symbol}
+              className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 transition hover:border-brand-300 hover:text-brand-600 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:border-brand-400 dark:hover:text-brand-300"
+            >
+              <Plus className="h-4 w-4" aria-hidden="true" />
+              {pendingSymbol === row.symbol ? "加入中" : "加入发现"}
+            </button>
+            <Link
+              href={`/tenx-hunter/us/discover?symbol=${encodeURIComponent(row.symbol)}`}
+              className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 transition hover:border-brand-300 hover:text-brand-600 dark:border-gray-700 dark:text-gray-300 dark:hover:border-brand-400 dark:hover:text-brand-300"
+            >
+              <GitBranch className="h-4 w-4" aria-hidden="true" />
+              进入候选验证
+            </Link>
           </div>
         </div>
       ))}
@@ -304,6 +383,8 @@ export default function TenxHotUsMonitorClient({
   const [response, setResponse] = useState<SocialHotStocksResponse | null>(initialResponse);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(initialError);
+  const [pendingCandidateSymbol, setPendingCandidateSymbol] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
   const rows = useMemo(() => (response ? buildHotStockRows(response) : []), [response]);
   const topRow = rows[0];
   const risingCount = rows.filter((row) => (row.mentionChange ?? 0) > 0).length;
@@ -335,6 +416,37 @@ export default function TenxHotUsMonitorClient({
   const changePageSize = useCallback((pageSize: number) => {
     void loadPage(1, pageSize);
   }, [loadPage]);
+
+  const addToDiscover = useCallback(async (row: TenxHotStockRow) => {
+    setPendingCandidateSymbol(row.symbol);
+    setActionMessage(null);
+    try {
+      const result = await createDiscoverCandidate("US", {
+        symbol: row.symbol,
+        name: row.name,
+        source: "hot-monitor",
+        theme: "Social Heat",
+        thesis: `${row.symbol} 从 ApeWisdom 热点监控进入发现池，先验证热度是否对应基本面或事件催化。`,
+        note: `当前提及 ${row.mentions}，24h 变化 ${formatSignedNumber(row.mentionChange)}，点赞 ${row.upvotes}。`,
+        triggerScene: "hot-monitor-row-action",
+        sourcePayload: {
+          rank: row.rank,
+          mentions: row.mentions,
+          mentions24hAgo: row.mentions24hAgo,
+          mentionChange: row.mentionChange,
+          mentionChangePct: row.mentionChangePct,
+          upvotes: row.upvotes,
+          rankChange: row.rankChange,
+          heatScore: row.heatScore,
+        },
+      });
+      setActionMessage(result.message);
+    } catch (candidateError) {
+      setActionMessage(getTenxErrorMessage(candidateError));
+    } finally {
+      setPendingCandidateSymbol(null);
+    }
+  }, []);
 
   useEffect(() => {
     const intervalMs = Math.max(60, response?.refreshSeconds ?? 300) * 1000;
@@ -416,13 +528,18 @@ export default function TenxHotUsMonitorClient({
               刷新失败：{error}
             </div>
           ) : null}
+          {actionMessage ? (
+            <div className="mt-4 rounded-xl border border-brand-100 bg-brand-50 px-4 py-3 text-sm text-brand-700 dark:border-brand-500/20 dark:bg-brand-500/10 dark:text-brand-200">
+              {actionMessage}
+            </div>
+          ) : null}
         </div>
 
         <div className="p-5 xl:p-6">
           {rows.length ? (
             <>
-              <DesktopHotTable rows={rows} />
-              <MobileHotList rows={rows} />
+              <DesktopHotTable rows={rows} onAddCandidate={(row) => void addToDiscover(row)} pendingSymbol={pendingCandidateSymbol} />
+              <MobileHotList rows={rows} onAddCandidate={(row) => void addToDiscover(row)} pendingSymbol={pendingCandidateSymbol} />
               {response ? (
                 <HotPaginationBar
                   response={response}

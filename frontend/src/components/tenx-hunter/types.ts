@@ -7,12 +7,106 @@ export type TenxThesisStatus = "strengthening" | "needs-review" | "at-risk";
 export type TenxTimelineType = "earnings" | "capex" | "price" | "supply-chain" | "risk" | "filing";
 export type TenxAlertSeverity = "P1" | "P2" | "P3";
 export type TenxPriceConfidence = "low" | "medium" | "high";
+export type TenxFlowStatus = "hot-lead" | "candidate" | "watch-ready" | "watching" | "alerting" | "blocked";
+export type TenxMarketSentimentTone = "extreme-fear" | "fear" | "neutral" | "greed" | "extreme-greed" | "unavailable";
+export type TenxPoliticalEvidenceGrade = "A" | "B" | "C" | "D";
+export type TenxPoliticalSignalStatus = "confirmed" | "watching" | "needs-verification" | "discarded";
 
 export type TenxFreshness = {
   updatedAt: string;
   dataComplete: boolean;
   sourceSummary: string;
   coverage: string;
+};
+
+export type TenxMarketSentimentPoint = {
+  date: string;
+  value: number;
+};
+
+export type TenxMarketSentimentMetric = {
+  key: string;
+  label: string;
+  category: string;
+  value: number | null;
+  displayValue: string;
+  score: number | null;
+  tone: TenxMarketSentimentTone;
+  statusLabel: string;
+  detail: string;
+  source: string;
+  sourceUrl: string;
+  updatedAt: string;
+  previousValue: number | null;
+  change: number | null;
+  history: TenxMarketSentimentPoint[];
+};
+
+export type TenxMarketSentiment = {
+  market: TenxMarket;
+  snapshotAt: string;
+  compositeScore: number | null;
+  regime: TenxMarketSentimentTone;
+  regimeLabel: string;
+  summary: string;
+  riskPosture: string;
+  dataQuality: string;
+  freshness: TenxFreshness;
+  metrics: TenxMarketSentimentMetric[];
+  notes: string[];
+};
+
+export type TenxPoliticalDisclosureSummary = {
+  source: string;
+  sourceUrl: string;
+  filingType: string;
+  latestFilingDate: string;
+  transactionWindow: string;
+  totalTrades: number | null;
+  purchases: number | null;
+  sales: number | null;
+  lateFilings: number | null;
+  lateFilingPct: number | null;
+  detail: string;
+};
+
+export type TenxPoliticalTrade = {
+  date: string;
+  symbol: string;
+  description: string;
+  tradeType: string;
+  amount: string;
+  isLate: boolean;
+  sourceUrl: string;
+};
+
+export type TenxPoliticalMention = {
+  symbol: string;
+  name: string;
+  eventDate: string;
+  eventType: string;
+  status: TenxPoliticalSignalStatus;
+  evidenceGrade: TenxPoliticalEvidenceGrade;
+  headline: string;
+  summary: string;
+  source: string;
+  sourceUrl: string;
+  verificationNote: string;
+  nextAction: string;
+  watchlistRule: string;
+};
+
+export type TenxPoliticalSignal = {
+  market: TenxMarket;
+  person: string;
+  snapshotAt: string;
+  thesis: string;
+  freshness: TenxFreshness;
+  disclosure: TenxPoliticalDisclosureSummary;
+  recentTrades: TenxPoliticalTrade[];
+  mentions: TenxPoliticalMention[];
+  monitoringRules: string[];
+  notes: string[];
 };
 
 export type TenxAction = {
@@ -43,6 +137,13 @@ export type TenxLifecycleStage = {
   summary: string;
 };
 
+export type TenxPromotionCheck = {
+  key: string;
+  label: string;
+  passed: boolean;
+  detail: string;
+};
+
 export type TenxCandidate = {
   market: TenxMarket;
   symbol: string;
@@ -68,6 +169,10 @@ export type TenxCandidate = {
   scoreDrivers: string[];
   whySelected: TenxWhySelected;
   scoreBreakdown: TenxScoreBreakdown[];
+  flowStatus: TenxFlowStatus;
+  flowStatusLabel: string;
+  promotionSummary: string;
+  promotionChecks: TenxPromotionCheck[];
   freshness: TenxFreshness;
   availableActions: TenxAction[];
 };
@@ -95,6 +200,9 @@ export type TenxWatchlistItem = {
   riskLevel: TenxRiskLevel;
   score: number;
   priceSnapshot?: TenxPriceSnapshot | null;
+  trackingStatus: string;
+  activeAlertCount: number;
+  nextAlertDue?: string | null;
   availableActions: TenxAction[];
 };
 
@@ -221,6 +329,19 @@ export type TenxResearchCard = {
   availableActions: TenxAction[];
 };
 
+export type TenxResearchReport = {
+  reportId: string;
+  market: TenxMarket;
+  symbol: string;
+  title: string;
+  sourceFilename: string;
+  contentMarkdown: string;
+  wordCount: number;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type TenxTimelineEvent = {
   id: string;
   market: TenxMarket;
@@ -264,6 +385,15 @@ export type TenxAlertItem = {
   source: string;
   createdAt: string;
   nextAction: string;
+  evidenceGrade: string;
+  confidence: string;
+  status: string;
+  dueAt?: string | null;
+  sourceNote: string;
+  eventLayer: string[];
+  structureLayer: string[];
+  executionLayer: string[];
+  invalidationSignals: string[];
 };
 
 export type TenxAlertCenter = {

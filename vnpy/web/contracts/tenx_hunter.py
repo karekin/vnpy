@@ -14,6 +14,10 @@ TenxThesisStatus = Literal["strengthening", "needs-review", "at-risk"]
 TenxTimelineType = Literal["earnings", "capex", "price", "supply-chain", "risk", "filing"]
 TenxAlertSeverity = Literal["P1", "P2", "P3"]
 TenxPriceConfidence = Literal["low", "medium", "high"]
+TenxFlowStatus = Literal["hot-lead", "candidate", "watch-ready", "watching", "alerting", "blocked"]
+TenxMarketSentimentTone = Literal["extreme-fear", "fear", "neutral", "greed", "extreme-greed", "unavailable"]
+TenxPoliticalEvidenceGrade = Literal["A", "B", "C", "D"]
+TenxPoliticalSignalStatus = Literal["confirmed", "watching", "needs-verification", "discarded"]
 
 
 class TenxFreshnessRow(BaseModel):
@@ -21,6 +25,96 @@ class TenxFreshnessRow(BaseModel):
     data_complete: bool
     source_summary: str
     coverage: str
+
+
+class TenxMarketSentimentPointRow(BaseModel):
+    date: str
+    value: float
+
+
+class TenxMarketSentimentMetricRow(BaseModel):
+    key: str
+    label: str
+    category: str
+    value: float | None = None
+    display_value: str
+    score: float | None = None
+    tone: TenxMarketSentimentTone
+    status_label: str
+    detail: str
+    source: str
+    source_url: str
+    updated_at: str
+    previous_value: float | None = None
+    change: float | None = None
+    history: list[TenxMarketSentimentPointRow] = Field(default_factory=list)
+
+
+class TenxMarketSentimentResponse(BaseModel):
+    market: TenxMarket
+    snapshot_at: str
+    composite_score: float | None = None
+    regime: TenxMarketSentimentTone
+    regime_label: str
+    summary: str
+    risk_posture: str
+    data_quality: str
+    freshness: TenxFreshnessRow
+    metrics: list[TenxMarketSentimentMetricRow]
+    notes: list[str] = Field(default_factory=list)
+
+
+class TenxPoliticalDisclosureSummaryRow(BaseModel):
+    source: str
+    source_url: str
+    filing_type: str
+    latest_filing_date: str
+    transaction_window: str
+    total_trades: int | None = None
+    purchases: int | None = None
+    sales: int | None = None
+    late_filings: int | None = None
+    late_filing_pct: float | None = None
+    detail: str
+
+
+class TenxPoliticalTradeRow(BaseModel):
+    date: str
+    symbol: str
+    description: str
+    trade_type: str
+    amount: str
+    is_late: bool = False
+    source_url: str
+
+
+class TenxPoliticalMentionRow(BaseModel):
+    symbol: str
+    name: str
+    event_date: str
+    event_type: str
+    status: TenxPoliticalSignalStatus
+    evidence_grade: TenxPoliticalEvidenceGrade
+    headline: str
+    summary: str
+    source: str
+    source_url: str
+    verification_note: str
+    next_action: str
+    watchlist_rule: str
+
+
+class TenxPoliticalSignalResponse(BaseModel):
+    market: TenxMarket
+    person: str
+    snapshot_at: str
+    thesis: str
+    freshness: TenxFreshnessRow
+    disclosure: TenxPoliticalDisclosureSummaryRow
+    recent_trades: list[TenxPoliticalTradeRow]
+    mentions: list[TenxPoliticalMentionRow]
+    monitoring_rules: list[str]
+    notes: list[str] = Field(default_factory=list)
 
 
 class TenxActionRow(BaseModel):
@@ -49,6 +143,13 @@ class TenxLifecycleStageRow(BaseModel):
     key: TenxStage
     label: str
     summary: str
+
+
+class TenxPromotionCheckRow(BaseModel):
+    key: str
+    label: str
+    passed: bool
+    detail: str
 
 
 class TenxUniverseBucketRow(BaseModel):
@@ -84,6 +185,10 @@ class TenxCandidateRow(BaseModel):
     score_drivers: list[str]
     why_selected: TenxWhySelectedRow
     score_breakdown: list[TenxScoreBreakdownRow]
+    flow_status: TenxFlowStatus = "candidate"
+    flow_status_label: str = "候选验证"
+    promotion_summary: str = "继续补证据后再判断是否进入观察池。"
+    promotion_checks: list[TenxPromotionCheckRow] = Field(default_factory=list)
     freshness: TenxFreshnessRow
     available_actions: list[TenxActionRow]
 
@@ -194,6 +299,9 @@ class TenxWatchlistItemRow(BaseModel):
     risk_level: TenxRiskLevel
     score: int
     price_snapshot: TenxPriceSnapshotRow | None = None
+    tracking_status: str = "事件追踪中"
+    active_alert_count: int = 0
+    next_alert_due: str | None = None
     available_actions: list[TenxActionRow]
 
 
@@ -265,6 +373,38 @@ class TenxResearchCardResponse(BaseModel):
     available_actions: list[TenxActionRow]
 
 
+class TenxResearchReportResponse(BaseModel):
+    report_id: str
+    market: TenxMarket
+    symbol: str
+    title: str
+    source_filename: str
+    content_markdown: str
+    word_count: int
+    status: str
+    created_at: str
+    updated_at: str
+
+
+class TenxResearchReportUploadResponse(BaseModel):
+    ok: bool = True
+    message: str
+    report: TenxResearchReportResponse
+
+
+class TenxDiscoverCandidateCreateRequest(BaseModel):
+    market: TenxMarket
+    symbol: str
+    name: str | None = None
+    source: str = "manual"
+    stage: TenxStage = "discovery"
+    theme: str | None = None
+    thesis: str | None = None
+    note: str | None = None
+    trigger_scene: str | None = None
+    source_payload: dict[str, Any] = Field(default_factory=dict)
+
+
 class TenxAlertItemRow(BaseModel):
     id: str
     market: TenxMarket
@@ -276,6 +416,15 @@ class TenxAlertItemRow(BaseModel):
     source: str
     created_at: str
     next_action: str
+    evidence_grade: str = "D"
+    confidence: str = "low"
+    status: str = "draft"
+    due_at: str | None = None
+    source_note: str = ""
+    event_layer: list[str] = Field(default_factory=list)
+    structure_layer: list[str] = Field(default_factory=list)
+    execution_layer: list[str] = Field(default_factory=list)
+    invalidation_signals: list[str] = Field(default_factory=list)
 
 
 class TenxAlertCenterResponse(BaseModel):

@@ -1,10 +1,15 @@
 import {
+  createDiscoverCandidate,
   getTenxErrorMessage,
   getOverviewMetrics,
   getThemeBySlug,
   getTimelineForSymbol,
+  loadTenxAlerts,
+  loadTenxPoliticalSignals,
   loadTenxResearchCard,
+  loadTenxResearchReport,
   loadTenxWorkspaceSnapshot,
+  uploadTenxResearchReport,
 } from "@/components/tenx-hunter/api";
 
 describe("TenxHunter API adapter", () => {
@@ -130,7 +135,79 @@ describe("TenxHunter API adapter", () => {
       symbol: "NVDA",
       scoreChange: 3.2,
       riskLevel: "medium",
+      flowStatus: "candidate",
     });
+  });
+
+  test("maps political signal disclosures and mention evidence grades", async () => {
+    mockedFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        market: "US",
+        person: "trump",
+        snapshot_at: "2026-05-31 04:00 UTC",
+        thesis: "Track political signals separately from social heat.",
+        freshness: {
+          updated_at: "2026-05-31 04:00 UTC",
+          data_complete: true,
+          source_summary: "Open Cabinet",
+          coverage: "Trump monitor",
+        },
+        disclosure: {
+          source: "Open Cabinet / OGE",
+          source_url: "https://open-cabinet.org/officials/trump-donald-j",
+          filing_type: "OGE 278-T",
+          latest_filing_date: "May 14, 2026",
+          transaction_window: "Jan 1, 2025 – Mar 30, 2026",
+          total_trades: 5011,
+          purchases: 3713,
+          sales: 1298,
+          late_filings: 4656,
+          late_filing_pct: 92.9,
+          detail: "Ranges only.",
+        },
+        recent_trades: [
+          {
+            date: "Mar 30, 2026",
+            symbol: "ACME",
+            description: "ACME CORP",
+            trade_type: "Purchase",
+            amount: "$15K-$50K",
+            is_late: true,
+            source_url: "https://example.com/report.pdf",
+          },
+        ],
+        mentions: [
+          {
+            symbol: "IBM",
+            name: "International Business Machines",
+            event_date: "2026-05-30",
+            event_type: "reported-quote",
+            status: "needs-verification",
+            evidence_grade: "D",
+            headline: "Screenshot says Trump mentioned IBM",
+            summary: "Needs original source.",
+            source: "user screenshot",
+            source_url: "",
+            verification_note: "No primary source.",
+            next_action: "Verify original quote.",
+            watchlist_rule: "Do not enter watchlist yet.",
+          },
+        ],
+        monitoring_rules: ["D grade stays in verification queue."],
+        notes: ["Do not treat screenshots as evidence."],
+      }),
+    });
+
+    const snapshot = await loadTenxPoliticalSignals("US");
+
+    expect(snapshot.disclosure.totalTrades).toBe(5011);
+    expect(snapshot.recentTrades[0]).toMatchObject({ symbol: "ACME", isLate: true });
+    expect(snapshot.mentions[0]).toMatchObject({ symbol: "IBM", evidenceGrade: "D" });
+    expect(mockedFetch).toHaveBeenCalledWith(
+      "/api/v1/tenx-hunter/political-signals?market=US&person=trump",
+      expect.objectContaining({ cache: "no-store" }),
+    );
   });
 
   test("maps research cards from the live API", async () => {
@@ -190,6 +267,132 @@ describe("TenxHunter API adapter", () => {
     });
 
     await expect(loadTenxResearchCard("US", "UNKNOWN")).resolves.toBeNull();
+  });
+
+  test("maps and uploads research markdown reports", async () => {
+    mockedFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        report_id: "report-nvda",
+        market: "US",
+        symbol: "NVDA",
+        title: "NVDA 完整投研报告",
+        source_filename: "nvda.md",
+        content_markdown: "# NVDA 完整投研报告\n\n- AI demand remains strong.",
+        word_count: 38,
+        status: "active",
+        created_at: "2026-05-30 08:00 UTC",
+        updated_at: "2026-05-30 08:00 UTC",
+      }),
+    });
+
+    const report = await loadTenxResearchReport("US", "NVDA");
+    expect(report).toMatchObject({
+      reportId: "report-nvda",
+      symbol: "NVDA",
+      title: "NVDA 完整投研报告",
+    });
+
+    mockedFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        message: "NVDA 投研报告已保存到知识库。",
+        report: {
+          report_id: "report-nvda",
+          market: "US",
+          symbol: "NVDA",
+          title: "NVDA 完整投研报告",
+          source_filename: "nvda.md",
+          content_markdown: "# NVDA 完整投研报告",
+          word_count: 12,
+          status: "active",
+          created_at: "2026-05-30 08:00 UTC",
+          updated_at: "2026-05-30 08:01 UTC",
+        },
+      }),
+    });
+
+    const upload = await uploadTenxResearchReport("US", "NVDA", new File(["# NVDA"], "nvda.md", { type: "text/markdown" }));
+    expect(upload.report.sourceFilename).toBe("nvda.md");
+  });
+
+  test("creates manual discover candidates from hot monitor leads", async () => {
+    mockedFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        message: "ASTS 已加入发现池。",
+      }),
+    });
+
+    const result = await createDiscoverCandidate("US", {
+      symbol: "ASTS",
+      name: "AST SpaceMobile Inc",
+      source: "hot-monitor",
+      theme: "Satellite Connectivity",
+      thesis: "Reddit 热点线索进入候选验证。",
+      sourcePayload: { mentions: 36 },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(mockedFetch).toHaveBeenCalledWith(
+      "/api/v1/tenx-hunter/discover",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.stringContaining("\"symbol\":\"ASTS\""),
+      }),
+    );
+  });
+
+  test("maps event-driven alert metadata from the live API", async () => {
+    mockedFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        market: "US",
+        freshness: {
+          updated_at: "2026-05-30 06:57 UTC",
+          data_complete: true,
+          source_summary: "demo",
+          coverage: "alerts",
+        },
+        available_actions: [],
+        items: [
+          {
+            id: "rule-asts",
+            market: "US",
+            symbol: "ASTS",
+            title: "Falcon 9 launch cadence capacity check",
+            summary: "事件层：发射次数与卫星数量假设变化",
+            severity: "P2",
+            alert_type: "event-driven-options",
+            source: "user-draft",
+            created_at: "2026-05-30 06:57 UTC",
+            next_action: "补公司披露和期权结构证据",
+            evidence_grade: "D",
+            confidence: "low",
+            status: "draft",
+            due_at: "2026-06-03",
+            source_note: "社群截图线索，只能作为待验证提醒。",
+            event_layer: ["Falcon 9 合同/发射节奏可能影响产能预期"],
+            structure_layer: ["检查价格是否接近关键支撑/阻力"],
+            execution_layer: ["未补齐最大亏损前不进入期权表达"],
+            invalidation_signals: ["公司披露不支持 10-12 次发射假设"],
+          },
+        ],
+      }),
+    });
+
+    const alerts = await loadTenxAlerts("US");
+
+    expect(alerts.items[0]).toMatchObject({
+      symbol: "ASTS",
+      evidenceGrade: "D",
+      confidence: "low",
+      sourceNote: "社群截图线索，只能作为待验证提醒。",
+      eventLayer: ["Falcon 9 合同/发射节奏可能影响产能预期"],
+      invalidationSignals: ["公司披露不支持 10-12 次发射假设"],
+    });
   });
 
   test("surfaces backend failures instead of falling back to mock data", async () => {

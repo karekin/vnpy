@@ -299,6 +299,10 @@ describe("TenxCopilotPanel", () => {
               scoreDrivers: [],
               whySelected: { summary: "进入候选池", bullets: [] },
               scoreBreakdown: [],
+              flowStatus: "watch-ready",
+              flowStatusLabel: "可晋级观察",
+              promotionSummary: "满足观察池晋级条件",
+              promotionChecks: [],
               freshness: {
                 updatedAt: "2026-04-18T10:00:00Z",
                 dataComplete: true,

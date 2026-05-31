@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+import hashlib
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -12,6 +13,7 @@ from vnpy.web.contracts.tenx_hunter import (
     TenxAlertCreateRequest,
     TenxAlertItemRow,
     TenxCandidateRow,
+    TenxDiscoverCandidateCreateRequest,
     TenxEvidenceItemRow,
     TenxFreshnessRow,
     TenxLifecycleStageRow,
@@ -19,7 +21,10 @@ from vnpy.web.contracts.tenx_hunter import (
     TenxPriceMapHitReviewRow,
     TenxPriceMapResponse,
     TenxPriceSnapshotRow,
+    TenxPromotionCheckRow,
     TenxResearchCardResponse,
+    TenxResearchReportResponse,
+    TenxResearchReportUploadResponse,
     TenxRiskItemRow,
     TenxScoreBreakdownRow,
     TenxThemeRow,
@@ -119,6 +124,22 @@ class TenxHunterService:
         return [value]
 
     @staticmethod
+    def _as_dict(value: Any) -> dict[str, Any]:
+        return value if isinstance(value, dict) else {}
+
+    @classmethod
+    def _rule_payload_list(cls, payload: dict[str, Any], key: str) -> list[str]:
+        value = payload.get(key)
+        return [str(item).strip() for item in cls._as_list(value) if str(item).strip()]
+
+    @staticmethod
+    def _rule_payload_text(payload: dict[str, Any], key: str, default: str = "") -> str:
+        value = payload.get(key)
+        if value is None:
+            return default
+        return str(value).strip() or default
+
+    @staticmethod
     def _risk_level(risk_tags: list[Any], negative_event_count: int) -> str:
         total_risk = len(risk_tags) + negative_event_count
         if total_risk >= 3:
@@ -143,6 +164,76 @@ class TenxHunterService:
         if alert_type == "candidate_upgrade" or score >= 85:
             return "strengthening"
         return "needs-review"
+
+    @staticmethod
+    def _flow_status_label(status: str) -> str:
+        return {
+            "hot-lead": "热度线索",
+            "candidate": "候选验证",
+            "watch-ready": "可晋级观察",
+            "watching": "观察池",
+            "alerting": "事件提醒中",
+            "blocked": "暂不晋级",
+        }.get(status, status)
+
+    @staticmethod
+    def _promotion_checks(stage: str, evidence_count: int, risk_level: str, momentum: str) -> list[TenxPromotionCheckRow]:
+        return [
+            TenxPromotionCheckRow(
+                key="stage",
+                label="阶段",
+                passed=stage in {"validation", "acceleration"},
+                detail="需要进入 validation/acceleration，不能只停留在早期发现。",
+            ),
+            TenxPromotionCheckRow(
+                key="evidence",
+                label="证据",
+                passed=evidence_count >= 2,
+                detail=f"当前 {evidence_count} 条，观察池要求至少 2 条可复核证据。",
+            ),
+            TenxPromotionCheckRow(
+                key="risk",
+                label="风险",
+                passed=risk_level != "high",
+                detail=f"当前风险等级 {risk_level}，高风险先补反证和无效条件。",
+            ),
+            TenxPromotionCheckRow(
+                key="momentum",
+                label="动量",
+                passed=momentum != "cooling",
+                detail=f"当前动量 {momentum}，降温标的先回到候选池复核。",
+            ),
+        ]
+
+    @classmethod
+    def _candidate_flow(
+        cls,
+        *,
+        symbol: str,
+        stage: str,
+        evidence_count: int,
+        risk_level: str,
+        momentum: str,
+        watch_symbols: set[str],
+        alert_symbols: set[str],
+    ) -> tuple[str, str, list[TenxPromotionCheckRow]]:
+        checks = cls._promotion_checks(stage, evidence_count, risk_level, momentum)
+        if symbol in alert_symbols:
+            status = "alerting"
+            summary = "已在观察池并存在事件/价格提醒，后续由 Alerts 打断注意力。"
+        elif symbol in watch_symbols:
+            status = "watching"
+            summary = "已确认进入观察池，继续跟踪事件、价格结构和反证。"
+        elif stage in {"crowded", "falsified"} or risk_level == "high":
+            status = "blocked"
+            summary = "拥挤、证伪或高风险状态，暂不自动晋级观察池。"
+        elif all(item.passed for item in checks):
+            status = "watch-ready"
+            summary = "满足观察池晋级条件，可以由人工确认后进入事件追踪。"
+        else:
+            status = "candidate"
+            summary = "仍在候选验证，需要补足阶段、证据、风险或动量条件。"
+        return status, summary, checks
 
     @staticmethod
     def _theme_trend(status: str) -> str:
@@ -371,31 +462,150 @@ class TenxHunterService:
             }[stage],
         )
 
+    @staticmethod
+    def _ensure_discover_candidate_table(conn: Any) -> None:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dwd.user_discover_candidate_current (
+                user_id TEXT NOT NULL,
+                security_id INTEGER NOT NULL,
+                market TEXT NOT NULL DEFAULT 'US',
+                symbol TEXT NOT NULL,
+                company_name TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'manual',
+                stage TEXT NOT NULL DEFAULT 'discovery',
+                theme TEXT NOT NULL DEFAULT 'Manual',
+                thesis TEXT NOT NULL,
+                note TEXT NOT NULL DEFAULT '',
+                score NUMERIC(10,2) NOT NULL DEFAULT 55,
+                status TEXT NOT NULL DEFAULT 'active',
+                source_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (user_id, market, symbol)
+            )
+            """
+        )
+
+    @staticmethod
+    def _next_security_id(conn: Any) -> int:
+        row = conn.execute("SELECT COALESCE(MAX(security_id), 0) + 1 AS next_id FROM dim.security").fetchone()
+        return int(row["next_id"])
+
+    def _ensure_security(
+        self,
+        conn: Any,
+        *,
+        market: str,
+        symbol: str,
+        name: str | None = None,
+    ) -> Any:
+        normalized_symbol = symbol.strip().upper()
+        if not normalized_symbol:
+            raise ValueError("symbol is required")
+
+        row = conn.execute(
+            """
+            SELECT security_id, market, symbol, company_name, sector, industry
+            FROM dim.security
+            WHERE symbol = %s
+            """,
+            (normalized_symbol,),
+        ).fetchone()
+        if row is not None:
+            if name and row["company_name"] in {normalized_symbol, "Unknown", "Unknown Company"}:
+                conn.execute(
+                    "UPDATE dim.security SET company_name = %s WHERE security_id = %s",
+                    (name.strip(), row["security_id"]),
+                )
+                row = {**dict(row), "company_name": name.strip()}
+            return row
+
+        security_id = self._next_security_id(conn)
+        company_name = (name or normalized_symbol).strip()
+        conn.execute(
+            """
+            INSERT INTO dim.security (
+                security_id, market, symbol, company_name, exchange_name, currency,
+                listing_status, sector, industry
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                security_id,
+                market,
+                normalized_symbol,
+                company_name,
+                None,
+                "USD" if market == "US" else "CNY",
+                "active",
+                "Unknown",
+                "Unknown",
+            ),
+        )
+        return {
+            "security_id": security_id,
+            "market": market,
+            "symbol": normalized_symbol,
+            "company_name": company_name,
+            "sector": "Unknown",
+            "industry": "Unknown",
+        }
+
     def get_workspace_snapshot(self, market: str | None = None) -> TenxWorkspaceSnapshotResponse:
         market = self._normalize_market(market, self._settings)
         universe_name, universe_strategy, universe_description, universe_buckets = self._universe(market)
         with connect(self._settings) as conn:
+            self._ensure_discover_candidate_table(conn)
             snapshot_row = conn.execute(
                 "SELECT MAX(trade_date) AS trade_date FROM ads.candidate_pool_daily WHERE market = %s",
                 (market,),
             ).fetchone()
             latest_trade_date = snapshot_row["trade_date"] if snapshot_row else None
             if latest_trade_date is None:
-                return TenxWorkspaceSnapshotResponse(
-                    market=market,
-                    universe=universe_name,
-                    universe_strategy=universe_strategy,
-                    universe_description=universe_description,
-                    universe_buckets=universe_buckets,
-                    snapshot_at="",
-                    freshness=self._freshness("", market),
-                    available_actions=self._available_actions(),
-                    candidates=[],
-                    themes=[],
-                    watchlist=[],
-                    timeline=[],
-                    copilot_prompts=[],
-                )
+                latest_trade_date = date.today()
+
+            watch_state_rows = conn.execute(
+                """
+                SELECT symbol
+                FROM dwd.user_watchlist_state_current
+                WHERE market = %s AND state = 'watching'
+                """,
+                (market,),
+            ).fetchall()
+            watch_symbols = {str(row["symbol"]) for row in watch_state_rows}
+
+            alert_count_rows = conn.execute(
+                """
+                SELECT symbol, COUNT(*) AS alert_count
+                FROM (
+                    SELECT symbol
+                    FROM ads.watchlist_alert_daily
+                    WHERE market = %s
+                    UNION ALL
+                    SELECT symbol
+                    FROM dwd.user_alert_rule_current
+                    WHERE market = %s AND status <> 'archived'
+                ) alerts
+                GROUP BY symbol
+                """,
+                (market, market),
+            ).fetchall()
+            alert_counts = {str(row["symbol"]): int(row["alert_count"] or 0) for row in alert_count_rows}
+            alert_symbols = {symbol for symbol, count in alert_counts.items() if count > 0}
+            alert_due_rows = conn.execute(
+                """
+                SELECT DISTINCT ON (symbol)
+                    symbol,
+                    rule_payload->>'due_at' AS due_at
+                FROM dwd.user_alert_rule_current
+                WHERE market = %s
+                  AND status <> 'archived'
+                  AND COALESCE(rule_payload->>'due_at', '') <> ''
+                ORDER BY symbol, updated_at DESC
+                """,
+                (market,),
+            ).fetchall()
+            alert_due_by_symbol = {str(row["symbol"]): str(row["due_at"]) for row in alert_due_rows if row["due_at"]}
 
             candidate_rows = conn.execute(
                 """
@@ -479,9 +689,23 @@ class TenxHunterService:
 
             candidates: list[TenxCandidateRow] = []
             freshness = self._freshness(self._format_date(latest_trade_date), market)
+            existing_candidate_symbols: set[str] = set()
             for row in candidate_rows:
                 explanation = self._candidate_explanation(row, market)
                 stage = self._canonical_stage(row["stage"])
+                evidence_count = int(row["evidence_count"] or 0)
+                risk_level = self._risk_level(self._as_list(row["risk_tags"]), 0)
+                momentum = self._momentum_from_return(float(row["return_5d"] or 0.0))
+                existing_candidate_symbols.add(str(row["symbol"]))
+                flow_status, promotion_summary, promotion_checks = self._candidate_flow(
+                    symbol=row["symbol"],
+                    stage=stage,
+                    evidence_count=evidence_count,
+                    risk_level=risk_level,
+                    momentum=momentum,
+                    watch_symbols=watch_symbols,
+                    alert_symbols=alert_symbols,
+                )
                 candidates.append(
                     TenxCandidateRow(
                         market=market,
@@ -496,9 +720,9 @@ class TenxHunterService:
                         price=float(row["close"] or 0.0),
                         price_change_pct=round(float(row["return_1d"] or 0.0) * 100, 1),
                         market_cap_label=self._market_cap_label(float(row["market_cap"]), market=market) if row["market_cap"] is not None else "N/A",
-                        evidence_count=int(row["evidence_count"] or 0),
-                        risk_level=self._risk_level(self._as_list(row["risk_tags"]), 0),
-                        momentum=self._momentum_from_return(float(row["return_5d"] or 0.0)),
+                        evidence_count=evidence_count,
+                        risk_level=risk_level,
+                        momentum=momentum,
                         next_event=row["next_event"] or "等待下一事件更新",
                         thesis=row["thesis"] or row["reason_summary"],
                         key_signal=row["reason_summary"],
@@ -508,10 +732,154 @@ class TenxHunterService:
                         score_drivers=explanation.score_drivers,
                         why_selected=TenxWhySelectedRow(summary=explanation.selection_reason, bullets=explanation.score_drivers),
                         score_breakdown=self._score_breakdown(row, market),
+                        flow_status=flow_status,
+                        flow_status_label=self._flow_status_label(flow_status),
+                        promotion_summary=promotion_summary,
+                        promotion_checks=promotion_checks,
                         freshness=freshness,
                         available_actions=self._available_actions(row["symbol"]),
                     )
                 )
+
+            manual_rows = conn.execute(
+                """
+                WITH evidence AS (
+                    SELECT security_id, COUNT(*) AS evidence_count
+                    FROM dwd.security_document_signal
+                    WHERE market = %s
+                    GROUP BY security_id
+                ),
+                latest_event AS (
+                    SELECT DISTINCT ON (security_id)
+                        security_id,
+                        title,
+                        event_time
+                    FROM dwd.security_event_timeline
+                    WHERE market = %s
+                    ORDER BY security_id, event_time DESC
+                )
+                SELECT
+                    md.market,
+                    md.security_id,
+                    md.symbol,
+                    COALESCE(NULLIF(md.company_name, ''), d.company_name, md.symbol) AS company_name,
+                    COALESCE(d.sector, d.industry, 'Unknown') AS sector,
+                    COALESCE(NULLIF(md.theme, ''), 'Manual') AS theme_name,
+                    md.score AS total_score,
+                    md.stage,
+                    CASE
+                        WHEN COALESCE(NULLIF(md.note, ''), '') <> ''
+                            THEN md.thesis || ' · ' || md.note
+                        ELSE md.thesis
+                    END AS reason_summary,
+                    '[]'::jsonb AS risk_tags,
+                    jsonb_build_array(COALESCE(NULLIF(md.theme, ''), 'Manual')) AS theme_tags,
+                    m.close,
+                    m.return_1d,
+                    m.return_5d,
+                    m.distance_from_recent_high,
+                    m.market_cap,
+                    m.ps_ttm,
+                    m.pe_ttm,
+                    m.pb,
+                    COALESCE(rc.thesis, md.thesis) AS thesis,
+                    COALESCE(e.evidence_count, 0) AS evidence_count,
+                    COALESCE(le.title, '等待下一次事件验证') AS next_event,
+                    sc.growth_score,
+                    sc.quality_score,
+                    sc.momentum_score,
+                    sc.valuation_score,
+                    sc.size_score,
+                    sc.evidence_score,
+                    sc.risk_score,
+                    sc.theme_score,
+                    sc.industry_prosperity_score,
+                    sc.leader_position_score,
+                    sc.financial_acceleration_score,
+                    sc.cashflow_quality_score,
+                    sc.moat_score,
+                    sc.valuation_chip_score
+                FROM dwd.user_discover_candidate_current md
+                LEFT JOIN dim.security d ON d.security_id = md.security_id
+                LEFT JOIN LATERAL (
+                    SELECT *
+                    FROM dwd.security_market_daily m
+                    WHERE m.security_id = md.security_id
+                    ORDER BY m.trade_date DESC
+                    LIMIT 1
+                ) m ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT *
+                    FROM dws.security_score_component_daily sc
+                    WHERE sc.security_id = md.security_id
+                    ORDER BY sc.trade_date DESC
+                    LIMIT 1
+                ) sc ON TRUE
+                LEFT JOIN ads.research_card_current rc ON rc.security_id = md.security_id
+                LEFT JOIN evidence e ON e.security_id = md.security_id
+                LEFT JOIN latest_event le ON le.security_id = md.security_id
+                WHERE md.user_id = %s
+                  AND md.market = %s
+                  AND md.status = 'active'
+                ORDER BY md.updated_at DESC
+                """,
+                (market, market, DEFAULT_USER_ID, market),
+            ).fetchall()
+
+            manual_candidates: list[TenxCandidateRow] = []
+            for row in manual_rows:
+                if str(row["symbol"]) in existing_candidate_symbols:
+                    continue
+                explanation = self._candidate_explanation(row, market)
+                stage = self._canonical_stage(row["stage"])
+                evidence_count = int(row["evidence_count"] or 0)
+                risk_level = self._risk_level(self._as_list(row["risk_tags"]), 0)
+                momentum = self._momentum_from_return(float(row["return_5d"] or 0.0))
+                flow_status, promotion_summary, promotion_checks = self._candidate_flow(
+                    symbol=row["symbol"],
+                    stage=stage,
+                    evidence_count=evidence_count,
+                    risk_level=risk_level,
+                    momentum=momentum,
+                    watch_symbols=watch_symbols,
+                    alert_symbols=alert_symbols,
+                )
+                manual_candidates.append(
+                    TenxCandidateRow(
+                        market=market,
+                        symbol=row["symbol"],
+                        name=row["company_name"],
+                        sector=row["sector"],
+                        theme=row["theme_name"],
+                        stage=stage,
+                        lifecycle_stage=self._lifecycle_stage(stage),
+                        score=int(round(float(row["total_score"] or 0.0))),
+                        score_change=round(float(row["return_5d"] or 0.0) * 100, 1),
+                        price=float(row["close"] or 0.0),
+                        price_change_pct=round(float(row["return_1d"] or 0.0) * 100, 1),
+                        market_cap_label=self._market_cap_label(float(row["market_cap"]), market=market) if row["market_cap"] is not None else "N/A",
+                        evidence_count=evidence_count,
+                        risk_level=risk_level,
+                        momentum=momentum,
+                        next_event=row["next_event"] or "等待下一事件更新",
+                        thesis=row["thesis"] or row["reason_summary"],
+                        key_signal=row["reason_summary"],
+                        selection_reason=explanation.selection_reason,
+                        stage_reason=explanation.stage_reason,
+                        crowding_note=explanation.crowding_note,
+                        score_drivers=explanation.score_drivers,
+                        why_selected=TenxWhySelectedRow(summary=explanation.selection_reason, bullets=explanation.score_drivers),
+                        score_breakdown=self._score_breakdown(row, market),
+                        flow_status=flow_status,
+                        flow_status_label=self._flow_status_label(flow_status),
+                        promotion_summary=promotion_summary,
+                        promotion_checks=promotion_checks,
+                        freshness=freshness,
+                        available_actions=self._available_actions(row["symbol"]),
+                    )
+                )
+            if manual_candidates:
+                candidates = manual_candidates + candidates
 
             theme_rows = conn.execute(
                 """
@@ -604,27 +972,12 @@ class TenxHunterService:
                         )
                         if row["price_posture"] is not None
                         else None,
+                        tracking_status="事件提醒中" if alert_counts.get(row["symbol"], 0) else "事件追踪中",
+                        active_alert_count=alert_counts.get(row["symbol"], 0),
+                        next_alert_due=alert_due_by_symbol.get(row["symbol"]),
                         available_actions=self._available_actions(row["symbol"]),
                     )
                 )
-
-            if not watchlist and candidates:
-                for candidate in candidates[:3]:
-                    watchlist.append(
-                        TenxWatchlistItemRow(
-                            market=market,
-                            symbol=candidate.symbol,
-                            name=candidate.name,
-                            thesis_status="strengthening" if candidate.stage in {"validation", "acceleration"} else "needs-review",
-                            alert_type="system-focus",
-                            last_event=candidate.why_selected.summary,
-                            next_check="加入观察池后继续跟踪财务兑现与主题变化",
-                            risk_level=candidate.risk_level,
-                            score=candidate.score,
-                            price_snapshot=None,
-                            available_actions=self._available_actions(candidate.symbol),
-                        )
-                    )
 
             timeline_rows = conn.execute(
                 """
@@ -820,6 +1173,202 @@ class TenxHunterService:
                 available_actions=self._available_actions(row["symbol"]),
             )
 
+    @staticmethod
+    def _ensure_research_report_table(conn: Any) -> None:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dwd.user_research_report_current (
+                report_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                market TEXT NOT NULL DEFAULT 'US',
+                symbol TEXT NOT NULL,
+                title TEXT NOT NULL,
+                source_filename TEXT NOT NULL,
+                content_markdown TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE(user_id, market, symbol)
+            )
+            """
+        )
+
+    @staticmethod
+    def _markdown_title(symbol: str, markdown: str) -> str:
+        for line in markdown.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                title = stripped.lstrip("#").strip()
+                if title:
+                    return title[:120]
+        return f"{symbol.upper()} 投研报告"
+
+    @staticmethod
+    def _markdown_word_count(markdown: str) -> int:
+        return len([char for char in markdown if not char.isspace()])
+
+    def _research_report_from_row(self, row: Any) -> TenxResearchReportResponse:
+        markdown = row["content_markdown"]
+        return TenxResearchReportResponse(
+            report_id=str(row["report_id"]),
+            market=row["market"],
+            symbol=row["symbol"],
+            title=row["title"],
+            source_filename=row["source_filename"],
+            content_markdown=markdown,
+            word_count=self._markdown_word_count(markdown),
+            status=row["status"],
+            created_at=self._format_timestamp(row["created_at"]),
+            updated_at=self._format_timestamp(row["updated_at"]),
+        )
+
+    def get_research_report(self, market: str | None, symbol: str) -> TenxResearchReportResponse | None:
+        market = self._normalize_market(market, self._settings)
+        with connect(self._settings) as conn:
+            self._ensure_research_report_table(conn)
+            row = conn.execute(
+                """
+                SELECT report_id, market, symbol, title, source_filename, content_markdown,
+                       status, created_at, updated_at
+                FROM dwd.user_research_report_current
+                WHERE user_id = %s
+                  AND market = %s
+                  AND symbol = %s
+                  AND status = 'active'
+                """,
+                (DEFAULT_USER_ID, market, symbol.upper()),
+            ).fetchone()
+            return self._research_report_from_row(row) if row else None
+
+    def save_research_report(
+        self,
+        market: str | None,
+        symbol: str,
+        filename: str,
+        content: bytes,
+    ) -> TenxResearchReportUploadResponse:
+        market = self._normalize_market(market, self._settings)
+        if len(content) > 2_000_000:
+            raise ValueError("research report markdown is too large; please keep it under 2 MB")
+        try:
+            markdown = content.decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise ValueError("research report must be UTF-8 markdown") from exc
+        if not markdown.strip():
+            raise ValueError("research report markdown is empty")
+        if not filename.lower().endswith((".md", ".markdown", ".txt")):
+            raise ValueError("research report must be a markdown file")
+
+        normalized_symbol = symbol.upper()
+        title = self._markdown_title(normalized_symbol, markdown)
+        content_hash = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
+        now = datetime.now(timezone.utc)
+        with connect(self._settings) as conn:
+            self._ensure_research_report_table(conn)
+            security = conn.execute(
+                "SELECT security_id FROM dim.security WHERE market = %s AND symbol = %s",
+                (market, normalized_symbol),
+            ).fetchone()
+            if security is None:
+                raise ValueError(f"unknown symbol: {market}:{normalized_symbol}")
+            row = conn.execute(
+                """
+                INSERT INTO dwd.user_research_report_current (
+                    report_id, user_id, market, symbol, title, source_filename,
+                    content_markdown, content_hash, status, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, %s)
+                ON CONFLICT (user_id, market, symbol) DO UPDATE SET
+                    title = EXCLUDED.title,
+                    source_filename = EXCLUDED.source_filename,
+                    content_markdown = EXCLUDED.content_markdown,
+                    content_hash = EXCLUDED.content_hash,
+                    status = 'active',
+                    updated_at = EXCLUDED.updated_at
+                RETURNING report_id, market, symbol, title, source_filename, content_markdown,
+                          status, created_at, updated_at
+                """,
+                (
+                    str(uuid4()),
+                    DEFAULT_USER_ID,
+                    market,
+                    normalized_symbol,
+                    title,
+                    filename,
+                    markdown,
+                    content_hash,
+                    now,
+                    now,
+                ),
+            ).fetchone()
+        return TenxResearchReportUploadResponse(
+            message=f"{normalized_symbol} 投研报告已保存到知识库。",
+            report=self._research_report_from_row(row),
+        )
+
+    def create_discover_candidate(self, payload: TenxDiscoverCandidateCreateRequest) -> TenxMutationResponse:
+        market = self._normalize_market(payload.market, self._settings)
+        normalized_symbol = payload.symbol.strip().upper()
+        if not normalized_symbol:
+            raise ValueError("symbol is required")
+
+        stage = self._canonical_stage(payload.stage)
+        theme = (payload.theme or "Manual").strip() or "Manual"
+        source = (payload.source or "manual").strip() or "manual"
+        company_name = payload.name.strip() if payload.name else None
+        thesis = (payload.thesis or payload.note or f"{normalized_symbol} 已由人工从热点线索纳入发现池，等待补充投研报告和可复核证据。").strip()
+        note = (payload.note or "").strip()
+        score = 58 if source == "hot-monitor" else 55
+
+        with connect(self._settings) as conn:
+            self._ensure_discover_candidate_table(conn)
+            security = self._ensure_security(conn, market=market, symbol=normalized_symbol, name=company_name)
+            company_name = company_name or security["company_name"] or normalized_symbol
+            conn.execute(
+                """
+                INSERT INTO dwd.user_discover_candidate_current (
+                    user_id, security_id, market, symbol, company_name, source,
+                    stage, theme, thesis, note, score, status, source_payload,
+                    created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, NOW(), NOW())
+                ON CONFLICT (user_id, market, symbol) DO UPDATE SET
+                    company_name = EXCLUDED.company_name,
+                    source = EXCLUDED.source,
+                    stage = EXCLUDED.stage,
+                    theme = EXCLUDED.theme,
+                    thesis = EXCLUDED.thesis,
+                    note = EXCLUDED.note,
+                    score = GREATEST(dwd.user_discover_candidate_current.score, EXCLUDED.score),
+                    status = 'active',
+                    source_payload = EXCLUDED.source_payload,
+                    updated_at = NOW()
+                """,
+                (
+                    DEFAULT_USER_ID,
+                    security["security_id"],
+                    market,
+                    normalized_symbol,
+                    company_name,
+                    source,
+                    stage,
+                    theme,
+                    thesis,
+                    note,
+                    score,
+                    Jsonb(
+                        {
+                            **payload.source_payload,
+                            "trigger_scene": payload.trigger_scene,
+                        }
+                    ),
+                ),
+            )
+
+        return TenxMutationResponse(
+            ok=True,
+            message=f"{normalized_symbol} 已加入发现池；下一步补投研报告、事件证据和晋级条件。",
+        )
+
     def get_price_map(self, market: str | None, symbol: str) -> TenxPriceMapResponse | None:
         market = self._normalize_market(market, self._settings)
         with connect(self._settings) as conn:
@@ -836,13 +1385,15 @@ class TenxHunterService:
                            WHEN severity = 'medium' THEN 'P2'
                            ELSE 'P3'
                        END AS severity,
-                       alert_type, 'system' AS source, created_at, '查看研究卡片并复核' AS next_action
+                       alert_type, 'system' AS source, created_at, '查看研究卡片并复核' AS next_action,
+                       'active' AS status, '{}'::jsonb AS rule_payload
                 FROM ads.watchlist_alert_daily
                 WHERE market = %s
                 UNION ALL
                 SELECT rule_id AS id, market, symbol, title, note AS summary,
                        severity, rule_type AS alert_type, 'user-draft' AS source, updated_at AS created_at,
-                       '完善提醒规则' AS next_action
+                       COALESCE(rule_payload->>'next_action', '完善提醒规则') AS next_action,
+                       status, rule_payload
                 FROM dwd.user_alert_rule_current
                 WHERE market = %s
                 ORDER BY created_at DESC
@@ -850,11 +1401,10 @@ class TenxHunterService:
                 (market, market),
             ).fetchall()
             freshness = self._freshness(self._format_timestamp(datetime.now(timezone.utc)), market)
-            return TenxAlertCenterResponse(
-                market=market,
-                freshness=freshness,
-                available_actions=self._available_actions(),
-                items=[
+            items: list[TenxAlertItemRow] = []
+            for row in rows:
+                rule_payload = self._as_dict(row["rule_payload"])
+                items.append(
                     TenxAlertItemRow(
                         id=str(row["id"]),
                         market=market,
@@ -866,9 +1416,22 @@ class TenxHunterService:
                         source=row["source"],
                         created_at=self._format_timestamp(row["created_at"]),
                         next_action=row["next_action"],
+                        evidence_grade=self._rule_payload_text(rule_payload, "evidence_grade", "D"),
+                        confidence=self._rule_payload_text(rule_payload, "confidence", "low"),
+                        status=self._rule_payload_text(rule_payload, "status", row["status"] or "draft"),
+                        due_at=self._rule_payload_text(rule_payload, "due_at") or None,
+                        source_note=self._rule_payload_text(rule_payload, "source_note"),
+                        event_layer=self._rule_payload_list(rule_payload, "event_layer"),
+                        structure_layer=self._rule_payload_list(rule_payload, "structure_layer"),
+                        execution_layer=self._rule_payload_list(rule_payload, "execution_layer"),
+                        invalidation_signals=self._rule_payload_list(rule_payload, "invalidation_signals"),
                     )
-                    for row in rows
-                ],
+                )
+            return TenxAlertCenterResponse(
+                market=market,
+                freshness=freshness,
+                available_actions=self._available_actions(),
+                items=items,
             )
 
     def create_watchlist(self, payload: TenxWatchlistMutationRequest) -> TenxMutationResponse:
@@ -922,6 +1485,100 @@ class TenxHunterService:
                     action_time,
                 ),
             )
+            if payload.action == "watch":
+                due_at = (action_time + timedelta(days=7)).date().isoformat()
+                existing_rule = conn.execute(
+                    """
+                    SELECT rule_id
+                    FROM dwd.user_alert_rule_current
+                    WHERE user_id = %s
+                      AND market = %s
+                      AND symbol = %s
+                      AND rule_type = 'event-tracking'
+                      AND status <> 'archived'
+                    LIMIT 1
+                    """,
+                    (DEFAULT_USER_ID, payload.market, payload.symbol.upper()),
+                ).fetchone()
+                rule_payload = {
+                    "status": "active",
+                    "evidence_grade": "C",
+                    "confidence": "medium",
+                    "due_at": due_at,
+                    "next_action": "复核最新事件、价格结构和反证条件",
+                    "source_note": "观察池默认事件追踪规则，由加入观察池动作自动创建。",
+                    "event_layer": [
+                        "是否出现改变收入/订单/交付预期的新事件",
+                        "是否出现公司披露、财报或监管文件的新证据",
+                    ],
+                    "structure_layer": [
+                        "价格是否进入 Base/Bull/Bear 目标区",
+                        "估值、拥挤度或期权结构是否变得极端",
+                    ],
+                    "execution_layer": [
+                        "未复核价格地图和最大亏损前不升级为交易表达",
+                    ],
+                    "invalidation_signals": [
+                        "核心事件低于预期",
+                        "价格跌破无效区且没有新增证据支撑",
+                    ],
+                }
+                if existing_rule:
+                    conn.execute(
+                        """
+                        UPDATE dwd.user_alert_rule_current
+                        SET severity = 'P2',
+                            title = %s,
+                            note = %s,
+                            status = 'active',
+                            rule_payload = %s,
+                            updated_at = %s
+                        WHERE rule_id = %s
+                        """,
+                        (
+                            f"{payload.symbol.upper()} 观察池事件追踪",
+                            "进入观察池后自动跟踪事件、结构和反证条件。",
+                            Jsonb(rule_payload),
+                            action_time,
+                            existing_rule["rule_id"],
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO dwd.user_alert_rule_current (
+                            rule_id, user_id, market, symbol, rule_type, severity, title,
+                            note, status, rule_payload, created_at, updated_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            str(uuid4()),
+                            DEFAULT_USER_ID,
+                            payload.market,
+                            payload.symbol.upper(),
+                            "event-tracking",
+                            "P2",
+                            f"{payload.symbol.upper()} 观察池事件追踪",
+                            "进入观察池后自动跟踪事件、结构和反证条件。",
+                            "active",
+                            Jsonb(rule_payload),
+                            action_time,
+                            action_time,
+                        ),
+                    )
+            else:
+                conn.execute(
+                    """
+                    UPDATE dwd.user_alert_rule_current
+                    SET status = 'archived',
+                        updated_at = %s
+                    WHERE user_id = %s
+                      AND market = %s
+                      AND symbol = %s
+                      AND rule_type = 'event-tracking'
+                    """,
+                    (action_time, DEFAULT_USER_ID, payload.market, payload.symbol.upper()),
+                )
         return TenxMutationResponse(message=f"{payload.symbol.upper()} 已更新观察池状态。")
 
     def update_watchlist(self, symbol: str, payload: TenxWatchlistUpdateRequest) -> TenxMutationResponse:

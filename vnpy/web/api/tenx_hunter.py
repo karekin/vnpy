@@ -11,9 +11,14 @@ from vnpy.web.contracts.tenx_hunter import (
     TenxDeerFlowChatResponse,
     TenxDeerFlowHistoryRequest,
     TenxDeerFlowSearchRequest,
+    TenxDiscoverCandidateCreateRequest,
+    TenxMarketSentimentResponse,
     TenxMutationResponse,
+    TenxPoliticalSignalResponse,
     TenxPriceMapResponse,
     TenxResearchCardResponse,
+    TenxResearchReportResponse,
+    TenxResearchReportUploadResponse,
     TenxWatchlistMutationRequest,
     TenxWatchlistUpdateRequest,
     TenxWorkspaceSnapshotResponse,
@@ -69,12 +74,67 @@ def get_tenx_workspace(market: str = Query("CN")) -> TenxWorkspaceSnapshotRespon
     return services.tenx_service.get_workspace_snapshot(market)
 
 
+@router.get("/market-sentiment", response_model=TenxMarketSentimentResponse)
+def get_market_sentiment(market: str = Query("US")) -> TenxMarketSentimentResponse:
+    return services.sentiment_service.get_snapshot(market)
+
+
+@router.get("/political-signals", response_model=TenxPoliticalSignalResponse)
+def get_political_signals(market: str = Query("US"), person: str = Query("trump")) -> TenxPoliticalSignalResponse:
+    return services.political_service.get_snapshot(market, person)
+
+
 @router.get("/research/{symbol}", response_model=TenxResearchCardResponse)
 def get_tenx_research_card(symbol: str, market: str = Query("CN")) -> TenxResearchCardResponse:
     card = services.tenx_service.get_research_card(market, symbol)
     if card is None:
         raise HTTPException(status_code=404, detail=f"research card not found: {market}:{symbol}")
     return card
+
+
+@router.post("/discover", response_model=TenxMutationResponse)
+def create_discover_candidate(payload: TenxDiscoverCandidateCreateRequest) -> TenxMutationResponse:
+    try:
+        return services.tenx_service.create_discover_candidate(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/reports/{symbol}", response_model=TenxResearchReportResponse)
+def get_tenx_research_report(symbol: str, market: str = Query("CN")) -> TenxResearchReportResponse:
+    report = services.tenx_service.get_research_report(market, symbol)
+    if report is None:
+        raise HTTPException(status_code=404, detail=f"research report not found: {market}:{symbol}")
+    return report
+
+
+if _HAS_MULTIPART:
+
+    @router.post("/reports/{symbol}", response_model=TenxResearchReportUploadResponse)
+    def upload_tenx_research_report(
+        symbol: str,
+        market: str = Query("CN"),
+        file: UploadFile = File(...),
+    ) -> TenxResearchReportUploadResponse:
+        try:
+            content = file.file.read()
+            return services.tenx_service.save_research_report(
+                market,
+                symbol,
+                file.filename or f"{symbol.upper()}.md",
+                content,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+else:
+
+    @router.post("/reports/{symbol}", response_model=TenxMutationResponse)
+    def upload_tenx_research_report_unavailable(symbol: str, market: str = Query("CN")) -> TenxMutationResponse:
+        raise HTTPException(
+            status_code=503,
+            detail="TenX research report uploads require the optional python-multipart package.",
+        )
 
 
 @router.get("/price-map/{symbol}", response_model=TenxPriceMapResponse)

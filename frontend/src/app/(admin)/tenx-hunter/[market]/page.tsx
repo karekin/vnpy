@@ -150,7 +150,7 @@ export default async function TenxHunterMarketHomePage({ params }: { params: Pro
               </div>
             )) : (
               <div className="rounded-xl bg-gray-50 px-4 py-3 text-sm text-gray-600 dark:bg-gray-900/60 dark:text-gray-300">
-                观察池提醒暂时为空。你可以先把候选加入观察池，系统也会在后续根据重点候选生成默认跟踪建议。
+                观察池提醒暂时为空。请先在 Discover 中筛出可晋级观察的候选，再确认加入观察池。
               </div>
             )}
           </div>

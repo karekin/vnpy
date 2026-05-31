@@ -410,6 +410,40 @@ CREATE TABLE IF NOT EXISTS dwd.user_alert_rule_current (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS dwd.user_research_report_current (
+    report_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    market TEXT NOT NULL DEFAULT 'US',
+    symbol TEXT NOT NULL,
+    title TEXT NOT NULL,
+    source_filename TEXT NOT NULL,
+    content_markdown TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(user_id, market, symbol)
+);
+
+CREATE TABLE IF NOT EXISTS dwd.user_discover_candidate_current (
+    user_id TEXT NOT NULL,
+    security_id INTEGER NOT NULL,
+    market TEXT NOT NULL DEFAULT 'US',
+    symbol TEXT NOT NULL,
+    company_name TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'manual',
+    stage TEXT NOT NULL DEFAULT 'discovery',
+    theme TEXT NOT NULL DEFAULT 'Manual',
+    thesis TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    score NUMERIC(10,2) NOT NULL DEFAULT 55,
+    status TEXT NOT NULL DEFAULT 'active',
+    source_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (user_id, market, symbol)
+);
+
 CREATE TABLE IF NOT EXISTS dws.security_feature_daily (
     security_id INTEGER NOT NULL,
     market TEXT NOT NULL DEFAULT 'US',
