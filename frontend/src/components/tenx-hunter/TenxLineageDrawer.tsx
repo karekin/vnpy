@@ -103,7 +103,12 @@ export default function TenxLineageDrawer({ stageId }: Props) {
                     key={src.label}
                     className="rounded-lg border border-gray-200 p-3 dark:border-gray-800"
                   >
-                    <div className="text-sm font-semibold text-gray-900 dark:text-white">{src.label}</div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold text-gray-900 dark:text-white">{src.label}</span>
+                      {src.store ? (
+                        <span className="inline-flex rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-mono text-gray-500 dark:bg-gray-800 dark:text-gray-400">{src.store}</span>
+                      ) : null}
+                    </div>
                     <p className="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">{src.desc}</p>
                   </div>
                 ))}
@@ -138,7 +143,12 @@ export default function TenxLineageDrawer({ stageId }: Props) {
                     className="flex items-start gap-3 rounded-lg border border-gray-200 p-3 dark:border-gray-800"
                   >
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm font-semibold text-gray-900 dark:text-white">{out.label}</div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-gray-900 dark:text-white">{out.label}</span>
+                        {out.store ? (
+                          <span className="inline-flex rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-mono text-gray-500 dark:bg-gray-800 dark:text-gray-400">{out.store}</span>
+                        ) : null}
+                      </div>
                       <p className="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">{out.desc}</p>
                     </div>
                     {out.to ? (
@@ -161,7 +171,16 @@ export default function TenxLineageDrawer({ stageId }: Props) {
                     key={model.name}
                     className="rounded-lg border border-gray-200 p-3 dark:border-gray-800"
                   >
-                    <div className="text-sm font-mono font-semibold text-gray-900 dark:text-white">{model.name}</div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-mono font-semibold text-gray-900 dark:text-white">{model.name}</span>
+                      <span className={`inline-flex rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                        model.schema === "oltp"
+                          ? "bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-300"
+                          : model.schema === "dim"
+                            ? "bg-purple-50 text-purple-700 dark:bg-purple-500/10 dark:text-purple-300"
+                            : "bg-green-50 text-green-700 dark:bg-green-500/10 dark:text-green-300"
+                      }`}>{model.schema}</span>
+                    </div>
                     <div className="mt-1.5 flex flex-wrap gap-1.5">
                       {model.fields.map((f) => (
                         <span
