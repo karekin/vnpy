@@ -931,7 +931,7 @@ export default function SmartAllocationDashboard({
       await updateSmartAllocationProfile(dashboard.profile.id, {
         age: Number(profileAge),
         income_status: incomeStatus,
-        name: "踏潮账户结构与目标（2026-05-04 汇丰+嘉信）",
+        name: "繁花账户结构与目标（2026-05-04 汇丰+嘉信）",
         rebalance_threshold: 0.05,
         allow_bull_market_leaps_relaxation: false,
         quality_stock_symbols: splitSymbols(qualitySymbols),

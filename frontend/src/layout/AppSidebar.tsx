@@ -29,9 +29,9 @@ const navItems: NavItem[] = [
     name: "TenX Hunter",
     icon: <AiIcon />,
     subItems: [
-      { name: "Workspace", path: "/tenx-hunter/us" },
       { name: "Hot Monitor", path: "/tenx-hunter/us/hot-monitor" },
       { name: "Discover", path: "/tenx-hunter/us/discover" },
+      { name: "Earnings", path: "/tenx-hunter/us/earnings" },
       { name: "Watchlist", path: "/tenx-hunter/us/watchlist" },
       { name: "Alerts", path: "/tenx-hunter/us/alerts" },
       { name: "Themes", path: "/tenx-hunter/us/themes" },

@@ -1,6 +1,6 @@
 import StatusTag from "@/components/cb-quant/StatusTag";
 import type { TenxCandidate, TenxFlowStatus, TenxWorkspaceSnapshot } from "@/components/tenx-hunter/types";
-import { BellRing, Binoculars, Flame, GitBranch, ListChecks } from "lucide-react";
+import { BellRing, Binoculars, CalendarClock, Flame, GitBranch, ListChecks } from "lucide-react";
 
 type TagTone = "green" | "yellow" | "red" | "blue" | "slate";
 
@@ -46,11 +46,12 @@ export function TenxFlowRail({ snapshot }: { snapshot: TenxWorkspaceSnapshot }) 
   counts.alerting = Math.max(counts.alerting, snapshot.watchlist.filter((item) => item.activeAlertCount > 0).length);
 
   const stages: Array<{
-    id: TenxFlowStatus;
+    id: string;
     label: string;
     count: string;
     icon: typeof Flame;
     detail: string;
+    tone: TagTone;
   }> = [
     {
       id: "hot-lead",
@@ -58,6 +59,7 @@ export function TenxFlowRail({ snapshot }: { snapshot: TenxWorkspaceSnapshot }) 
       count: "外部",
       icon: Flame,
       detail: "社交热度只进入线索层，不能直接进观察池。",
+      tone: getFlowTone("hot-lead"),
     },
     {
       id: "candidate",
@@ -65,6 +67,7 @@ export function TenxFlowRail({ snapshot }: { snapshot: TenxWorkspaceSnapshot }) 
       count: String(counts.candidate + counts["watch-ready"] + counts.blocked),
       icon: GitBranch,
       detail: "候选池按评分、证据和阶段排序。",
+      tone: getFlowTone("candidate"),
     },
     {
       id: "watch-ready",
@@ -72,6 +75,15 @@ export function TenxFlowRail({ snapshot }: { snapshot: TenxWorkspaceSnapshot }) 
       count: String(counts["watch-ready"]),
       icon: ListChecks,
       detail: "阶段、证据、风险和动量全部通过后才可晋级。",
+      tone: getFlowTone("watch-ready"),
+    },
+    {
+      id: "earnings",
+      label: "Earnings",
+      count: "事件",
+      icon: CalendarClock,
+      detail: "财报窗口和期权链作为进入观察池前的事件验证层。",
+      tone: "blue",
     },
     {
       id: "watching",
@@ -79,6 +91,7 @@ export function TenxFlowRail({ snapshot }: { snapshot: TenxWorkspaceSnapshot }) 
       count: String(snapshot.watchlist.length),
       icon: Binoculars,
       detail: "只展示已确认持续跟踪的股票。",
+      tone: getFlowTone("watching"),
     },
     {
       id: "alerting",
@@ -86,6 +99,7 @@ export function TenxFlowRail({ snapshot }: { snapshot: TenxWorkspaceSnapshot }) 
       count: String(counts.alerting),
       icon: BellRing,
       detail: "进入观察池后自动挂接事件追踪。",
+      tone: getFlowTone("alerting"),
     },
   ];
 
@@ -96,9 +110,9 @@ export function TenxFlowRail({ snapshot }: { snapshot: TenxWorkspaceSnapshot }) 
           <h3 className="text-base font-semibold text-gray-900 dark:text-white">研究流转状态机</h3>
           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">热度线索不能越级，观察池只接收通过晋级门槛的标的。</p>
         </div>
-        <StatusTag label="Hot Monitor -> Discover -> Watchlist" tone="blue" />
+        <StatusTag label="Hot Monitor -> Discover -> Earnings -> Watchlist" tone="blue" />
       </div>
-      <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-5">
+      <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-6">
         {stages.map((stage) => {
           const Icon = stage.icon;
           return (
@@ -107,7 +121,7 @@ export function TenxFlowRail({ snapshot }: { snapshot: TenxWorkspaceSnapshot }) 
                 <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-gray-50 text-gray-600 dark:bg-gray-900 dark:text-gray-300">
                   <Icon className="h-4 w-4" aria-hidden="true" />
                 </span>
-                <StatusTag label={stage.count} tone={getFlowTone(stage.id)} />
+                <StatusTag label={stage.count} tone={stage.tone} />
               </div>
               <div className="mt-3 text-sm font-semibold text-gray-900 dark:text-white">{stage.label}</div>
               <p className="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">{stage.detail}</p>

@@ -14,7 +14,14 @@ from vnpy.web.contracts.tenx_hunter import (
     TenxAlertItemRow,
     TenxCandidateRow,
     TenxDiscoverCandidateCreateRequest,
+    TenxEarningsLensResponse,
+    TenxEarningsOptionRow,
+    TenxEarningsShortlineRow,
     TenxEvidenceItemRow,
+    TenxEventMonitorEventRow,
+    TenxEventMonitorResponse,
+    TenxEventMonitorRuleRow,
+    TenxEventMonitorSourceRow,
     TenxFreshnessRow,
     TenxLifecycleStageRow,
     TenxMutationResponse,
@@ -36,8 +43,17 @@ from vnpy.web.contracts.tenx_hunter import (
     TenxWhySelectedRow,
     TenxWorkspaceSnapshotResponse,
 )
+from vnpy.web.services.political_signal_service import PoliticalSignalService
 from vnpy.web.tenx_hunter.config import Settings, load_settings
 from vnpy.web.tenx_hunter.db import connect
+from vnpy.web.tenx_hunter.event_monitor import (
+    EventMonitorEvent,
+    EventMonitorSnapshot,
+    build_event_monitor_snapshot,
+    event_digest,
+    format_utc_label,
+    utc_now,
+)
 from vnpy.web.tenx_hunter.scoring import (
     CN_SCORE_PROFILE,
     US_SCORE_PROFILE,
@@ -282,6 +298,24 @@ class TenxHunterService:
             return "N/A"
         scaled = value * 100 if -1 <= value <= 1 else value
         return f"{scaled:.1f}%"
+
+    @staticmethod
+    def _as_float(value: Any) -> float | None:
+        if value is None or value == "":
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _as_int(value: Any) -> int:
+        if value is None or value == "":
+            return 0
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
 
     @staticmethod
     def _available_actions(symbol: str | None = None) -> list[TenxActionRow]:
@@ -1034,6 +1068,277 @@ class TenxHunterService:
                 copilot_prompts=prompts,
             )
 
+    def get_earnings_lens(self, market: str | None = None) -> TenxEarningsLensResponse:
+        market = self._normalize_market(market, self._settings)
+        snapshot = self.get_workspace_snapshot(market)
+        notes: list[str] = []
+
+        symbol_rows: dict[str, dict[str, Any]] = {}
+        for candidate in snapshot.candidates:
+            symbol_rows[candidate.symbol.upper()] = {
+                "symbol": candidate.symbol,
+                "name": candidate.name,
+                "theme": candidate.theme,
+                "stage": candidate.stage,
+                "flow_status": candidate.flow_status,
+                "flow_status_label": candidate.flow_status_label,
+                "score": candidate.score,
+                "score_change": candidate.score_change,
+                "risk_level": candidate.risk_level,
+                "momentum": candidate.momentum,
+                "next_event": candidate.next_event,
+            }
+
+        for item in snapshot.watchlist:
+            symbol_rows.setdefault(
+                item.symbol.upper(),
+                {
+                    "symbol": item.symbol,
+                    "name": item.name,
+                    "theme": "Watchlist",
+                    "stage": "validation",
+                    "flow_status": "alerting" if item.active_alert_count > 0 else "watching",
+                    "flow_status_label": "事件提醒中" if item.active_alert_count > 0 else "观察池",
+                    "score": item.score,
+                    "score_change": 0.0,
+                    "risk_level": item.risk_level,
+                    "momentum": "stable",
+                    "next_event": item.next_check or item.last_event,
+                },
+            )
+
+        symbols = sorted(symbol_rows)
+        earnings_by_symbol: dict[str, dict[str, Any]] = {}
+        options_by_symbol: dict[str, dict[str, Any]] = {}
+
+        if symbols:
+            with connect(self._settings) as conn:
+                earnings_table = conn.execute(
+                    "SELECT to_regclass('dwd.security_earnings_calendar_current') AS table_name",
+                ).fetchone()
+                if earnings_table and earnings_table["table_name"]:
+                    earnings_rows = conn.execute(
+                        """
+                        SELECT
+                            symbol,
+                            next_earnings_date,
+                            days_to_earnings,
+                            fiscal_period,
+                            time_of_day,
+                            eps_estimate,
+                            revenue_estimate,
+                            currency,
+                            data_quality_flag,
+                            source_vendor
+                        FROM dwd.security_earnings_calendar_current
+                        WHERE market = %s
+                          AND symbol = ANY(%s)
+                        """,
+                        (market, symbols),
+                    ).fetchall()
+                    earnings_by_symbol = {str(row["symbol"]).upper(): dict(row) for row in earnings_rows}
+                else:
+                    notes.append("财报日历表尚未初始化，短线窗口只显示候选池内已有事件。")
+
+                option_table = conn.execute(
+                    "SELECT to_regclass('dws.security_option_chain_summary_daily') AS table_name",
+                ).fetchone()
+                if market == "US" and option_table and option_table["table_name"]:
+                    option_rows = conn.execute(
+                        """
+                        WITH latest AS (
+                            SELECT symbol, MAX(trade_date) AS trade_date
+                            FROM dws.security_option_chain_summary_daily
+                            WHERE market = %s
+                              AND symbol = ANY(%s)
+                            GROUP BY symbol
+                        )
+                        SELECT
+                            s.symbol,
+                            s.underlying_price,
+                            s.nearest_expiration,
+                            s.expiration_count,
+                            s.contract_count,
+                            s.total_call_volume,
+                            s.total_put_volume,
+                            s.call_put_volume_ratio,
+                            s.total_call_open_interest,
+                            s.total_put_open_interest,
+                            s.call_put_open_interest_ratio,
+                            s.avg_implied_volatility,
+                            s.max_pain_strike,
+                            s.liquidity_score,
+                            s.flow_score,
+                            s.selection_score,
+                            s.flow_sentiment,
+                            s.data_quality_flag,
+                            s.updated_at
+                        FROM dws.security_option_chain_summary_daily s
+                        JOIN latest l
+                          ON l.symbol = s.symbol
+                         AND l.trade_date = s.trade_date
+                        WHERE s.market = %s
+                        """,
+                        (market, symbols, market),
+                    ).fetchall()
+                    options_by_symbol = {str(row["symbol"]).upper(): dict(row) for row in option_rows}
+                elif market == "US":
+                    notes.append("期权链摘要表尚未初始化，请先运行 TenX refresh-options 后查看财报期权。")
+                else:
+                    notes.append("财报期权当前只对 US 市场展示。")
+        else:
+            notes.append("当前候选池和观察池为空，暂无财报窗口可展示。")
+
+        shortline = [
+            self._earnings_shortline_row(market, item, earnings_by_symbol.get(symbol))
+            for symbol, item in symbol_rows.items()
+        ]
+        shortline.sort(
+            key=lambda item: (
+                item.days_to_earnings is None,
+                item.days_to_earnings if item.days_to_earnings is not None else 9999,
+                -item.score,
+                item.symbol,
+            )
+        )
+
+        option_items = [
+            self._earnings_option_row(market, item, earnings_by_symbol.get(symbol), options_by_symbol.get(symbol))
+            for symbol, item in symbol_rows.items()
+        ]
+        option_items.sort(
+            key=lambda item: (
+                item.data_quality_flag != "ok",
+                -(item.option_selection_score or -1),
+                item.days_to_earnings if item.days_to_earnings is not None else 9999,
+                item.symbol,
+            )
+        )
+
+        return TenxEarningsLensResponse(
+            market=market,
+            snapshot_at=snapshot.snapshot_at,
+            freshness=snapshot.freshness,
+            shortline=shortline,
+            options=option_items,
+            notes=notes,
+        )
+
+    def _earnings_shortline_row(
+        self,
+        market: str,
+        item: dict[str, Any],
+        earnings: dict[str, Any] | None,
+    ) -> TenxEarningsShortlineRow:
+        earnings = earnings or {}
+        days_to = self._as_int(earnings.get("days_to_earnings")) if earnings.get("days_to_earnings") is not None else None
+        quality = str(earnings.get("data_quality_flag") or "unavailable")
+        signal, action = self._earnings_shortline_signal(score=int(item["score"]), days_to=days_to, quality=quality)
+        return TenxEarningsShortlineRow(
+            market="US" if market == "US" else "CN",
+            symbol=str(item["symbol"]),
+            name=str(item["name"]),
+            theme=str(item["theme"]),
+            stage=item["stage"],
+            flow_status=item["flow_status"],
+            flow_status_label=str(item["flow_status_label"]),
+            score=int(item["score"]),
+            score_change=float(item["score_change"]),
+            risk_level=item["risk_level"],
+            momentum=item["momentum"],
+            next_event=str(item["next_event"]),
+            next_earnings_date=self._format_date(earnings.get("next_earnings_date")) or None,
+            days_to_earnings=days_to,
+            fiscal_period=str(earnings.get("fiscal_period") or ""),
+            time_of_day=str(earnings.get("time_of_day") or ""),
+            eps_estimate=self._as_float(earnings.get("eps_estimate")),
+            revenue_estimate=self._as_float(earnings.get("revenue_estimate")),
+            currency=str(earnings.get("currency") or ("USD" if market == "US" else "CNY")),
+            earnings_quality=quality,
+            source_vendor=str(earnings.get("source_vendor") or ""),
+            shortline_signal=signal,
+            action_label=action,
+        )
+
+    @staticmethod
+    def _earnings_shortline_signal(*, score: int, days_to: int | None, quality: str) -> tuple[str, str]:
+        if days_to is None:
+            return "缺少下一次财报日，先补日历数据。", "补财报日历"
+        if days_to < 0:
+            return "财报窗口已过，等待价格和业绩复盘。", "复盘"
+        if quality not in {"ok", "partial"}:
+            return "财报日历质量不足，不进入短线优先队列。", "刷新日历"
+        if days_to <= 3 and score >= 80:
+            return "高分标的临近财报，优先复核预期差和风险。", "优先复核"
+        if days_to <= 10 and score >= 70:
+            return "进入财报准备窗口，检查估值、预期和反证。", "准备清单"
+        if days_to <= 21:
+            return "财报窗口可见，保持观察并等待更多催化。", "观察"
+        return "距离财报仍远，维持候选跟踪。", "低频跟踪"
+
+    def _earnings_option_row(
+        self,
+        market: str,
+        item: dict[str, Any],
+        earnings: dict[str, Any] | None,
+        option: dict[str, Any] | None,
+    ) -> TenxEarningsOptionRow:
+        earnings = earnings or {}
+        option = option or {}
+        quality = str(option.get("data_quality_flag") or "unavailable")
+        selection_score = self._as_float(option.get("selection_score"))
+        liquidity_score = self._as_float(option.get("liquidity_score"))
+        signal, action = self._earnings_option_signal(
+            quality=quality,
+            selection_score=selection_score,
+            liquidity_score=liquidity_score,
+            flow_sentiment=str(option.get("flow_sentiment") or "unknown"),
+        )
+        return TenxEarningsOptionRow(
+            market="US" if market == "US" else "CN",
+            symbol=str(item["symbol"]),
+            name=str(item["name"]),
+            next_earnings_date=self._format_date(earnings.get("next_earnings_date")) or None,
+            days_to_earnings=self._as_int(earnings.get("days_to_earnings")) if earnings.get("days_to_earnings") is not None else None,
+            score=int(item["score"]),
+            underlying_price=self._as_float(option.get("underlying_price")),
+            nearest_expiration=self._format_date(option.get("nearest_expiration")) or None,
+            expiration_count=self._as_int(option.get("expiration_count")),
+            contract_count=self._as_int(option.get("contract_count")),
+            total_call_volume=self._as_int(option.get("total_call_volume")),
+            total_put_volume=self._as_int(option.get("total_put_volume")),
+            call_put_volume_ratio=self._as_float(option.get("call_put_volume_ratio")),
+            total_call_open_interest=self._as_int(option.get("total_call_open_interest")),
+            total_put_open_interest=self._as_int(option.get("total_put_open_interest")),
+            call_put_open_interest_ratio=self._as_float(option.get("call_put_open_interest_ratio")),
+            avg_implied_volatility=self._as_float(option.get("avg_implied_volatility")),
+            max_pain_strike=self._as_float(option.get("max_pain_strike")),
+            liquidity_score=liquidity_score,
+            flow_score=self._as_float(option.get("flow_score")),
+            option_selection_score=selection_score,
+            flow_sentiment=str(option.get("flow_sentiment") or "unknown"),
+            data_quality_flag=quality,
+            updated_at=self._format_timestamp(option.get("updated_at")),
+            option_signal=signal,
+            action_label=action,
+        )
+
+    @staticmethod
+    def _earnings_option_signal(
+        *,
+        quality: str,
+        selection_score: float | None,
+        liquidity_score: float | None,
+        flow_sentiment: str,
+    ) -> tuple[str, str]:
+        if quality != "ok":
+            return "暂无可用期权链摘要，不生成期权表达。", "刷新期权链"
+        if selection_score is not None and selection_score >= 70 and (liquidity_score or 0) >= 60:
+            return "期权流动性和评分可复核，可进入结构筛选。", "结构筛选"
+        if flow_sentiment in {"bullish", "bearish"}:
+            return f"期权流向偏 {flow_sentiment}，先校验 IV 与最大亏损。", "校验风险"
+        return "期权链可读，但只适合做波动率观察。", "观察 IV"
+
     def get_research_card(self, market: str | None, symbol: str) -> TenxResearchCardResponse | None:
         market = self._normalize_market(market, self._settings)
         with connect(self._settings) as conn:
@@ -1382,9 +1687,321 @@ class TenxHunterService:
         with connect(self._settings) as conn:
             return self._fetch_price_map(conn, market, symbol)
 
+    @staticmethod
+    def _ensure_event_monitor_table(conn: Any) -> None:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dwd.user_event_monitor_event_current (
+                monitor_event_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                market TEXT NOT NULL DEFAULT 'US',
+                symbol TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                event_time TIMESTAMPTZ NOT NULL,
+                due_at DATE,
+                priority TEXT NOT NULL,
+                evidence_grade TEXT NOT NULL,
+                confidence TEXT NOT NULL,
+                source TEXT NOT NULL,
+                source_url TEXT NOT NULL,
+                status TEXT NOT NULL,
+                matched_rule TEXT NOT NULL,
+                asset_relevance TEXT NOT NULL,
+                event_layer JSONB NOT NULL DEFAULT '[]'::jsonb,
+                structure_layer JSONB NOT NULL DEFAULT '[]'::jsonb,
+                execution_layer JSONB NOT NULL DEFAULT '[]'::jsonb,
+                invalidation_signals JSONB NOT NULL DEFAULT '[]'::jsonb,
+                raw_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_user_event_monitor_market_time
+            ON dwd.user_event_monitor_event_current (user_id, market, event_time)
+            """
+        )
+
+    def _event_monitor_watchlist_symbols(self, conn: Any, market: str) -> set[str]:
+        rows = conn.execute(
+            """
+            SELECT symbol
+            FROM dwd.user_watchlist_state_current
+            WHERE user_id = %s
+              AND market = %s
+              AND state = 'watching'
+            ORDER BY symbol
+            """,
+            (DEFAULT_USER_ID, market),
+        ).fetchall()
+        return {str(row["symbol"]).upper() for row in rows}
+
+    def _event_monitor_earnings_rows(self, conn: Any, market: str) -> list[dict[str, Any]]:
+        rows = conn.execute(
+            """
+            SELECT
+                e.security_id,
+                e.market,
+                e.symbol,
+                COALESCE(s.company_name, e.symbol) AS company_name,
+                e.snapshot_date,
+                e.next_earnings_date,
+                e.days_to_earnings,
+                e.fiscal_period,
+                e.time_of_day,
+                e.eps_estimate,
+                e.revenue_estimate,
+                e.currency,
+                e.data_quality_flag,
+                e.source_vendor,
+                e.raw_payload
+            FROM dwd.security_earnings_calendar_current e
+            JOIN dwd.user_watchlist_state_current w
+              ON w.user_id = %s
+             AND w.market = e.market
+             AND w.symbol = e.symbol
+             AND w.state = 'watching'
+            LEFT JOIN dim.security s
+              ON s.security_id = e.security_id
+            WHERE e.market = %s
+            ORDER BY e.next_earnings_date NULLS LAST, e.symbol
+            """,
+            (DEFAULT_USER_ID, market),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    def _event_monitor_row_from_event(event: EventMonitorEvent) -> TenxEventMonitorEventRow:
+        return TenxEventMonitorEventRow(
+            event_id=event.event_id,
+            market="US" if event.market == "US" else "CN",
+            symbol=event.symbol,
+            event_type=event.event_type,
+            title=event.title,
+            summary=event.summary,
+            event_time=format_utc_label(event.event_time),
+            due_at=event.due_at.isoformat() if event.due_at else None,
+            priority=event.priority,
+            evidence_grade=event.evidence_grade,
+            confidence=event.confidence,
+            source=event.source,
+            source_url=event.source_url,
+            status=event.status,
+            matched_rule=event.matched_rule,
+            asset_relevance=event.asset_relevance,
+        )
+
+    @staticmethod
+    def _event_monitor_response(
+        *,
+        market: str,
+        watchlist_symbols: set[str],
+        snapshot: EventMonitorSnapshot,
+    ) -> TenxEventMonitorResponse:
+        return TenxEventMonitorResponse(
+            market="US" if market == "US" else "CN",
+            snapshot_at=format_utc_label(snapshot.snapshot_at),
+            freshness=TenxFreshnessRow(
+                updated_at=format_utc_label(snapshot.snapshot_at),
+                data_complete=all(source.status == "ok" for source in snapshot.source_status),
+                source_summary="FOMC + earnings calendar + political signal queue + public executive news",
+                coverage="资产相关事件监听、提醒规则重建、Alerts 详情复核",
+            ),
+            watchlist_symbols=sorted(watchlist_symbols),
+            generated_alerts=len(snapshot.events),
+            source_status=[
+                TenxEventMonitorSourceRow(
+                    key=source.key,
+                    label=source.label,
+                    source=source.source,
+                    source_url=source.source_url,
+                    status=source.status if source.status in {"ok", "degraded", "unavailable"} else "degraded",
+                    detail=source.detail,
+                    updated_at=source.updated_at,
+                )
+                for source in snapshot.source_status
+            ],
+            rules=[
+                TenxEventMonitorRuleRow(
+                    key=rule.key,
+                    label=rule.label,
+                    event_type=rule.event_type,
+                    priority=rule.priority,
+                    scope=rule.scope,
+                    cadence=rule.cadence,
+                    enabled=rule.enabled,
+                    source=rule.source,
+                    source_url=rule.source_url,
+                )
+                for rule in snapshot.rules
+            ],
+            events=[TenxHunterService._event_monitor_row_from_event(event) for event in snapshot.events],
+            notes=snapshot.notes,
+        )
+
+    @staticmethod
+    def _event_monitor_alert_payload(event: EventMonitorEvent) -> dict[str, Any]:
+        return {
+            "status": event.status,
+            "evidence_grade": event.evidence_grade,
+            "confidence": event.confidence,
+            "due_at": event.due_at.isoformat() if event.due_at else "",
+            "next_action": "按事件层、结构层、执行层完成复核；只有预期差和价格结构同时成立才升级交易表达。",
+            "source_label": "event-monitor",
+            "source_note": f"{event.source}: {event.asset_relevance}",
+            "source_url": event.source_url,
+            "event_monitor_id": event.event_id,
+            "matched_rule": event.matched_rule,
+            "event_layer": event.event_layer,
+            "structure_layer": event.structure_layer,
+            "execution_layer": event.execution_layer,
+            "invalidation_signals": event.invalidation_signals,
+        }
+
+    def _upsert_event_monitor_event(self, conn: Any, event: EventMonitorEvent, action_time: datetime) -> str:
+        monitor_event_id = f"monitor::{event_digest(event.event_id)}"
+        conn.execute(
+            """
+            INSERT INTO dwd.user_event_monitor_event_current (
+                monitor_event_id, user_id, market, symbol, event_type, title, summary,
+                event_time, due_at, priority, evidence_grade, confidence, source, source_url,
+                status, matched_rule, asset_relevance, event_layer, structure_layer,
+                execution_layer, invalidation_signals, raw_payload, created_at, updated_at
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s
+            )
+            ON CONFLICT (monitor_event_id) DO UPDATE SET
+                market = EXCLUDED.market,
+                symbol = EXCLUDED.symbol,
+                event_type = EXCLUDED.event_type,
+                title = EXCLUDED.title,
+                summary = EXCLUDED.summary,
+                event_time = EXCLUDED.event_time,
+                due_at = EXCLUDED.due_at,
+                priority = EXCLUDED.priority,
+                evidence_grade = EXCLUDED.evidence_grade,
+                confidence = EXCLUDED.confidence,
+                source = EXCLUDED.source,
+                source_url = EXCLUDED.source_url,
+                status = EXCLUDED.status,
+                matched_rule = EXCLUDED.matched_rule,
+                asset_relevance = EXCLUDED.asset_relevance,
+                event_layer = EXCLUDED.event_layer,
+                structure_layer = EXCLUDED.structure_layer,
+                execution_layer = EXCLUDED.execution_layer,
+                invalidation_signals = EXCLUDED.invalidation_signals,
+                raw_payload = EXCLUDED.raw_payload,
+                updated_at = EXCLUDED.updated_at
+            """,
+            (
+                monitor_event_id,
+                DEFAULT_USER_ID,
+                event.market,
+                event.symbol,
+                event.event_type,
+                event.title,
+                event.summary,
+                event.event_time,
+                event.due_at,
+                event.priority,
+                event.evidence_grade,
+                event.confidence,
+                event.source,
+                event.source_url,
+                event.status,
+                event.matched_rule,
+                event.asset_relevance,
+                Jsonb(event.event_layer),
+                Jsonb(event.structure_layer),
+                Jsonb(event.execution_layer),
+                Jsonb(event.invalidation_signals),
+                Jsonb(event.raw_payload),
+                action_time,
+                action_time,
+            ),
+        )
+        return monitor_event_id
+
+    def _upsert_event_monitor_alert_rule(
+        self,
+        conn: Any,
+        event: EventMonitorEvent,
+        monitor_event_id: str,
+        action_time: datetime,
+    ) -> None:
+        rule_id = f"event-monitor::{event_digest(monitor_event_id, event.event_id)}"
+        payload = {
+            **self._event_monitor_alert_payload(event),
+            "monitor_event_row_id": monitor_event_id,
+        }
+        conn.execute(
+            """
+            INSERT INTO dwd.user_alert_rule_current (
+                rule_id, user_id, market, symbol, rule_type, severity, title,
+                note, status, rule_payload, created_at, updated_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (rule_id) DO UPDATE SET
+                market = EXCLUDED.market,
+                symbol = EXCLUDED.symbol,
+                rule_type = EXCLUDED.rule_type,
+                severity = EXCLUDED.severity,
+                title = EXCLUDED.title,
+                note = EXCLUDED.note,
+                status = EXCLUDED.status,
+                rule_payload = EXCLUDED.rule_payload,
+                updated_at = EXCLUDED.updated_at
+            """,
+            (
+                rule_id,
+                DEFAULT_USER_ID,
+                event.market,
+                event.symbol,
+                event.event_type,
+                event.priority,
+                event.title,
+                event.summary,
+                "active",
+                Jsonb(payload),
+                action_time,
+                action_time,
+            ),
+        )
+
+    def refresh_event_monitor(self, market: str | None = None, *, fetch_remote: bool = True) -> TenxEventMonitorResponse:
+        market = self._normalize_market(market, self._settings)
+        with connect(self._settings) as conn:
+            self._ensure_event_monitor_table(conn)
+            watchlist_symbols = self._event_monitor_watchlist_symbols(conn, market)
+            earnings_rows = self._event_monitor_earnings_rows(conn, market)
+            snapshot = build_event_monitor_snapshot(
+                market=market,
+                watchlist_symbols=watchlist_symbols,
+                earnings_rows=earnings_rows,
+                political_mentions=PoliticalSignalService()._mention_rows(),
+                fetch_remote=fetch_remote,
+            )
+            action_time = utc_now()
+            for event in snapshot.events:
+                monitor_event_id = self._upsert_event_monitor_event(conn, event, action_time)
+                self._upsert_event_monitor_alert_rule(conn, event, monitor_event_id, action_time)
+            return self._event_monitor_response(
+                market=market,
+                watchlist_symbols=watchlist_symbols,
+                snapshot=snapshot,
+            )
+
+    def get_event_monitor(self, market: str | None = None) -> TenxEventMonitorResponse:
+        return self.refresh_event_monitor(market, fetch_remote=False)
+
     def list_alerts(self, market: str | None) -> TenxAlertCenterResponse:
         market = self._normalize_market(market, self._settings)
         with connect(self._settings) as conn:
+            self._ensure_event_monitor_table(conn)
             rows = conn.execute(
                 """
                 SELECT alert_id AS id, market, symbol, alert_message AS title, alert_message AS summary,
@@ -1400,7 +2017,9 @@ class TenxHunterService:
                   AND market = %s
                 UNION ALL
                 SELECT rule_id AS id, market, symbol, title, note AS summary,
-                       severity, rule_type AS alert_type, 'user-draft' AS source, updated_at AS created_at,
+                       severity, rule_type AS alert_type,
+                       COALESCE(NULLIF(rule_payload->>'source_label', ''), 'user-draft') AS source,
+                       updated_at AS created_at,
                        COALESCE(rule_payload->>'next_action', '完善提醒规则') AS next_action,
                        status, rule_payload
                 FROM dwd.user_alert_rule_current

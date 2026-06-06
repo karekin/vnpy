@@ -3,6 +3,8 @@ import type {
   TenxAlertItem,
   TenxAlertSeverity,
   TenxCandidate,
+  TenxEarningsLens,
+  TenxEventMonitor,
   TenxFreshness,
   TenxMarket,
   TenxMarketSentiment,
@@ -178,6 +180,53 @@ type TenxPoliticalSignalApi = {
   notes: string[];
 };
 
+type TenxEventMonitorApi = {
+  market: TenxMarket;
+  snapshot_at: string;
+  freshness: TenxApiFreshness;
+  watchlist_symbols: string[];
+  generated_alerts: number;
+  source_status: Array<{
+    key: string;
+    label: string;
+    source: string;
+    source_url: string;
+    status: TenxEventMonitor["sourceStatus"][number]["status"];
+    detail: string;
+    updated_at: string;
+  }>;
+  rules: Array<{
+    key: string;
+    label: string;
+    event_type: string;
+    priority: TenxAlertSeverity;
+    scope: string;
+    cadence: string;
+    enabled: boolean;
+    source: string;
+    source_url: string;
+  }>;
+  events: Array<{
+    event_id: string;
+    market: TenxMarket;
+    symbol: string;
+    event_type: string;
+    title: string;
+    summary: string;
+    event_time: string;
+    due_at?: string | null;
+    priority: TenxAlertSeverity;
+    evidence_grade: string;
+    confidence: string;
+    source: string;
+    source_url: string;
+    status: string;
+    matched_rule: string;
+    asset_relevance: string;
+  }>;
+  notes: string[];
+};
+
 type TenxApiScoreBreakdown = {
   key: string;
   label: string;
@@ -296,6 +345,70 @@ type TenxWorkspaceSnapshotApi = {
   watchlist: TenxWatchlistApi[];
   timeline: TenxTimelineApi[];
   copilot_prompts: string[];
+};
+
+type TenxEarningsShortlineApi = {
+  market: TenxMarket;
+  symbol: string;
+  name: string;
+  theme: string;
+  stage: TenxCandidate["stage"];
+  flow_status: TenxCandidate["flowStatus"];
+  flow_status_label: string;
+  score: number;
+  score_change: number;
+  risk_level: TenxCandidate["riskLevel"];
+  momentum: TenxCandidate["momentum"];
+  next_event: string;
+  next_earnings_date?: string | null;
+  days_to_earnings?: number | null;
+  fiscal_period: string;
+  time_of_day: string;
+  eps_estimate?: number | null;
+  revenue_estimate?: number | null;
+  currency: string;
+  earnings_quality: string;
+  source_vendor: string;
+  shortline_signal: string;
+  action_label: string;
+};
+
+type TenxEarningsOptionApi = {
+  market: TenxMarket;
+  symbol: string;
+  name: string;
+  next_earnings_date?: string | null;
+  days_to_earnings?: number | null;
+  score: number;
+  underlying_price?: number | null;
+  nearest_expiration?: string | null;
+  expiration_count: number;
+  contract_count: number;
+  total_call_volume: number;
+  total_put_volume: number;
+  call_put_volume_ratio?: number | null;
+  total_call_open_interest: number;
+  total_put_open_interest: number;
+  call_put_open_interest_ratio?: number | null;
+  avg_implied_volatility?: number | null;
+  max_pain_strike?: number | null;
+  liquidity_score?: number | null;
+  flow_score?: number | null;
+  option_selection_score?: number | null;
+  flow_sentiment: string;
+  data_quality_flag: string;
+  updated_at: string;
+  option_signal: string;
+  action_label: string;
+};
+
+type TenxEarningsLensApi = {
+  market: TenxMarket;
+  snapshot_at: string;
+  freshness: TenxApiFreshness;
+  shortline: TenxEarningsShortlineApi[];
+  options: TenxEarningsOptionApi[];
+  notes: string[];
 };
 
 type TenxResearchCardApi = {
@@ -556,6 +669,55 @@ function mapPoliticalSignal(payload: TenxPoliticalSignalApi): TenxPoliticalSigna
   };
 }
 
+function mapEventMonitor(payload: TenxEventMonitorApi): TenxEventMonitor {
+  return {
+    market: payload.market,
+    snapshotAt: payload.snapshot_at,
+    freshness: mapFreshness(payload.freshness),
+    watchlistSymbols: payload.watchlist_symbols,
+    generatedAlerts: payload.generated_alerts,
+    sourceStatus: payload.source_status.map((source) => ({
+      key: source.key,
+      label: source.label,
+      source: source.source,
+      sourceUrl: source.source_url,
+      status: source.status,
+      detail: source.detail,
+      updatedAt: source.updated_at,
+    })),
+    rules: payload.rules.map((rule) => ({
+      key: rule.key,
+      label: rule.label,
+      eventType: rule.event_type,
+      priority: rule.priority,
+      scope: rule.scope,
+      cadence: rule.cadence,
+      enabled: rule.enabled,
+      source: rule.source,
+      sourceUrl: rule.source_url,
+    })),
+    events: payload.events.map((event) => ({
+      eventId: event.event_id,
+      market: event.market,
+      symbol: event.symbol,
+      eventType: event.event_type,
+      title: event.title,
+      summary: event.summary,
+      eventTime: event.event_time,
+      dueAt: event.due_at,
+      priority: event.priority,
+      evidenceGrade: event.evidence_grade,
+      confidence: event.confidence,
+      source: event.source,
+      sourceUrl: event.source_url,
+      status: event.status,
+      matchedRule: event.matched_rule,
+      assetRelevance: event.asset_relevance,
+    })),
+    notes: payload.notes,
+  };
+}
+
 function mapCandidate(item: TenxCandidateApi): TenxCandidate {
   const flowStatus = item.flow_status ?? "candidate";
   return {
@@ -759,6 +921,68 @@ function mapWorkspaceSnapshot(payload: TenxWorkspaceSnapshotApi): TenxWorkspaceS
   };
 }
 
+function mapEarningsLens(payload: TenxEarningsLensApi): TenxEarningsLens {
+  return {
+    market: payload.market,
+    snapshotAt: payload.snapshot_at,
+    freshness: mapFreshness(payload.freshness),
+    shortline: payload.shortline.map((item) => ({
+      market: item.market,
+      symbol: item.symbol,
+      name: item.name,
+      theme: item.theme,
+      stage: item.stage,
+      flowStatus: item.flow_status,
+      flowStatusLabel: item.flow_status_label,
+      score: item.score,
+      scoreChange: item.score_change,
+      riskLevel: item.risk_level,
+      momentum: item.momentum,
+      nextEvent: item.next_event,
+      nextEarningsDate: item.next_earnings_date ?? null,
+      daysToEarnings: item.days_to_earnings ?? null,
+      fiscalPeriod: item.fiscal_period,
+      timeOfDay: item.time_of_day,
+      epsEstimate: item.eps_estimate ?? null,
+      revenueEstimate: item.revenue_estimate ?? null,
+      currency: item.currency,
+      earningsQuality: item.earnings_quality,
+      sourceVendor: item.source_vendor,
+      shortlineSignal: item.shortline_signal,
+      actionLabel: item.action_label,
+    })),
+    options: payload.options.map((item) => ({
+      market: item.market,
+      symbol: item.symbol,
+      name: item.name,
+      nextEarningsDate: item.next_earnings_date ?? null,
+      daysToEarnings: item.days_to_earnings ?? null,
+      score: item.score,
+      underlyingPrice: item.underlying_price ?? null,
+      nearestExpiration: item.nearest_expiration ?? null,
+      expirationCount: item.expiration_count,
+      contractCount: item.contract_count,
+      totalCallVolume: item.total_call_volume,
+      totalPutVolume: item.total_put_volume,
+      callPutVolumeRatio: item.call_put_volume_ratio ?? null,
+      totalCallOpenInterest: item.total_call_open_interest,
+      totalPutOpenInterest: item.total_put_open_interest,
+      callPutOpenInterestRatio: item.call_put_open_interest_ratio ?? null,
+      avgImpliedVolatility: item.avg_implied_volatility ?? null,
+      maxPainStrike: item.max_pain_strike ?? null,
+      liquidityScore: item.liquidity_score ?? null,
+      flowScore: item.flow_score ?? null,
+      optionSelectionScore: item.option_selection_score ?? null,
+      flowSentiment: item.flow_sentiment,
+      dataQualityFlag: item.data_quality_flag,
+      updatedAt: item.updated_at,
+      optionSignal: item.option_signal,
+      actionLabel: item.action_label,
+    })),
+    notes: payload.notes,
+  };
+}
+
 function mapResearchCard(payload: TenxResearchCardApi): TenxResearchCard {
   return {
     market: payload.market,
@@ -858,6 +1082,13 @@ export async function loadTenxWorkspaceSnapshot(market: TenxMarket): Promise<Ten
   return mapWorkspaceSnapshot(payload);
 }
 
+export async function loadTenxEarningsLens(market: TenxMarket): Promise<TenxEarningsLens> {
+  const payload = await requestJson<TenxEarningsLensApi>(
+    buildUrl(`/api/v1/tenx-hunter/earnings-lens?market=${encodeURIComponent(toMarketParam(market))}`),
+  );
+  return mapEarningsLens(payload);
+}
+
 export async function loadTenxMarketSentiment(market: TenxMarket): Promise<TenxMarketSentiment> {
   const payload = await requestJson<TenxMarketSentimentApi>(
     buildUrl(`/api/v1/tenx-hunter/market-sentiment?market=${encodeURIComponent(toMarketParam(market))}`),
@@ -870,6 +1101,13 @@ export async function loadTenxPoliticalSignals(market: TenxMarket): Promise<Tenx
     buildUrl(`/api/v1/tenx-hunter/political-signals?market=${encodeURIComponent(toMarketParam(market))}&person=trump`),
   );
   return mapPoliticalSignal(payload);
+}
+
+export async function loadTenxEventMonitor(market: TenxMarket): Promise<TenxEventMonitor> {
+  const payload = await requestJson<TenxEventMonitorApi>(
+    buildUrl(`/api/v1/tenx-hunter/event-monitor?market=${encodeURIComponent(toMarketParam(market))}`),
+  );
+  return mapEventMonitor(payload);
 }
 
 export async function loadTenxResearchCard(market: TenxMarket, symbol: string): Promise<TenxResearchCard | null> {

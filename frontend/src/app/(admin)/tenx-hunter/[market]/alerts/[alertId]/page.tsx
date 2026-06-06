@@ -19,6 +19,7 @@ export default async function TenxHunterAlertDetailPage({
   const { market: marketSlug, alertId } = await params;
   const market = fromMarketSlug(marketSlug);
   const normalizedMarketSlug = market.toLowerCase();
+  const normalizedAlertId = decodeURIComponent(alertId);
   let alerts: TenxAlertCenter;
   try {
     alerts = await loadTenxAlerts(market);
@@ -40,7 +41,7 @@ export default async function TenxHunterAlertDetailPage({
   }
 
   const alertItems = sortAlerts(alerts.items);
-  const alert = findAlertById(alertItems, alertId);
+  const alert = findAlertById(alertItems, normalizedAlertId);
 
   return (
     <TenxPageShell
@@ -69,7 +70,7 @@ export default async function TenxHunterAlertDetailPage({
           <div className="rounded-xl bg-gray-50 px-4 py-6 text-sm leading-6 text-gray-600 dark:bg-gray-900/60 dark:text-gray-300">
             <div className="font-semibold text-gray-800 dark:text-white/90">提醒不存在</div>
             <div className="mt-1">这个提醒可能已被删除或不属于当前市场。</div>
-            <div className="mt-3 break-words text-xs text-gray-500 dark:text-gray-400">alertId: {alertId}</div>
+            <div className="mt-3 break-words text-xs text-gray-500 dark:text-gray-400">alertId: {normalizedAlertId}</div>
           </div>
         )}
       </TenxSectionCard>

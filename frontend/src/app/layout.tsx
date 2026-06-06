@@ -16,10 +16,10 @@ const outfit = Outfit({
 });
 
 export const metadata: Metadata = {
-  applicationName: "踏潮",
+  applicationName: "繁花",
   appleWebApp: {
     capable: true,
-    title: "踏潮",
+    title: "繁花",
     statusBarStyle: "black-translucent",
   },
   icons: {
@@ -31,7 +31,7 @@ export const metadata: Metadata = {
   },
   manifest: "/manifest.webmanifest",
   title: {
-    default: "踏潮",
+    default: "繁花",
     template: "%s",
   },
 };

@@ -4,6 +4,7 @@ import {
   getOverviewMetrics,
   getThemeBySlug,
   getTimelineForSymbol,
+  loadTenxEarningsLens,
   loadTenxAlerts,
   loadTenxPoliticalSignals,
   loadTenxResearchCard,
@@ -393,6 +394,101 @@ describe("TenxHunter API adapter", () => {
       eventLayer: ["Falcon 9 合同/发射节奏可能影响产能预期"],
       invalidationSignals: ["公司披露不支持 10-12 次发射假设"],
     });
+  });
+
+  test("maps earnings lens shortline and options rows from the live API", async () => {
+    mockedFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        market: "US",
+        snapshot_at: "2026-06-05",
+        freshness: {
+          updated_at: "2026-06-05",
+          data_complete: true,
+          source_summary: "SEC / Polygon / Yahoo + TenX 聚合",
+          coverage: "earnings lens",
+        },
+        shortline: [
+          {
+            market: "US",
+            symbol: "NVDA",
+            name: "NVIDIA",
+            theme: "AI Infra",
+            stage: "acceleration",
+            flow_status: "watch-ready",
+            flow_status_label: "可晋级观察",
+            score: 94,
+            score_change: 3.2,
+            risk_level: "medium",
+            momentum: "strengthening",
+            next_event: "FY26 Q1 earnings",
+            next_earnings_date: "2026-06-12",
+            days_to_earnings: 7,
+            fiscal_period: "Q1",
+            time_of_day: "AMC",
+            eps_estimate: 0.89,
+            revenue_estimate: 28000000000,
+            currency: "USD",
+            earnings_quality: "ok",
+            source_vendor: "yahoo-finance",
+            shortline_signal: "进入财报准备窗口，检查估值、预期和反证。",
+            action_label: "准备清单",
+          },
+        ],
+        options: [
+          {
+            market: "US",
+            symbol: "NVDA",
+            name: "NVIDIA",
+            next_earnings_date: "2026-06-12",
+            days_to_earnings: 7,
+            score: 94,
+            underlying_price: 188.63,
+            nearest_expiration: "2026-06-19",
+            expiration_count: 4,
+            contract_count: 420,
+            total_call_volume: 120000,
+            total_put_volume: 80000,
+            call_put_volume_ratio: 1.5,
+            total_call_open_interest: 500000,
+            total_put_open_interest: 300000,
+            call_put_open_interest_ratio: 1.67,
+            avg_implied_volatility: 0.62,
+            max_pain_strike: 180,
+            liquidity_score: 82,
+            flow_score: 68,
+            option_selection_score: 76,
+            flow_sentiment: "bullish",
+            data_quality_flag: "ok",
+            updated_at: "2026-06-05 12:00 UTC",
+            option_signal: "期权流动性和评分可复核，可进入结构筛选。",
+            action_label: "结构筛选",
+          },
+        ],
+        notes: [],
+      }),
+    });
+
+    const lens = await loadTenxEarningsLens("US");
+
+    expect(lens.shortline[0]).toMatchObject({
+      symbol: "NVDA",
+      flowStatus: "watch-ready",
+      nextEarningsDate: "2026-06-12",
+      revenueEstimate: 28000000000,
+      actionLabel: "准备清单",
+    });
+    expect(lens.options[0]).toMatchObject({
+      symbol: "NVDA",
+      callPutVolumeRatio: 1.5,
+      avgImpliedVolatility: 0.62,
+      optionSelectionScore: 76,
+      flowSentiment: "bullish",
+    });
+    expect(mockedFetch).toHaveBeenCalledWith(
+      "/api/v1/tenx-hunter/earnings-lens?market=US",
+      expect.objectContaining({ cache: "no-store" }),
+    );
   });
 
   test("surfaces backend failures instead of falling back to mock data", async () => {

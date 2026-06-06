@@ -12,6 +12,8 @@ from vnpy.web.contracts.tenx_hunter import (
     TenxDeerFlowHistoryRequest,
     TenxDeerFlowSearchRequest,
     TenxDiscoverCandidateCreateRequest,
+    TenxEarningsLensResponse,
+    TenxEventMonitorResponse,
     TenxMarketSentimentResponse,
     TenxMutationResponse,
     TenxPoliticalSignalResponse,
@@ -82,6 +84,21 @@ def get_market_sentiment(market: str = Query("US")) -> TenxMarketSentimentRespon
 @router.get("/political-signals", response_model=TenxPoliticalSignalResponse)
 def get_political_signals(market: str = Query("US"), person: str = Query("trump")) -> TenxPoliticalSignalResponse:
     return services.political_service.get_snapshot(market, person)
+
+
+@router.get("/event-monitor", response_model=TenxEventMonitorResponse)
+def get_event_monitor(market: str = Query("US")) -> TenxEventMonitorResponse:
+    return services.tenx_service.get_event_monitor(market)
+
+
+@router.get("/earnings-lens", response_model=TenxEarningsLensResponse)
+def get_earnings_lens(market: str = Query("US")) -> TenxEarningsLensResponse:
+    return services.tenx_service.get_earnings_lens(market)
+
+
+@router.post("/event-monitor/refresh", response_model=TenxEventMonitorResponse)
+def refresh_event_monitor(market: str = Query("US")) -> TenxEventMonitorResponse:
+    return services.tenx_service.refresh_event_monitor(market, fetch_remote=True)
 
 
 @router.get("/research/{symbol}", response_model=TenxResearchCardResponse)

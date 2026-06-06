@@ -410,6 +410,36 @@ CREATE TABLE IF NOT EXISTS dwd.user_alert_rule_current (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS dwd.user_event_monitor_event_current (
+    monitor_event_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    market TEXT NOT NULL DEFAULT 'US',
+    symbol TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    event_time TIMESTAMPTZ NOT NULL,
+    due_at DATE,
+    priority TEXT NOT NULL,
+    evidence_grade TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    source TEXT NOT NULL,
+    source_url TEXT NOT NULL,
+    status TEXT NOT NULL,
+    matched_rule TEXT NOT NULL,
+    asset_relevance TEXT NOT NULL,
+    event_layer JSONB NOT NULL DEFAULT '[]'::jsonb,
+    structure_layer JSONB NOT NULL DEFAULT '[]'::jsonb,
+    execution_layer JSONB NOT NULL DEFAULT '[]'::jsonb,
+    invalidation_signals JSONB NOT NULL DEFAULT '[]'::jsonb,
+    raw_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_event_monitor_market_time
+ON dwd.user_event_monitor_event_current (user_id, market, event_time);
+
 CREATE TABLE IF NOT EXISTS dwd.user_research_report_current (
     report_id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -1094,6 +1124,36 @@ CREATE TABLE IF NOT EXISTS dwd.user_alert_rule_current (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS dwd.user_event_monitor_event_current (
+    monitor_event_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    market TEXT NOT NULL DEFAULT 'US',
+    symbol TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    event_time TIMESTAMPTZ NOT NULL,
+    due_at DATE,
+    priority TEXT NOT NULL,
+    evidence_grade TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    source TEXT NOT NULL,
+    source_url TEXT NOT NULL,
+    status TEXT NOT NULL,
+    matched_rule TEXT NOT NULL,
+    asset_relevance TEXT NOT NULL,
+    event_layer JSONB NOT NULL DEFAULT '[]'::jsonb,
+    structure_layer JSONB NOT NULL DEFAULT '[]'::jsonb,
+    execution_layer JSONB NOT NULL DEFAULT '[]'::jsonb,
+    invalidation_signals JSONB NOT NULL DEFAULT '[]'::jsonb,
+    raw_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_event_monitor_market_time
+ON dwd.user_event_monitor_event_current (user_id, market, event_time);
+
 ALTER TABLE IF EXISTS dws.security_feature_daily ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
 ALTER TABLE IF EXISTS dws.security_feature_daily ADD COLUMN IF NOT EXISTS netprofit_yoy NUMERIC(10,4);
 ALTER TABLE IF EXISTS dws.security_feature_daily ADD COLUMN IF NOT EXISTS cfo_to_np NUMERIC(10,4);
@@ -1153,13 +1213,10 @@ def _clear_market_data(conn, market: str) -> None:
     conn.execute("DELETE FROM dwd.security_price_technical_daily WHERE market = %s", (market,))
     conn.execute("DELETE FROM dwd.security_earnings_calendar_current WHERE market = %s", (market,))
     conn.execute("DELETE FROM dwd.security_estimate_current WHERE market = %s", (market,))
-    conn.execute("DELETE FROM dwd.user_alert_rule_current WHERE market = %s", (market,))
-    conn.execute("DELETE FROM dwd.user_watchlist_state_current WHERE market = %s", (market,))
     conn.execute("DELETE FROM dwd.security_document_signal WHERE market = %s", (market,))
     conn.execute("DELETE FROM dwd.security_event_timeline WHERE market = %s", (market,))
     conn.execute("DELETE FROM dwd.security_financial_quarterly WHERE market = %s", (market,))
     conn.execute("DELETE FROM dwd.security_market_daily WHERE market = %s", (market,))
-    conn.execute("DELETE FROM ods.user_watch_action_raw WHERE market = %s", (market,))
     conn.execute("DELETE FROM ods.security_institutional_activity_raw WHERE market = %s", (market,))
     conn.execute("DELETE FROM ods.us_earnings_calendar_raw WHERE market = %s", (market,))
     conn.execute("DELETE FROM ods.us_analyst_estimate_raw WHERE market = %s", (market,))

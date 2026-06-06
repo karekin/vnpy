@@ -1,6 +1,7 @@
-import { fromMarketSlug, getTenxErrorMessage, loadTenxAlerts, marketLabel } from "@/components/tenx-hunter/api";
+import { fromMarketSlug, getTenxErrorMessage, loadTenxAlerts, loadTenxEventMonitor, marketLabel } from "@/components/tenx-hunter/api";
 import {
   AlertList,
+  EventMonitorStrip,
   buildAlertFilterCounts,
   filterAlerts,
   getSearchParamValue,
@@ -10,7 +11,7 @@ import {
 import TenxDataStateCard from "@/components/tenx-hunter/TenxDataStateCard";
 import TenxPageShell from "@/components/tenx-hunter/TenxPageShell";
 import { TenxSectionCard } from "@/components/tenx-hunter/TenxCards";
-import type { TenxAlertCenter } from "@/components/tenx-hunter/types";
+import type { TenxAlertCenter, TenxEventMonitor } from "@/components/tenx-hunter/types";
 import { redirect } from "next/navigation";
 
 export default async function TenxHunterAlertsMarketPage({
@@ -30,7 +31,9 @@ export default async function TenxHunterAlertsMarketPage({
   const market = fromMarketSlug(marketSlug);
   const normalizedMarketSlug = market.toLowerCase();
   let alerts: TenxAlertCenter;
+  let eventMonitor: TenxEventMonitor | null = null;
   try {
+    eventMonitor = await loadTenxEventMonitor(market).catch(() => null);
     alerts = await loadTenxAlerts(market);
   } catch (error) {
     return (
@@ -61,6 +64,8 @@ export default async function TenxHunterAlertsMarketPage({
       subtitle="把值得打断注意力的逻辑变化集中起来。"
       marketLabel={`${marketLabel(market)} · Alert Center`}
     >
+      {eventMonitor ? <EventMonitorStrip monitor={eventMonitor} marketSlug={normalizedMarketSlug} /> : null}
+
       <TenxSectionCard title="Alert Center" description="点击事件进入详情页复核。">
         {alertItems.length ? (
           <AlertList

@@ -109,6 +109,61 @@ export type TenxPoliticalSignal = {
   notes: string[];
 };
 
+export type TenxEventMonitorSourceStatus = "ok" | "degraded" | "unavailable";
+
+export type TenxEventMonitorSource = {
+  key: string;
+  label: string;
+  source: string;
+  sourceUrl: string;
+  status: TenxEventMonitorSourceStatus;
+  detail: string;
+  updatedAt: string;
+};
+
+export type TenxEventMonitorRule = {
+  key: string;
+  label: string;
+  eventType: string;
+  priority: TenxAlertSeverity;
+  scope: string;
+  cadence: string;
+  enabled: boolean;
+  source: string;
+  sourceUrl: string;
+};
+
+export type TenxEventMonitorEvent = {
+  eventId: string;
+  market: TenxMarket;
+  symbol: string;
+  eventType: string;
+  title: string;
+  summary: string;
+  eventTime: string;
+  dueAt?: string | null;
+  priority: TenxAlertSeverity;
+  evidenceGrade: string;
+  confidence: string;
+  source: string;
+  sourceUrl: string;
+  status: string;
+  matchedRule: string;
+  assetRelevance: string;
+};
+
+export type TenxEventMonitor = {
+  market: TenxMarket;
+  snapshotAt: string;
+  freshness: TenxFreshness;
+  watchlistSymbols: string[];
+  generatedAlerts: number;
+  sourceStatus: TenxEventMonitorSource[];
+  rules: TenxEventMonitorRule[];
+  events: TenxEventMonitorEvent[];
+  notes: string[];
+};
+
 export type TenxAction = {
   id: string;
   label: string;
@@ -372,6 +427,70 @@ export type TenxWorkspaceSnapshot = {
   watchlist: TenxWatchlistItem[];
   timeline: TenxTimelineEvent[];
   copilotPrompts: string[];
+};
+
+export type TenxEarningsShortlineItem = {
+  market: TenxMarket;
+  symbol: string;
+  name: string;
+  theme: string;
+  stage: TenxStage;
+  flowStatus: TenxFlowStatus;
+  flowStatusLabel: string;
+  score: number;
+  scoreChange: number;
+  riskLevel: TenxRiskLevel;
+  momentum: TenxMomentum;
+  nextEvent: string;
+  nextEarningsDate?: string | null;
+  daysToEarnings?: number | null;
+  fiscalPeriod: string;
+  timeOfDay: string;
+  epsEstimate?: number | null;
+  revenueEstimate?: number | null;
+  currency: string;
+  earningsQuality: string;
+  sourceVendor: string;
+  shortlineSignal: string;
+  actionLabel: string;
+};
+
+export type TenxEarningsOptionItem = {
+  market: TenxMarket;
+  symbol: string;
+  name: string;
+  nextEarningsDate?: string | null;
+  daysToEarnings?: number | null;
+  score: number;
+  underlyingPrice?: number | null;
+  nearestExpiration?: string | null;
+  expirationCount: number;
+  contractCount: number;
+  totalCallVolume: number;
+  totalPutVolume: number;
+  callPutVolumeRatio?: number | null;
+  totalCallOpenInterest: number;
+  totalPutOpenInterest: number;
+  callPutOpenInterestRatio?: number | null;
+  avgImpliedVolatility?: number | null;
+  maxPainStrike?: number | null;
+  liquidityScore?: number | null;
+  flowScore?: number | null;
+  optionSelectionScore?: number | null;
+  flowSentiment: string;
+  dataQualityFlag: string;
+  updatedAt: string;
+  optionSignal: string;
+  actionLabel: string;
+};
+
+export type TenxEarningsLens = {
+  market: TenxMarket;
+  snapshotAt: string;
+  freshness: TenxFreshness;
+  shortline: TenxEarningsShortlineItem[];
+  options: TenxEarningsOptionItem[];
+  notes: string[];
 };
 
 export type TenxAlertItem = {

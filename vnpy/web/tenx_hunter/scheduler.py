@@ -19,6 +19,12 @@ def main() -> None:
         else:
             bootstrap_sample_data(settings, reset=True)
         run_all(settings)
+        try:
+            from vnpy.web.services.tenx_hunter_service import TenxHunterService
+
+            TenxHunterService().refresh_event_monitor(settings.default_market, fetch_remote=True)
+        except Exception as exc:
+            print(f"[{datetime.now(timezone.utc).isoformat()}] event monitor refresh failed: {exc}")
         finished_at = datetime.now(timezone.utc).isoformat()
         print(f"[{finished_at}] scheduler run finished; sleeping {interval_seconds}s")
         time.sleep(interval_seconds)

@@ -1,6 +1,6 @@
 import StatusTag from "@/components/cb-quant/StatusTag";
-import type { TenxAlertItem } from "@/components/tenx-hunter/types";
-import { CalendarClock, ChartLine, ShieldCheck } from "lucide-react";
+import type { TenxAlertItem, TenxEventMonitor } from "@/components/tenx-hunter/types";
+import { BellRing, CalendarClock, ChartLine, Radio, ShieldCheck } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import Link from "next/link";
 
@@ -173,6 +173,104 @@ export function EventFrameworkStrip({ updatedAt }: { updatedAt: string }) {
         {disciplineCards.map((card) => (
           <DisciplineCard key={card.title} {...card} />
         ))}
+      </div>
+    </section>
+  );
+}
+
+function sourceStatusTone(status: TenxEventMonitor["sourceStatus"][number]["status"]) {
+  if (status === "ok") return "bg-emerald-500";
+  if (status === "degraded") return "bg-amber-500";
+  return "bg-gray-400";
+}
+
+export function EventMonitorStrip({ monitor, marketSlug }: { monitor: TenxEventMonitor; marketSlug: string }) {
+  const upcomingEvents = monitor.events.slice(0, 3);
+  return (
+    <section className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
+      <div className="flex flex-col gap-3 border-b border-gray-200 px-4 py-3 dark:border-gray-800 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-brand-100 bg-brand-50 text-brand-700 dark:border-brand-500/20 dark:bg-brand-500/10 dark:text-brand-200">
+            <Radio className="h-4 w-4" aria-hidden="true" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-gray-900 dark:text-white">资产事件监听链路</div>
+            <div className="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+              只监听会影响收益的变量：FOMC、特朗普信号、黄仁勋/NVIDIA 公开事件、观察池财报。
+            </div>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2 text-xs">
+          <span className="rounded-lg border border-gray-200 px-2.5 py-1 font-medium text-gray-600 dark:border-gray-800 dark:text-gray-300">
+            观察池 {monitor.watchlistSymbols.length}
+          </span>
+          <span className="rounded-lg border border-gray-200 px-2.5 py-1 font-medium text-gray-600 dark:border-gray-800 dark:text-gray-300">
+            事件 {monitor.generatedAlerts}
+          </span>
+          <span className="rounded-lg border border-gray-200 px-2.5 py-1 font-medium text-gray-600 dark:border-gray-800 dark:text-gray-300">
+            {monitor.freshness.updatedAt}
+          </span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 px-4 py-3 xl:grid-cols-[1.1fr_0.9fr]">
+        <div className="min-w-0">
+          <div className="flex flex-wrap gap-2">
+            {monitor.rules.map((rule) => (
+              <span
+                key={rule.key}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1 text-xs font-medium text-gray-700 dark:border-gray-800 dark:bg-gray-900/60 dark:text-gray-300"
+              >
+                <BellRing className="h-3.5 w-3.5 text-brand-500" aria-hidden="true" />
+                {rule.label}
+                <span className="text-gray-400 dark:text-gray-500">{rule.priority}</span>
+              </span>
+            ))}
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {monitor.sourceStatus.map((source) => (
+              <a
+                key={source.key}
+                href={source.sourceUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-gray-500 transition hover:bg-gray-50 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-white/[0.04] dark:hover:text-gray-200"
+                title={source.detail}
+              >
+                <span className={`h-1.5 w-1.5 rounded-full ${sourceStatusTone(source.status)}`} />
+                {source.label}
+              </a>
+            ))}
+          </div>
+        </div>
+
+        <div className="min-w-0 rounded-lg bg-gray-50 px-3 py-2 dark:bg-gray-900/60">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <div className="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400">最近事件</div>
+            <Link href={`/tenx-hunter/${marketSlug}/alerts?filter=priority`} className="text-xs font-medium text-brand-600 hover:text-brand-700 dark:text-brand-300">
+              看优先复核
+            </Link>
+          </div>
+          <div className="space-y-2">
+            {upcomingEvents.length ? (
+              upcomingEvents.map((event) => (
+                <Link
+                  key={event.eventId}
+                  href={`/tenx-hunter/${marketSlug}/alerts?filter=priority`}
+                  className="block rounded-md px-2 py-1.5 transition hover:bg-white dark:hover:bg-white/[0.04]"
+                >
+                  <div className="flex min-w-0 items-center gap-2">
+                    <StatusTag label={event.priority} tone={severityTone(event.priority)} />
+                    <span className="min-w-0 truncate text-xs font-medium text-gray-800 dark:text-gray-200">{event.title}</span>
+                  </div>
+                  <div className="mt-1 truncate text-xs text-gray-500 dark:text-gray-400">{event.assetRelevance}</div>
+                </Link>
+              ))
+            ) : (
+              <div className="px-2 py-2 text-xs text-gray-500 dark:text-gray-400">当前没有落到资产上的近期事件。</div>
+            )}
+          </div>
+        </div>
       </div>
     </section>
   );

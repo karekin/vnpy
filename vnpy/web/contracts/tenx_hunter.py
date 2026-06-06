@@ -18,6 +18,7 @@ TenxFlowStatus = Literal["hot-lead", "candidate", "watch-ready", "watching", "al
 TenxMarketSentimentTone = Literal["extreme-fear", "fear", "neutral", "greed", "extreme-greed", "unavailable"]
 TenxPoliticalEvidenceGrade = Literal["A", "B", "C", "D"]
 TenxPoliticalSignalStatus = Literal["confirmed", "watching", "needs-verification", "discarded"]
+TenxEventMonitorSourceStatus = Literal["ok", "degraded", "unavailable"]
 
 
 class TenxFreshnessRow(BaseModel):
@@ -114,6 +115,59 @@ class TenxPoliticalSignalResponse(BaseModel):
     recent_trades: list[TenxPoliticalTradeRow]
     mentions: list[TenxPoliticalMentionRow]
     monitoring_rules: list[str]
+    notes: list[str] = Field(default_factory=list)
+
+
+class TenxEventMonitorSourceRow(BaseModel):
+    key: str
+    label: str
+    source: str
+    source_url: str
+    status: TenxEventMonitorSourceStatus
+    detail: str
+    updated_at: str
+
+
+class TenxEventMonitorRuleRow(BaseModel):
+    key: str
+    label: str
+    event_type: str
+    priority: TenxAlertSeverity
+    scope: str
+    cadence: str
+    enabled: bool = True
+    source: str
+    source_url: str
+
+
+class TenxEventMonitorEventRow(BaseModel):
+    event_id: str
+    market: TenxMarket
+    symbol: str
+    event_type: str
+    title: str
+    summary: str
+    event_time: str
+    due_at: str | None = None
+    priority: TenxAlertSeverity
+    evidence_grade: str
+    confidence: str
+    source: str
+    source_url: str
+    status: str
+    matched_rule: str
+    asset_relevance: str
+
+
+class TenxEventMonitorResponse(BaseModel):
+    market: TenxMarket
+    snapshot_at: str
+    freshness: TenxFreshnessRow
+    watchlist_symbols: list[str]
+    generated_alerts: int
+    source_status: list[TenxEventMonitorSourceRow]
+    rules: list[TenxEventMonitorRuleRow]
+    events: list[TenxEventMonitorEventRow]
     notes: list[str] = Field(default_factory=list)
 
 
@@ -329,6 +383,70 @@ class TenxWorkspaceSnapshotResponse(BaseModel):
     watchlist: list[TenxWatchlistItemRow]
     timeline: list[TenxTimelineEventRow]
     copilot_prompts: list[str]
+
+
+class TenxEarningsShortlineRow(BaseModel):
+    market: TenxMarket
+    symbol: str
+    name: str
+    theme: str
+    stage: TenxStage
+    flow_status: TenxFlowStatus
+    flow_status_label: str
+    score: int
+    score_change: float
+    risk_level: TenxRiskLevel
+    momentum: TenxMomentum
+    next_event: str
+    next_earnings_date: str | None = None
+    days_to_earnings: int | None = None
+    fiscal_period: str = ""
+    time_of_day: str = ""
+    eps_estimate: float | None = None
+    revenue_estimate: float | None = None
+    currency: str = ""
+    earnings_quality: str = "unavailable"
+    source_vendor: str = ""
+    shortline_signal: str
+    action_label: str
+
+
+class TenxEarningsOptionRow(BaseModel):
+    market: TenxMarket
+    symbol: str
+    name: str
+    next_earnings_date: str | None = None
+    days_to_earnings: int | None = None
+    score: int
+    underlying_price: float | None = None
+    nearest_expiration: str | None = None
+    expiration_count: int = 0
+    contract_count: int = 0
+    total_call_volume: int = 0
+    total_put_volume: int = 0
+    call_put_volume_ratio: float | None = None
+    total_call_open_interest: int = 0
+    total_put_open_interest: int = 0
+    call_put_open_interest_ratio: float | None = None
+    avg_implied_volatility: float | None = None
+    max_pain_strike: float | None = None
+    liquidity_score: float | None = None
+    flow_score: float | None = None
+    option_selection_score: float | None = None
+    flow_sentiment: str = "unknown"
+    data_quality_flag: str = "unavailable"
+    updated_at: str = ""
+    option_signal: str
+    action_label: str
+
+
+class TenxEarningsLensResponse(BaseModel):
+    market: TenxMarket
+    snapshot_at: str
+    freshness: TenxFreshnessRow
+    shortline: list[TenxEarningsShortlineRow]
+    options: list[TenxEarningsOptionRow]
+    notes: list[str] = Field(default_factory=list)
 
 
 class TenxEvidenceItemRow(BaseModel):
