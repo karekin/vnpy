@@ -25,11 +25,9 @@ YAHOO_CRUMB_URL = "https://query1.finance.yahoo.com/v1/test/getcrumb"
 NASDAQ_OPTIONS_URL = "https://api.nasdaq.com/api/quote/{symbol}/option-chain"
 
 OPTION_CHAIN_SCHEMA_SQL = """
-CREATE SCHEMA IF NOT EXISTS ods;
-CREATE SCHEMA IF NOT EXISTS dws;
-CREATE SCHEMA IF NOT EXISTS ads;
+CREATE SCHEMA IF NOT EXISTS olap;
 
-CREATE TABLE IF NOT EXISTS ods.us_option_chain_raw (
+CREATE TABLE IF NOT EXISTS olap.us_option_chain_raw (
     trade_date DATE NOT NULL,
     market TEXT NOT NULL DEFAULT 'US',
     symbol TEXT NOT NULL,
@@ -58,7 +56,7 @@ CREATE TABLE IF NOT EXISTS ods.us_option_chain_raw (
     PRIMARY KEY (trade_date, market, symbol, expiration_date, option_type, contract_symbol)
 );
 
-CREATE TABLE IF NOT EXISTS dws.security_option_chain_summary_daily (
+CREATE TABLE IF NOT EXISTS olap.security_option_chain_summary_daily (
     trade_date DATE NOT NULL,
     market TEXT NOT NULL DEFAULT 'US',
     symbol TEXT NOT NULL,
@@ -84,7 +82,7 @@ CREATE TABLE IF NOT EXISTS dws.security_option_chain_summary_daily (
     PRIMARY KEY (trade_date, market, symbol)
 );
 
-CREATE TABLE IF NOT EXISTS ads.option_target_recommendation_daily (
+CREATE TABLE IF NOT EXISTS olap.option_target_recommendation_daily (
     trade_date DATE NOT NULL,
     market TEXT NOT NULL DEFAULT 'US',
     symbol TEXT NOT NULL,
@@ -632,7 +630,7 @@ def persist_option_chain(conn: Any, rows: list[dict[str, Any]], summary: dict[st
         with conn.cursor() as cursor:
             cursor.executemany(
                 """
-                INSERT INTO ods.us_option_chain_raw (
+                INSERT INTO olap.us_option_chain_raw (
                     trade_date, market, symbol, expiration_date, option_type, contract_symbol,
                     strike, currency, last_price, bid, ask, price_change, percent_change,
                     volume, open_interest, implied_volatility, in_the_money, contract_size,
@@ -671,7 +669,7 @@ def persist_option_chain(conn: Any, rows: list[dict[str, Any]], summary: dict[st
             )
     conn.execute(
         """
-        INSERT INTO dws.security_option_chain_summary_daily (
+        INSERT INTO olap.security_option_chain_summary_daily (
             trade_date, market, symbol, underlying_price, expiration_count, contract_count,
             nearest_expiration, total_call_volume, total_put_volume, call_put_volume_ratio,
             total_call_open_interest, total_put_open_interest, call_put_open_interest_ratio,
@@ -748,7 +746,7 @@ def persist_agent_recommendation(
         ensure_option_chain_schema(conn)
         conn.execute(
             """
-            INSERT INTO ads.option_target_recommendation_daily (
+            INSERT INTO olap.option_target_recommendation_daily (
                 trade_date, market, symbol, batch_id, workflow_id, deerflow_thread_id,
                 option_selection_score, agent_status, wheel_status, leaps_status,
                 result_json, market_context_json

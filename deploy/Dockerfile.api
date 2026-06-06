@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir -r /tmp/requirements-api.txt
 
 COPY vnpy /app/vnpy
 COPY config /app/config
+COPY examples /app/examples
 
 EXPOSE 8000
 
