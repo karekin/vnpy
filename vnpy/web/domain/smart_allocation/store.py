@@ -4,11 +4,10 @@ from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 import json
-from pathlib import Path
-import sqlite3
-from threading import Lock
 from typing import Any
 
+from vnpy.web.base_store import PgStore, _jsonb
+from vnpy.web.db import DbSettings
 from vnpy.web.domain.smart_allocation.calculator import decimal_from
 from vnpy.web.domain.smart_allocation.models import (
     AllocationProfile,
@@ -130,85 +129,81 @@ def _cashflow_from_payload(payload: dict[str, Any]) -> CashflowEvent:
     )
 
 
-class SmartAllocationStore:
-    """SQLite-backed state store for smart allocation profiles and events."""
+class SmartAllocationStore(PgStore):
+    """PostgreSQL-backed state store for smart allocation profiles and events."""
 
-    def __init__(self, db_path: Path) -> None:
-        self._db_path = db_path
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = Lock()
-        self._ensure_schema()
-
-    @property
-    def db_path(self) -> Path:
-        return self._db_path
+    def __init__(self, settings: DbSettings) -> None:
+        super().__init__(settings)
 
     def load_profiles(self) -> tuple[list[AllocationProfile], str | None]:
         profiles: list[AllocationProfile] = []
         active_profile_id: str | None = None
         with self._connect() as conn:
             for row in conn.execute(
-                "SELECT id, is_active, row_json FROM smart_allocation_profile ORDER BY updated_at DESC"
+                "SELECT id, is_active, payload FROM oltp.allocation_profile ORDER BY updated_at DESC"
             ).fetchall():
                 try:
-                    profile = _profile_from_payload(_loads(str(row[2])))
+                    raw = row["payload"]
+                    payload = json.loads(raw) if isinstance(raw, str) else raw
+                    profile = _profile_from_payload(payload)
                 except Exception:
                     continue
                 profiles.append(profile)
-                if int(row[1] or 0):
-                    active_profile_id = str(row[0])
+                if row["is_active"] is True:
+                    active_profile_id = str(row["id"])
         return profiles, active_profile_id
 
     def upsert_profile(self, profile: AllocationProfile, *, active: bool) -> None:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with self._lock, self._connect() as conn:
+        with self._connect() as conn:
             if active:
-                conn.execute("UPDATE smart_allocation_profile SET is_active = 0")
+                conn.execute("UPDATE oltp.allocation_profile SET is_active = FALSE")
             conn.execute(
-                "INSERT INTO smart_allocation_profile (id, is_active, updated_at, row_json) "
-                "VALUES (?, ?, ?, ?) "
+                "INSERT INTO oltp.allocation_profile (id, is_active, updated_at, payload) "
+                "VALUES (%s, %s, %s, %s) "
                 "ON CONFLICT(id) DO UPDATE SET "
-                "is_active=excluded.is_active, updated_at=excluded.updated_at, row_json=excluded.row_json",
-                (profile.id, 1 if active else 0, now, _dumps(_profile_to_payload(profile))),
+                "is_active=EXCLUDED.is_active, updated_at=EXCLUDED.updated_at, payload=EXCLUDED.payload",
+                (profile.id, active, now, _jsonb(_profile_to_payload(profile))),
             )
-            conn.commit()
 
     def load_latest_snapshot(self, profile_id: str) -> AllocationSnapshot | None:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT row_json FROM smart_allocation_snapshot WHERE profile_id = ? ORDER BY snapshot_at DESC, id DESC LIMIT 1",
+                "SELECT payload FROM olap.allocation_snapshot WHERE profile_id = %s ORDER BY snapshot_at DESC, id DESC LIMIT 1",
                 (profile_id,),
             ).fetchone()
         if not row:
             return None
-        return _snapshot_from_payload(_loads(str(row[0])))
+        raw = row["payload"]
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+        return _snapshot_from_payload(payload)
 
     def insert_snapshot(self, profile_id: str, snapshot: AllocationSnapshot) -> None:
-        with self._lock, self._connect() as conn:
+        with self._connect() as conn:
             conn.execute(
-                "INSERT INTO smart_allocation_snapshot (profile_id, snapshot_at, row_json) VALUES (?, ?, ?)",
-                (profile_id, snapshot.snapshot_at.isoformat(), _dumps(_snapshot_to_payload(snapshot))),
+                "INSERT INTO olap.allocation_snapshot (profile_id, snapshot_at, payload) VALUES (%s, %s, %s)",
+                (profile_id, snapshot.snapshot_at.isoformat(), _jsonb(_snapshot_to_payload(snapshot))),
             )
-            conn.commit()
 
     def insert_cashflow_event(self, profile_id: str, event: CashflowEvent) -> None:
-        with self._lock, self._connect() as conn:
+        with self._connect() as conn:
             conn.execute(
-                "INSERT INTO smart_allocation_cashflow_event (profile_id, event_type, created_at, row_json) VALUES (?, ?, ?, ?)",
-                (profile_id, event.event_type, event.created_at.isoformat(), _dumps(_cashflow_to_payload(event))),
+                "INSERT INTO olap.allocation_cashflow_event (profile_id, event_type, created_at, payload) VALUES (%s, %s, %s, %s)",
+                (profile_id, event.event_type, event.created_at.isoformat(), _jsonb(_cashflow_to_payload(event))),
             )
-            conn.commit()
 
     def list_cashflow_events(self, profile_id: str, *, limit: int = 100) -> list[CashflowEvent]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT row_json FROM smart_allocation_cashflow_event WHERE profile_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
+                "SELECT payload FROM olap.allocation_cashflow_event WHERE profile_id = %s ORDER BY created_at DESC, id DESC LIMIT %s",
                 (profile_id, limit),
             ).fetchall()
         events: list[CashflowEvent] = []
         for row in rows:
             try:
-                events.append(_cashflow_from_payload(_loads(str(row[0]))))
+                raw = row["payload"]
+                payload = json.loads(raw) if isinstance(raw, str) else raw
+                events.append(_cashflow_from_payload(payload))
             except Exception:
                 continue
         return events
@@ -223,75 +218,27 @@ class SmartAllocationStore:
     ) -> None:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         payload = {"status": status, "user_note": user_note, "updated_at": now}
-        with self._lock, self._connect() as conn:
+        with self._connect() as conn:
             conn.execute(
-                "INSERT INTO smart_allocation_recommendation_status "
-                "(profile_id, recommendation_id, status, user_note, updated_at, row_json) "
-                "VALUES (?, ?, ?, ?, ?, ?) "
+                "INSERT INTO oltp.allocation_recommendation_status "
+                "(profile_id, recommendation_id, status, user_note, updated_at, payload) "
+                "VALUES (%s, %s, %s, %s, %s, %s) "
                 "ON CONFLICT(profile_id, recommendation_id) DO UPDATE SET "
-                "status=excluded.status, user_note=excluded.user_note, "
-                "updated_at=excluded.updated_at, row_json=excluded.row_json",
-                (profile_id, recommendation_id, status, user_note, now, _dumps(payload)),
+                "status=EXCLUDED.status, user_note=EXCLUDED.user_note, "
+                "updated_at=EXCLUDED.updated_at, payload=EXCLUDED.payload",
+                (profile_id, recommendation_id, status, user_note, now, _jsonb(payload)),
             )
-            conn.commit()
 
     def load_recommendation_statuses(self, profile_id: str) -> dict[str, dict[str, str]]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT recommendation_id, status, user_note FROM smart_allocation_recommendation_status WHERE profile_id = ?",
+                "SELECT recommendation_id, status, user_note FROM oltp.allocation_recommendation_status WHERE profile_id = %s",
                 (profile_id,),
             ).fetchall()
         return {
-            str(row[0]): {
-                "status": str(row[1] or "pending"),
-                "user_note": str(row[2] or ""),
+            str(row["recommendation_id"]): {
+                "status": str(row["status"] or "pending"),
+                "user_note": str(row["user_note"] or ""),
             }
             for row in rows
         }
-
-    def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self._db_path, check_same_thread=False)
-
-    def _ensure_schema(self) -> None:
-        with self._lock, self._connect() as conn:
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS smart_allocation_profile ("
-                "id TEXT PRIMARY KEY, "
-                "is_active INTEGER NOT NULL, "
-                "updated_at TEXT NOT NULL, "
-                "row_json TEXT NOT NULL"
-                ")"
-            )
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS smart_allocation_snapshot ("
-                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                "profile_id TEXT NOT NULL, "
-                "snapshot_at TEXT NOT NULL, "
-                "row_json TEXT NOT NULL"
-                ")"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_smart_allocation_snapshot_profile "
-                "ON smart_allocation_snapshot (profile_id, snapshot_at)"
-            )
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS smart_allocation_cashflow_event ("
-                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                "profile_id TEXT NOT NULL, "
-                "event_type TEXT NOT NULL, "
-                "created_at TEXT NOT NULL, "
-                "row_json TEXT NOT NULL"
-                ")"
-            )
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS smart_allocation_recommendation_status ("
-                "profile_id TEXT NOT NULL, "
-                "recommendation_id TEXT NOT NULL, "
-                "status TEXT NOT NULL, "
-                "user_note TEXT NOT NULL, "
-                "updated_at TEXT NOT NULL, "
-                "row_json TEXT NOT NULL, "
-                "PRIMARY KEY (profile_id, recommendation_id)"
-                ")"
-            )
-            conn.commit()

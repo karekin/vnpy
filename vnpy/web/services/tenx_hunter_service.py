@@ -69,6 +69,12 @@ DEFAULT_USER_ID = "local-default-user"
 class TenxHunterService:
     def __init__(self) -> None:
         self._settings = load_settings()
+        self._bootstrap_schema()
+
+    def _bootstrap_schema(self) -> None:
+        """Create oltp/olap/dim schemas and tables on first use."""
+        from vnpy.web.base_store import PgStore
+        PgStore.ensure_full_schema(self._settings)
 
     @staticmethod
     def _canonical_stage(stage: str | None) -> str:
@@ -397,7 +403,7 @@ class TenxHunterService:
             SELECT market, symbol, as_of_date, current_price, posture, posture_label, confidence,
                    base_target, bull_target, bear_zone, key_levels, scenario_paths,
                    invalidation_rules, evidence_refs, explanation
-            FROM ads.price_map_current
+            FROM olap.price_map_current
             WHERE market = %s AND symbol = %s
             """,
             (market, symbol.upper()),
@@ -406,7 +412,7 @@ class TenxHunterService:
             """
             SELECT snapshot_date, review_date, horizon_days, base_hit, bull_hit,
                    bear_breached, max_close, min_close, hit_summary
-            FROM ads.price_map_hit_review_daily
+            FROM olap.price_map_hit_review_daily
             WHERE market = %s AND symbol = %s
             ORDER BY snapshot_date DESC, review_date DESC
             LIMIT 6
@@ -500,7 +506,7 @@ class TenxHunterService:
     def _ensure_discover_candidate_table(conn: Any) -> None:
         conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS dwd.user_discover_candidate_current (
+            CREATE TABLE IF NOT EXISTS oltp.user_discover_candidate_current (
                 user_id TEXT NOT NULL,
                 security_id INTEGER NOT NULL,
                 market TEXT NOT NULL DEFAULT 'US',
@@ -591,7 +597,7 @@ class TenxHunterService:
         with connect(self._settings) as conn:
             self._ensure_discover_candidate_table(conn)
             snapshot_row = conn.execute(
-                "SELECT MAX(trade_date) AS trade_date FROM ads.candidate_pool_daily WHERE market = %s",
+                "SELECT MAX(trade_date) AS trade_date FROM olap.candidate_pool_daily WHERE market = %s",
                 (market,),
             ).fetchone()
             latest_trade_date = snapshot_row["trade_date"] if snapshot_row else None
@@ -601,7 +607,7 @@ class TenxHunterService:
             watch_state_rows = conn.execute(
                 """
                 SELECT symbol
-                FROM dwd.user_watchlist_state_current
+                FROM oltp.user_watchlist_state_current
                 WHERE user_id = %s
                   AND market = %s
                   AND state = 'watching'
@@ -615,12 +621,12 @@ class TenxHunterService:
                 SELECT symbol, COUNT(*) AS alert_count
                 FROM (
                     SELECT symbol
-                    FROM ads.watchlist_alert_daily
+                    FROM olap.watchlist_alert_daily
                     WHERE user_id = %s
                       AND market = %s
                     UNION ALL
                     SELECT symbol
-                    FROM dwd.user_alert_rule_current
+                    FROM oltp.user_alert_rule_current
                     WHERE user_id = %s
                       AND market = %s
                       AND status <> 'archived'
@@ -636,7 +642,7 @@ class TenxHunterService:
                 SELECT DISTINCT ON (symbol)
                     symbol,
                     rule_payload->>'due_at' AS due_at
-                FROM dwd.user_alert_rule_current
+                FROM oltp.user_alert_rule_current
                 WHERE user_id = %s
                   AND market = %s
                   AND status <> 'archived'
@@ -651,7 +657,7 @@ class TenxHunterService:
                 """
                 WITH evidence AS (
                     SELECT security_id, COUNT(*) AS evidence_count
-                    FROM dwd.security_document_signal
+                    FROM olap.security_document_signal
                     WHERE market = %s
                     GROUP BY security_id
                 ),
@@ -660,7 +666,7 @@ class TenxHunterService:
                         security_id,
                         title,
                         event_time
-                    FROM dwd.security_event_timeline
+                    FROM olap.security_event_timeline
                     WHERE market = %s
                     ORDER BY security_id, event_time DESC
                 ),
@@ -710,12 +716,12 @@ class TenxHunterService:
                     sc.cashflow_quality_score,
                     sc.moat_score,
                     sc.valuation_chip_score
-                FROM ads.candidate_pool_daily c
+                FROM olap.candidate_pool_daily c
                 JOIN dim.security d ON d.security_id = c.security_id
-                LEFT JOIN dwd.security_market_daily m
+                LEFT JOIN olap.security_market_daily m
                   ON m.security_id = c.security_id AND m.trade_date = c.trade_date
-                LEFT JOIN ads.research_card_current rc ON rc.security_id = c.security_id
-                LEFT JOIN dws.security_score_component_daily sc
+                LEFT JOIN olap.research_card_current rc ON rc.security_id = c.security_id
+                LEFT JOIN olap.security_score_component_daily sc
                   ON sc.security_id = c.security_id AND sc.trade_date = c.trade_date
                 LEFT JOIN evidence e ON e.security_id = c.security_id
                 LEFT JOIN latest_event le ON le.security_id = c.security_id
@@ -785,7 +791,7 @@ class TenxHunterService:
                 """
                 WITH evidence AS (
                     SELECT security_id, COUNT(*) AS evidence_count
-                    FROM dwd.security_document_signal
+                    FROM olap.security_document_signal
                     WHERE market = %s
                     GROUP BY security_id
                 ),
@@ -794,7 +800,7 @@ class TenxHunterService:
                         security_id,
                         title,
                         event_time
-                    FROM dwd.security_event_timeline
+                    FROM olap.security_event_timeline
                     WHERE market = %s
                     ORDER BY security_id, event_time DESC
                 )
@@ -839,23 +845,23 @@ class TenxHunterService:
                     sc.cashflow_quality_score,
                     sc.moat_score,
                     sc.valuation_chip_score
-                FROM dwd.user_discover_candidate_current md
+                FROM oltp.user_discover_candidate_current md
                 LEFT JOIN dim.security d ON d.security_id = md.security_id
                 LEFT JOIN LATERAL (
                     SELECT *
-                    FROM dwd.security_market_daily m
+                    FROM olap.security_market_daily m
                     WHERE m.security_id = md.security_id
                     ORDER BY m.trade_date DESC
                     LIMIT 1
                 ) m ON TRUE
                 LEFT JOIN LATERAL (
                     SELECT *
-                    FROM dws.security_score_component_daily sc
+                    FROM olap.security_score_component_daily sc
                     WHERE sc.security_id = md.security_id
                     ORDER BY sc.trade_date DESC
                     LIMIT 1
                 ) sc ON TRUE
-                LEFT JOIN ads.research_card_current rc ON rc.security_id = md.security_id
+                LEFT JOIN olap.research_card_current rc ON rc.security_id = md.security_id
                 LEFT JOIN evidence e ON e.security_id = md.security_id
                 LEFT JOIN latest_event le ON le.security_id = md.security_id
                 WHERE md.user_id = %s
@@ -924,7 +930,7 @@ class TenxHunterService:
             theme_rows = conn.execute(
                 """
                 SELECT market, theme_id, theme_name, heat_score, status, key_drivers, representative_symbols
-                FROM ads.theme_radar_daily
+                FROM olap.theme_radar_daily
                 WHERE market = %s AND trade_date = %s
                 ORDER BY heat_score DESC
                 """,
@@ -964,20 +970,20 @@ class TenxHunterService:
                     pm.base_target AS price_base_target,
                     pm.bull_target AS price_bull_target,
                     pm.bear_zone AS price_bear_zone
-                FROM dwd.user_watchlist_state_current w
+                FROM oltp.user_watchlist_state_current w
                 JOIN dim.security d ON d.security_id = w.security_id
                 LEFT JOIN LATERAL (
                     SELECT alert_type, severity, alert_message
-                    FROM ads.watchlist_alert_daily a
+                    FROM olap.watchlist_alert_daily a
                     WHERE a.user_id = w.user_id
                       AND a.market = w.market
                       AND a.symbol = w.symbol
                     ORDER BY a.created_at DESC
                     LIMIT 1
                 ) a ON TRUE
-                LEFT JOIN ads.candidate_pool_daily c
+                LEFT JOIN olap.candidate_pool_daily c
                   ON c.security_id = w.security_id AND c.trade_date = %s AND c.market = w.market
-                LEFT JOIN ads.price_map_current pm ON pm.security_id = w.security_id AND pm.market = w.market
+                LEFT JOIN olap.price_map_current pm ON pm.security_id = w.security_id AND pm.market = w.market
                 WHERE w.user_id = %s
                   AND w.market = %s
                   AND w.state = 'watching'
@@ -1025,8 +1031,8 @@ class TenxHunterService:
                 """
                 SELECT e.event_id, e.market, e.symbol, e.event_time, e.title, e.event_type, e.source_kind,
                        COALESCE(s.summary, e.title) AS summary
-                FROM dwd.security_event_timeline e
-                LEFT JOIN dwd.security_document_signal s ON s.event_id = e.event_id
+                FROM olap.security_event_timeline e
+                LEFT JOIN olap.security_document_signal s ON s.event_id = e.event_id
                 WHERE e.market = %s
                 ORDER BY e.event_time DESC
                 LIMIT 20
@@ -1114,7 +1120,7 @@ class TenxHunterService:
         if symbols:
             with connect(self._settings) as conn:
                 earnings_table = conn.execute(
-                    "SELECT to_regclass('dwd.security_earnings_calendar_current') AS table_name",
+                    "SELECT to_regclass('olap.security_earnings_calendar_current') AS table_name",
                 ).fetchone()
                 if earnings_table and earnings_table["table_name"]:
                     earnings_rows = conn.execute(
@@ -1130,7 +1136,7 @@ class TenxHunterService:
                             currency,
                             data_quality_flag,
                             source_vendor
-                        FROM dwd.security_earnings_calendar_current
+                        FROM olap.security_earnings_calendar_current
                         WHERE market = %s
                           AND symbol = ANY(%s)
                         """,
@@ -1141,14 +1147,14 @@ class TenxHunterService:
                     notes.append("财报日历表尚未初始化，短线窗口只显示候选池内已有事件。")
 
                 option_table = conn.execute(
-                    "SELECT to_regclass('dws.security_option_chain_summary_daily') AS table_name",
+                    "SELECT to_regclass('olap.security_option_chain_summary_daily') AS table_name",
                 ).fetchone()
                 if market == "US" and option_table and option_table["table_name"]:
                     option_rows = conn.execute(
                         """
                         WITH latest AS (
                             SELECT symbol, MAX(trade_date) AS trade_date
-                            FROM dws.security_option_chain_summary_daily
+                            FROM olap.security_option_chain_summary_daily
                             WHERE market = %s
                               AND symbol = ANY(%s)
                             GROUP BY symbol
@@ -1173,7 +1179,7 @@ class TenxHunterService:
                             s.flow_sentiment,
                             s.data_quality_flag,
                             s.updated_at
-                        FROM dws.security_option_chain_summary_daily s
+                        FROM olap.security_option_chain_summary_daily s
                         JOIN latest l
                           ON l.symbol = s.symbol
                          AND l.trade_date = s.trade_date
@@ -1384,24 +1390,24 @@ class TenxHunterService:
                     sc.cashflow_quality_score,
                     sc.moat_score,
                     sc.valuation_chip_score
-                FROM ads.research_card_current rc
+                FROM olap.research_card_current rc
                 JOIN dim.security d ON d.security_id = rc.security_id
                 LEFT JOIN dim.security_theme st ON st.security_id = rc.security_id
                 LEFT JOIN dim.theme t ON t.theme_id = st.theme_id
-                LEFT JOIN dwd.security_financial_quarterly f
+                LEFT JOIN olap.security_financial_quarterly f
                   ON f.security_id = rc.security_id
                  AND f.report_period = (
-                    SELECT MAX(report_period) FROM dwd.security_financial_quarterly WHERE security_id = rc.security_id
+                    SELECT MAX(report_period) FROM olap.security_financial_quarterly WHERE security_id = rc.security_id
                  )
-                LEFT JOIN dwd.security_market_daily m
+                LEFT JOIN olap.security_market_daily m
                   ON m.security_id = rc.security_id
                  AND m.trade_date = (
-                    SELECT MAX(trade_date) FROM dwd.security_market_daily WHERE security_id = rc.security_id
+                    SELECT MAX(trade_date) FROM olap.security_market_daily WHERE security_id = rc.security_id
                  )
-                LEFT JOIN dws.security_score_component_daily sc
+                LEFT JOIN olap.security_score_component_daily sc
                   ON sc.security_id = rc.security_id
                  AND sc.trade_date = (
-                    SELECT MAX(trade_date) FROM dws.security_score_component_daily WHERE security_id = rc.security_id
+                    SELECT MAX(trade_date) FROM olap.security_score_component_daily WHERE security_id = rc.security_id
                  )
                 WHERE rc.market = %s AND rc.symbol = %s
                 GROUP BY
@@ -1422,8 +1428,8 @@ class TenxHunterService:
             evidence_rows = conn.execute(
                 """
                 SELECT e.event_id, e.source_kind, e.event_time, e.title, COALESCE(s.summary, e.title) AS summary
-                FROM dwd.security_event_timeline e
-                LEFT JOIN dwd.security_document_signal s ON s.event_id = e.event_id
+                FROM olap.security_event_timeline e
+                LEFT JOIN olap.security_document_signal s ON s.event_id = e.event_id
                 WHERE e.market = %s AND e.symbol = %s
                 ORDER BY e.event_time DESC
                 LIMIT 6
@@ -1490,7 +1496,7 @@ class TenxHunterService:
     def _ensure_research_report_table(conn: Any) -> None:
         conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS dwd.user_research_report_current (
+            CREATE TABLE IF NOT EXISTS oltp.user_research_report_current (
                 report_id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
                 market TEXT NOT NULL DEFAULT 'US',
@@ -1544,7 +1550,7 @@ class TenxHunterService:
                 """
                 SELECT report_id, market, symbol, title, source_filename, content_markdown,
                        status, created_at, updated_at
-                FROM dwd.user_research_report_current
+                FROM oltp.user_research_report_current
                 WHERE user_id = %s
                   AND market = %s
                   AND symbol = %s
@@ -1587,7 +1593,7 @@ class TenxHunterService:
                 raise ValueError(f"unknown symbol: {market}:{normalized_symbol}")
             row = conn.execute(
                 """
-                INSERT INTO dwd.user_research_report_current (
+                INSERT INTO oltp.user_research_report_current (
                     report_id, user_id, market, symbol, title, source_filename,
                     content_markdown, content_hash, status, created_at, updated_at
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, %s)
@@ -1639,7 +1645,7 @@ class TenxHunterService:
             company_name = company_name or security["company_name"] or normalized_symbol
             conn.execute(
                 """
-                INSERT INTO dwd.user_discover_candidate_current (
+                INSERT INTO oltp.user_discover_candidate_current (
                     user_id, security_id, market, symbol, company_name, source,
                     stage, theme, thesis, note, score, status, source_payload,
                     created_at, updated_at
@@ -1651,7 +1657,7 @@ class TenxHunterService:
                     theme = EXCLUDED.theme,
                     thesis = EXCLUDED.thesis,
                     note = EXCLUDED.note,
-                    score = GREATEST(dwd.user_discover_candidate_current.score, EXCLUDED.score),
+                    score = GREATEST(oltp.user_discover_candidate_current.score, EXCLUDED.score),
                     status = 'active',
                     source_payload = EXCLUDED.source_payload,
                     updated_at = NOW()
@@ -1691,7 +1697,7 @@ class TenxHunterService:
     def _ensure_event_monitor_table(conn: Any) -> None:
         conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS dwd.user_event_monitor_event_current (
+            CREATE TABLE IF NOT EXISTS oltp.user_event_monitor_event_current (
                 monitor_event_id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
                 market TEXT NOT NULL DEFAULT 'US',
@@ -1722,7 +1728,7 @@ class TenxHunterService:
         conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_user_event_monitor_market_time
-            ON dwd.user_event_monitor_event_current (user_id, market, event_time)
+            ON oltp.user_event_monitor_event_current (user_id, market, event_time)
             """
         )
 
@@ -1730,7 +1736,7 @@ class TenxHunterService:
         rows = conn.execute(
             """
             SELECT symbol
-            FROM dwd.user_watchlist_state_current
+            FROM oltp.user_watchlist_state_current
             WHERE user_id = %s
               AND market = %s
               AND state = 'watching'
@@ -1759,8 +1765,8 @@ class TenxHunterService:
                 e.data_quality_flag,
                 e.source_vendor,
                 e.raw_payload
-            FROM dwd.security_earnings_calendar_current e
-            JOIN dwd.user_watchlist_state_current w
+            FROM olap.security_earnings_calendar_current e
+            JOIN oltp.user_watchlist_state_current w
               ON w.user_id = %s
              AND w.market = e.market
              AND w.symbol = e.symbol
@@ -1866,7 +1872,7 @@ class TenxHunterService:
         monitor_event_id = f"monitor::{event_digest(event.event_id)}"
         conn.execute(
             """
-            INSERT INTO dwd.user_event_monitor_event_current (
+            INSERT INTO oltp.user_event_monitor_event_current (
                 monitor_event_id, user_id, market, symbol, event_type, title, summary,
                 event_time, due_at, priority, evidence_grade, confidence, source, source_url,
                 status, matched_rule, asset_relevance, event_layer, structure_layer,
@@ -1941,7 +1947,7 @@ class TenxHunterService:
         }
         conn.execute(
             """
-            INSERT INTO dwd.user_alert_rule_current (
+            INSERT INTO oltp.user_alert_rule_current (
                 rule_id, user_id, market, symbol, rule_type, severity, title,
                 note, status, rule_payload, created_at, updated_at
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -2012,7 +2018,7 @@ class TenxHunterService:
                        END AS severity,
                        alert_type, 'system' AS source, created_at, '查看研究卡片并复核' AS next_action,
                        'active' AS status, '{}'::jsonb AS rule_payload
-                FROM ads.watchlist_alert_daily
+                FROM olap.watchlist_alert_daily
                 WHERE user_id = %s
                   AND market = %s
                 UNION ALL
@@ -2022,7 +2028,7 @@ class TenxHunterService:
                        updated_at AS created_at,
                        COALESCE(rule_payload->>'next_action', '完善提醒规则') AS next_action,
                        status, rule_payload
-                FROM dwd.user_alert_rule_current
+                FROM oltp.user_alert_rule_current
                 WHERE user_id = %s
                   AND market = %s
                 ORDER BY created_at DESC
@@ -2075,7 +2081,7 @@ class TenxHunterService:
             action_time = datetime.now(timezone.utc)
             conn.execute(
                 """
-                INSERT INTO ods.user_watch_action_raw (
+                INSERT INTO oltp.user_watch_action_raw (
                     action_id, user_id, market, symbol, action, action_time,
                     action_source, trigger_scene, session_id, device_id, raw_payload
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -2096,7 +2102,7 @@ class TenxHunterService:
             )
             conn.execute(
                 """
-                INSERT INTO dwd.user_watchlist_state_current (
+                INSERT INTO oltp.user_watchlist_state_current (
                     user_id, security_id, market, symbol, state, latest_action_time
                 ) VALUES (%s, %s, %s, %s, %s, %s)
                 ON CONFLICT (user_id, security_id) DO UPDATE SET
@@ -2119,7 +2125,7 @@ class TenxHunterService:
                 existing_rule = conn.execute(
                     """
                     SELECT rule_id
-                    FROM dwd.user_alert_rule_current
+                    FROM oltp.user_alert_rule_current
                     WHERE user_id = %s
                       AND market = %s
                       AND symbol = %s
@@ -2155,7 +2161,7 @@ class TenxHunterService:
                 if existing_rule:
                     conn.execute(
                         """
-                        UPDATE dwd.user_alert_rule_current
+                        UPDATE oltp.user_alert_rule_current
                         SET severity = 'P2',
                             title = %s,
                             note = %s,
@@ -2175,7 +2181,7 @@ class TenxHunterService:
                 else:
                     conn.execute(
                         """
-                        INSERT INTO dwd.user_alert_rule_current (
+                        INSERT INTO oltp.user_alert_rule_current (
                             rule_id, user_id, market, symbol, rule_type, severity, title,
                             note, status, rule_payload, created_at, updated_at
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -2198,7 +2204,7 @@ class TenxHunterService:
             else:
                 conn.execute(
                     """
-                    UPDATE dwd.user_alert_rule_current
+                    UPDATE oltp.user_alert_rule_current
                     SET status = 'archived',
                         updated_at = %s
                     WHERE user_id = %s
@@ -2225,7 +2231,7 @@ class TenxHunterService:
         with connect(self._settings) as conn:
             conn.execute(
                 """
-                INSERT INTO dwd.user_alert_rule_current (
+                INSERT INTO oltp.user_alert_rule_current (
                     rule_id, user_id, market, symbol, rule_type, severity, title,
                     note, status, rule_payload, created_at, updated_at
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)

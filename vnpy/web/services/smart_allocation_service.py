@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from decimal import Decimal
-import os
-from pathlib import Path
 from typing import Any
 
 from vnpy.web.contracts.smart_allocation import (
@@ -21,6 +19,7 @@ from vnpy.web.contracts.smart_allocation import (
     SmartAllocationWheelCandidatePoolSourceResponse,
     SmartAllocationWheelDailyRecommendationResponse,
 )
+from vnpy.web.db import load_db_settings
 from vnpy.web.domain.smart_allocation.calculator import calculate_allocation_targets, decimal_from
 from vnpy.web.domain.smart_allocation.call_spread import (
     build_call_spread_daily_recommendation,
@@ -54,7 +53,7 @@ def _optional_float(value: Decimal | None) -> float | None:
 
 class SmartAllocationService:
     def __init__(self, store: SmartAllocationStore | None = None) -> None:
-        self._store = store or SmartAllocationStore(self._default_db_path())
+        self._store = store or SmartAllocationStore(load_db_settings())
         profiles, active_profile_id = self._store.load_profiles()
         self._profiles: dict[str, AllocationProfile] = {profile.id: profile for profile in profiles}
         self._snapshots: dict[str, AllocationSnapshot] = {}
@@ -64,13 +63,6 @@ class SmartAllocationService:
                 self._snapshots[profile.id] = snapshot
         self._data_warnings: list[str] = []
         self._active_profile_id = self._select_active_profile_id(profiles, active_profile_id)
-
-    @staticmethod
-    def _default_db_path() -> Path:
-        configured = os.getenv("VNPY_SMART_ALLOCATION_DB_PATH", "").strip()
-        if configured:
-            return Path(configured).expanduser()
-        return Path.home() / ".vntrader" / "smart_allocation" / "smart_allocation.db"
 
     def create_profile(
         self,

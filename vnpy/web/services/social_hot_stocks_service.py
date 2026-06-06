@@ -4,14 +4,13 @@ from datetime import datetime, timezone
 from html import unescape
 import math
 import os
-from pathlib import Path
-import sqlite3
 import time
 from typing import Any, Final
 
 import requests
 
 from vnpy.web.contracts.social_hot_stocks import SocialHotStockItem, SocialHotStocksResponse
+from vnpy.web.db import load_db_settings
 from vnpy.web.domain.social_hot_stocks import SocialHotStocksStore, StoredSocialHotSnapshot
 
 
@@ -73,16 +72,9 @@ class SocialHotStocksService:
         self._snapshot_retention = int(os.getenv("SOCIAL_HOT_SNAPSHOT_RETENTION", "200"))
         self._cache: dict[tuple[str, int], tuple[float, dict[str, Any]]] = {}
         if store is _AUTO_STORE:
-            self._store = SocialHotStocksStore(self._default_db_path()) if _env_bool("SOCIAL_HOT_PERSIST_ENABLED", default=True) else None
+            self._store = SocialHotStocksStore(load_db_settings()) if _env_bool("SOCIAL_HOT_PERSIST_ENABLED", default=True) else None
         else:
             self._store = store
-
-    @staticmethod
-    def _default_db_path() -> Path:
-        configured = os.getenv("SOCIAL_HOT_DB_PATH", "").strip()
-        if configured:
-            return Path(configured).expanduser()
-        return Path.home() / ".vntrader" / "social_hot_stocks" / "social_hot_stocks.db"
 
     @staticmethod
     def _generated_at() -> str:
@@ -355,7 +347,7 @@ class SocialHotStocksService:
                     source_filter=source_filter,
                     keep=self._snapshot_retention,
                 )
-            except sqlite3.Error:
+            except Exception:
                 snapshot_id = None
                 persisted_at = None
 

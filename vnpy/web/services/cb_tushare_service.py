@@ -19,6 +19,7 @@ from typing import Any
 
 import pandas as pd
 
+from vnpy.web.db import load_db_settings
 from vnpy.web.domain.cb_quant.history_store import CbHistoryStore
 from vnpy.web.domain.cb_quant.tushare_store import CbTushareStore, TushareStoreSummary, TushareSyncLog
 from vnpy.web.contracts.cb_quant import BondMarketRow
@@ -162,10 +163,8 @@ class CbTushareService:
 
     def __init__(self) -> None:
         """初始化 Tushare 库和回测快照库。"""
-        backtest_service = CbBacktestService()
-        storage_dir: Path = backtest_service.data_dir / "_cb_quant"
-        self._store = CbTushareStore(storage_dir / "cb_tushare.db")
-        self._history_store = CbHistoryStore(storage_dir / "cb_snapshots.db")
+        self._store = CbTushareStore(load_db_settings())
+        self._history_store = CbHistoryStore(load_db_settings())
 
     @property
     def store(self) -> CbTushareStore:

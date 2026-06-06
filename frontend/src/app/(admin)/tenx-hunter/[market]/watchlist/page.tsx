@@ -21,6 +21,7 @@ export default async function TenxHunterWatchlistMarketPage({ params }: { params
         title="TenX Hunter · Watchlist"
         subtitle="观察池只保留已经确认持续跟踪的股票。"
         marketLabel={marketLabel(market)}
+        pipelineStage="watchlist"
       >
         <TenxDataStateCard
           title="Watchlist 实时数据暂不可用"
@@ -39,6 +40,7 @@ export default async function TenxHunterWatchlistMarketPage({ params }: { params
       title="TenX Hunter · Watchlist"
       subtitle="按逻辑状态而不是按涨幅管理正在跟踪的股票。系统建议停留在 Discover，确认跟踪后才进入这里。"
       marketLabel={`${marketLabel(market)} · Watchlist`}
+      pipelineStage="watchlist"
     >
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-white/[0.03]">

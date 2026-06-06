@@ -18,6 +18,7 @@ from .cn_sources import build_cn_stock_bundle
 from .config import Settings
 from .db import connect
 from .options_chain import OPTION_CHAIN_SCHEMA_SQL, refresh_option_chain_for_symbol
+from ..base_store import PgStore
 from .price_map import build_price_map as build_price_map_snapshot
 from .price_map import build_technical_snapshot
 from .price_map_deerflow import (
@@ -32,695 +33,15 @@ from .signals import extract_signal
 from .storage import ObjectStorage
 
 SCHEMA_SQL = """
-CREATE SCHEMA IF NOT EXISTS ods;
+CREATE SCHEMA IF NOT EXISTS oltp;
+CREATE SCHEMA IF NOT EXISTS olap;
 CREATE SCHEMA IF NOT EXISTS dim;
-CREATE SCHEMA IF NOT EXISTS dwd;
-CREATE SCHEMA IF NOT EXISTS dws;
-CREATE SCHEMA IF NOT EXISTS ads;
-
-CREATE TABLE IF NOT EXISTS dim.security (
-    security_id INTEGER PRIMARY KEY,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT UNIQUE NOT NULL,
-    company_name TEXT NOT NULL,
-    exchange_name TEXT,
-    cik TEXT,
-    currency TEXT,
-    listing_status TEXT,
-    sector TEXT,
-    industry TEXT,
-    listed_date DATE
-);
-
-CREATE TABLE IF NOT EXISTS dim.theme (
-    theme_id TEXT PRIMARY KEY,
-    theme_name TEXT NOT NULL,
-    parent_theme TEXT,
-    active_flag BOOLEAN NOT NULL DEFAULT TRUE
-);
-
-CREATE TABLE IF NOT EXISTS dim.security_theme (
-    security_id INTEGER NOT NULL REFERENCES dim.security(security_id),
-    theme_id TEXT NOT NULL REFERENCES dim.theme(theme_id),
-    source_note TEXT,
-    PRIMARY KEY (security_id, theme_id)
-);
-
-CREATE TABLE IF NOT EXISTS dim.calendar (
-    trade_date DATE PRIMARY KEY,
-    week_of_year INTEGER,
-    month_of_year INTEGER,
-    quarter_of_year INTEGER
-);
-
-CREATE TABLE IF NOT EXISTS dim.factor_definition (
-    factor_name TEXT PRIMARY KEY,
-    category TEXT NOT NULL,
-    description TEXT NOT NULL,
-    version TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS ods.us_equity_price_daily_raw (
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    trade_date DATE NOT NULL,
-    open NUMERIC(18,4),
-    high NUMERIC(18,4),
-    low NUMERIC(18,4),
-    close NUMERIC(18,4),
-    adj_close NUMERIC(18,4),
-    volume BIGINT,
-    currency TEXT,
-    market_status TEXT,
-    source_event_time TIMESTAMPTZ,
-    source_vendor TEXT NOT NULL,
-    ingest_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    raw_payload JSONB NOT NULL,
-    payload_hash TEXT,
-    PRIMARY KEY (symbol, trade_date)
-);
-
-CREATE TABLE IF NOT EXISTS ods.security_financial_statement_raw (
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    report_period DATE NOT NULL,
-    fiscal_quarter TEXT NOT NULL,
-    fiscal_year INTEGER,
-    period_type TEXT,
-    filed_date DATE,
-    revenue NUMERIC(18,2),
-    gross_margin NUMERIC(10,4),
-    op_margin NUMERIC(10,4),
-    fcf_margin NUMERIC(10,4),
-    cash NUMERIC(18,2),
-    debt NUMERIC(18,2),
-    shares_outstanding NUMERIC(18,2),
-    revenue_yoy NUMERIC(10,4),
-    netprofit_yoy NUMERIC(10,4),
-    cfo_to_np NUMERIC(10,4),
-    rd_ratio_ttm NUMERIC(10,4),
-    source_filing_id TEXT,
-    form_type TEXT,
-    currency TEXT,
-    data_quality_flag TEXT,
-    restatement_flag BOOLEAN,
-    source_vendor TEXT NOT NULL,
-    ingest_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    raw_payload JSONB NOT NULL,
-    payload_hash TEXT,
-    PRIMARY KEY (symbol, report_period)
-);
-
-CREATE TABLE IF NOT EXISTS ods.sec_filing_document_raw (
-    filing_id TEXT PRIMARY KEY,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    cik TEXT,
-    accession_number TEXT,
-    filing_type TEXT NOT NULL,
-    filing_date DATE,
-    filing_time TIMESTAMPTZ NOT NULL,
-    report_period DATE,
-    title TEXT NOT NULL,
-    primary_document TEXT,
-    filing_url TEXT,
-    object_key TEXT NOT NULL,
-    content_sha256 TEXT,
-    source_vendor TEXT NOT NULL,
-    ingest_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    raw_payload JSONB NOT NULL,
-    payload_hash TEXT
-);
-
-CREATE TABLE IF NOT EXISTS ods.security_news_article_raw (
-    news_id TEXT PRIMARY KEY,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    published_time TIMESTAMPTZ NOT NULL,
-    updated_time TIMESTAMPTZ,
-    title TEXT NOT NULL,
-    summary TEXT,
-    article_url TEXT,
-    language TEXT,
-    author TEXT,
-    publisher_name TEXT,
-    publisher_homepage TEXT,
-    primary_symbol TEXT,
-    related_symbols JSONB,
-    object_key TEXT NOT NULL,
-    content_sha256 TEXT,
-    source_vendor TEXT NOT NULL,
-    ingest_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    raw_payload JSONB NOT NULL,
-    payload_hash TEXT
-);
-
-CREATE TABLE IF NOT EXISTS ods.security_institutional_activity_raw (
-    activity_id TEXT PRIMARY KEY,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    activity_time TIMESTAMPTZ NOT NULL,
-    activity_type TEXT NOT NULL,
-    report_period DATE,
-    filing_date DATE,
-    title TEXT NOT NULL,
-    manager_symbol TEXT NOT NULL,
-    manager_name TEXT NOT NULL,
-    manager_cik TEXT,
-    filing_id TEXT NOT NULL,
-    filing_type TEXT NOT NULL,
-    position_value_usd NUMERIC(18,2),
-    position_shares NUMERIC(18,2),
-    source_url TEXT,
-    object_key TEXT NOT NULL,
-    content_sha256 TEXT,
-    source_vendor TEXT NOT NULL,
-    ingest_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    raw_payload JSONB NOT NULL,
-    payload_hash TEXT
-);
-
-CREATE TABLE IF NOT EXISTS ods.us_analyst_estimate_raw (
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    snapshot_date DATE NOT NULL,
-    fiscal_year_offset INTEGER,
-    period_label TEXT,
-    revenue_estimate NUMERIC(18,2),
-    eps_estimate NUMERIC(18,4),
-    analyst_count INTEGER,
-    currency TEXT,
-    request_status TEXT,
-    source_vendor TEXT NOT NULL,
-    ingest_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    raw_payload JSONB NOT NULL,
-    payload_hash TEXT,
-    PRIMARY KEY (symbol, snapshot_date, fiscal_year_offset)
-);
-
-CREATE TABLE IF NOT EXISTS ods.us_earnings_calendar_raw (
-    event_id TEXT PRIMARY KEY,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    snapshot_date DATE NOT NULL,
-    earnings_date DATE,
-    fiscal_period TEXT,
-    time_of_day TEXT,
-    eps_estimate NUMERIC(18,4),
-    revenue_estimate NUMERIC(18,2),
-    currency TEXT,
-    request_status TEXT,
-    source_vendor TEXT NOT NULL,
-    ingest_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    raw_payload JSONB NOT NULL,
-    payload_hash TEXT
-);
-
-CREATE TABLE IF NOT EXISTS ods.user_watch_action_raw (
-    action_id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    action TEXT NOT NULL,
-    action_time TIMESTAMPTZ NOT NULL,
-    action_source TEXT,
-    trigger_scene TEXT,
-    session_id TEXT,
-    device_id TEXT,
-    ingest_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    raw_payload JSONB NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS dwd.security_market_daily (
-    security_id INTEGER NOT NULL,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    trade_date DATE NOT NULL,
-    open NUMERIC(18,4),
-    high NUMERIC(18,4),
-    low NUMERIC(18,4),
-    close NUMERIC(18,4),
-    adj_close NUMERIC(18,4),
-    volume BIGINT,
-    return_1d NUMERIC(18,6),
-    return_5d NUMERIC(18,6),
-    distance_from_recent_high NUMERIC(18,6),
-    market_cap NUMERIC(18,2),
-    ps_ttm NUMERIC(18,4),
-    pe_ttm NUMERIC(18,4),
-    pb NUMERIC(18,4),
-    turnover_rate NUMERIC(18,4),
-    PRIMARY KEY (security_id, trade_date)
-);
-
-CREATE TABLE IF NOT EXISTS dwd.security_price_technical_daily (
-    security_id INTEGER NOT NULL,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    trade_date DATE NOT NULL,
-    close NUMERIC(18,4),
-    high_52w NUMERIC(18,4),
-    low_52w NUMERIC(18,4),
-    position_52w NUMERIC(10,4),
-    ma20 NUMERIC(18,4),
-    ma60 NUMERIC(18,4),
-    ma120 NUMERIC(18,4),
-    ma250 NUMERIC(18,4),
-    atr14 NUMERIC(18,4),
-    volatility20 NUMERIC(18,6),
-    support_level NUMERIC(18,4),
-    resistance_level NUMERIC(18,4),
-    volume_price_low NUMERIC(18,4),
-    volume_price_high NUMERIC(18,4),
-    valuation_percentile NUMERIC(10,4),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (security_id, trade_date)
-);
-
-CREATE TABLE IF NOT EXISTS dwd.security_financial_quarterly (
-    security_id INTEGER NOT NULL,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    report_period DATE NOT NULL,
-    revenue NUMERIC(18,2),
-    revenue_yoy NUMERIC(10,4),
-    netprofit_yoy NUMERIC(10,4),
-    gross_margin NUMERIC(10,4),
-    op_margin NUMERIC(10,4),
-    fcf_margin NUMERIC(10,4),
-    cfo_to_np NUMERIC(10,4),
-    rd_ratio_ttm NUMERIC(10,4),
-    cash NUMERIC(18,2),
-    debt NUMERIC(18,2),
-    net_cash NUMERIC(18,2),
-    shares_outstanding NUMERIC(18,2),
-    PRIMARY KEY (security_id, report_period)
-);
-
-CREATE TABLE IF NOT EXISTS dwd.security_estimate_current (
-    security_id INTEGER PRIMARY KEY,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    snapshot_date DATE NOT NULL,
-    fy1_revenue_estimate NUMERIC(18,2),
-    fy2_revenue_estimate NUMERIC(18,2),
-    fy1_eps NUMERIC(18,4),
-    fy2_eps NUMERIC(18,4),
-    fy1_analyst_count INTEGER,
-    fy2_analyst_count INTEGER,
-    currency TEXT,
-    data_quality_flag TEXT NOT NULL,
-    source_vendor TEXT,
-    raw_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS dwd.security_earnings_calendar_current (
-    security_id INTEGER PRIMARY KEY,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    snapshot_date DATE NOT NULL,
-    next_earnings_date DATE,
-    days_to_earnings INTEGER,
-    fiscal_period TEXT,
-    time_of_day TEXT,
-    eps_estimate NUMERIC(18,4),
-    revenue_estimate NUMERIC(18,2),
-    currency TEXT,
-    data_quality_flag TEXT NOT NULL,
-    source_vendor TEXT,
-    raw_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS dwd.security_event_timeline (
-    event_id TEXT PRIMARY KEY,
-    security_id INTEGER NOT NULL,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    event_time TIMESTAMPTZ NOT NULL,
-    event_type TEXT NOT NULL,
-    title TEXT NOT NULL,
-    source_kind TEXT NOT NULL,
-    sentiment TEXT NOT NULL,
-    importance INTEGER NOT NULL,
-    object_key TEXT NOT NULL,
-    theme_tags JSONB NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS dwd.security_document_signal (
-    signal_id TEXT PRIMARY KEY,
-    event_id TEXT NOT NULL REFERENCES dwd.security_event_timeline(event_id),
-    security_id INTEGER NOT NULL,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    source_kind TEXT NOT NULL,
-    summary TEXT NOT NULL,
-    sentiment TEXT NOT NULL,
-    risk_tags JSONB NOT NULL,
-    theme_tags JSONB NOT NULL,
-    evidence_path TEXT NOT NULL,
-    positive_hits INTEGER NOT NULL,
-    negative_hits INTEGER NOT NULL,
-    extracted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS dwd.user_watchlist_state_current (
-    user_id TEXT NOT NULL,
-    security_id INTEGER NOT NULL,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    state TEXT NOT NULL,
-    latest_action_time TIMESTAMPTZ NOT NULL,
-    PRIMARY KEY (user_id, security_id)
-);
-
-CREATE TABLE IF NOT EXISTS dwd.user_alert_rule_current (
-    rule_id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    rule_type TEXT NOT NULL,
-    severity TEXT NOT NULL,
-    title TEXT NOT NULL,
-    note TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'draft',
-    rule_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS dwd.user_event_monitor_event_current (
-    monitor_event_id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    event_type TEXT NOT NULL,
-    title TEXT NOT NULL,
-    summary TEXT NOT NULL,
-    event_time TIMESTAMPTZ NOT NULL,
-    due_at DATE,
-    priority TEXT NOT NULL,
-    evidence_grade TEXT NOT NULL,
-    confidence TEXT NOT NULL,
-    source TEXT NOT NULL,
-    source_url TEXT NOT NULL,
-    status TEXT NOT NULL,
-    matched_rule TEXT NOT NULL,
-    asset_relevance TEXT NOT NULL,
-    event_layer JSONB NOT NULL DEFAULT '[]'::jsonb,
-    structure_layer JSONB NOT NULL DEFAULT '[]'::jsonb,
-    execution_layer JSONB NOT NULL DEFAULT '[]'::jsonb,
-    invalidation_signals JSONB NOT NULL DEFAULT '[]'::jsonb,
-    raw_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_user_event_monitor_market_time
-ON dwd.user_event_monitor_event_current (user_id, market, event_time);
-
-CREATE TABLE IF NOT EXISTS dwd.user_research_report_current (
-    report_id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    title TEXT NOT NULL,
-    source_filename TEXT NOT NULL,
-    content_markdown TEXT NOT NULL,
-    content_hash TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'active',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(user_id, market, symbol)
-);
-
-CREATE TABLE IF NOT EXISTS dwd.user_discover_candidate_current (
-    user_id TEXT NOT NULL,
-    security_id INTEGER NOT NULL,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    company_name TEXT NOT NULL,
-    source TEXT NOT NULL DEFAULT 'manual',
-    stage TEXT NOT NULL DEFAULT 'discovery',
-    theme TEXT NOT NULL DEFAULT 'Manual',
-    thesis TEXT NOT NULL,
-    note TEXT NOT NULL DEFAULT '',
-    score NUMERIC(10,2) NOT NULL DEFAULT 55,
-    status TEXT NOT NULL DEFAULT 'active',
-    source_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (user_id, market, symbol)
-);
-
-CREATE TABLE IF NOT EXISTS dws.security_feature_daily (
-    security_id INTEGER NOT NULL,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    trade_date DATE NOT NULL,
-    revenue_yoy NUMERIC(10,4),
-    netprofit_yoy NUMERIC(10,4),
-    op_margin NUMERIC(10,4),
-    fcf_margin NUMERIC(10,4),
-    cfo_to_np NUMERIC(10,4),
-    rd_ratio_ttm NUMERIC(10,4),
-    return_1d NUMERIC(18,6),
-    return_5d NUMERIC(18,6),
-    distance_from_recent_high NUMERIC(18,6),
-    ps_ttm NUMERIC(18,4),
-    pe_ttm NUMERIC(18,4),
-    pb NUMERIC(18,4),
-    turnover_rate NUMERIC(18,4),
-    risk_count INTEGER NOT NULL,
-    negative_event_count INTEGER NOT NULL,
-    theme_count INTEGER NOT NULL,
-    positive_signal_count INTEGER NOT NULL,
-    PRIMARY KEY (security_id, trade_date)
-);
-
-CREATE TABLE IF NOT EXISTS dws.security_score_component_daily (
-    security_id INTEGER NOT NULL,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    trade_date DATE NOT NULL,
-    growth_score NUMERIC(10,2),
-    quality_score NUMERIC(10,2),
-    momentum_score NUMERIC(10,2),
-    valuation_score NUMERIC(10,2),
-    size_score NUMERIC(10,2),
-    evidence_score NUMERIC(10,2),
-    risk_score NUMERIC(10,2),
-    theme_score NUMERIC(10,2),
-    industry_prosperity_score NUMERIC(10,2),
-    leader_position_score NUMERIC(10,2),
-    financial_acceleration_score NUMERIC(10,2),
-    cashflow_quality_score NUMERIC(10,2),
-    moat_score NUMERIC(10,2),
-    valuation_chip_score NUMERIC(10,2),
-    total_score NUMERIC(10,2),
-    stage TEXT NOT NULL,
-    score_change_reason TEXT NOT NULL,
-    PRIMARY KEY (security_id, trade_date)
-);
-
-CREATE TABLE IF NOT EXISTS dws.theme_heat_daily (
-    theme_id TEXT NOT NULL,
-    market TEXT NOT NULL DEFAULT 'US',
-    trade_date DATE NOT NULL,
-    theme_name TEXT NOT NULL,
-    heat_score NUMERIC(10,2) NOT NULL,
-    status TEXT NOT NULL,
-    symbol_count INTEGER NOT NULL,
-    evidence_count INTEGER NOT NULL,
-    leader_symbols JSONB NOT NULL,
-    PRIMARY KEY (theme_id, trade_date)
-);
-
-CREATE TABLE IF NOT EXISTS dws.security_candidate_rank_daily (
-    security_id INTEGER NOT NULL,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    trade_date DATE NOT NULL,
-    total_score NUMERIC(10,2) NOT NULL,
-    stage TEXT NOT NULL,
-    rank_no INTEGER NOT NULL,
-    entry_reason TEXT NOT NULL,
-    risk_tags JSONB NOT NULL,
-    theme_tags JSONB NOT NULL,
-    PRIMARY KEY (security_id, trade_date)
-);
-
-CREATE TABLE IF NOT EXISTS dws.security_target_range_daily (
-    security_id INTEGER NOT NULL,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    trade_date DATE NOT NULL,
-    scenario TEXT NOT NULL,
-    horizon TEXT NOT NULL,
-    target_low NUMERIC(18,4),
-    target_high NUMERIC(18,4),
-    target_mid NUMERIC(18,4),
-    upside_pct_mid NUMERIC(18,6),
-    method TEXT NOT NULL,
-    confidence TEXT NOT NULL,
-    assumptions JSONB NOT NULL DEFAULT '{}'::jsonb,
-    evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (security_id, trade_date, scenario, horizon)
-);
-
-CREATE TABLE IF NOT EXISTS dws.security_key_level_daily (
-    level_id TEXT PRIMARY KEY,
-    security_id INTEGER NOT NULL,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    trade_date DATE NOT NULL,
-    level_type TEXT NOT NULL,
-    level_low NUMERIC(18,4),
-    level_high NUMERIC(18,4),
-    strength TEXT NOT NULL,
-    distance_pct NUMERIC(18,6),
-    source TEXT NOT NULL,
-    note TEXT NOT NULL,
-    evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS dws.security_scenario_path_daily (
-    path_id TEXT PRIMARY KEY,
-    security_id INTEGER NOT NULL,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    trade_date DATE NOT NULL,
-    path_name TEXT NOT NULL,
-    probability INTEGER NOT NULL,
-    confidence TEXT NOT NULL,
-    trigger TEXT NOT NULL,
-    target_scenario TEXT NOT NULL,
-    invalidation TEXT NOT NULL,
-    explanation TEXT NOT NULL,
-    evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS ads.candidate_pool_daily (
-    security_id INTEGER NOT NULL,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    trade_date DATE NOT NULL,
-    rank_no INTEGER NOT NULL,
-    total_score NUMERIC(10,2) NOT NULL,
-    stage TEXT NOT NULL,
-    reason_summary TEXT NOT NULL,
-    risk_tags JSONB NOT NULL,
-    theme_tags JSONB NOT NULL,
-    PRIMARY KEY (security_id, trade_date)
-);
-
-CREATE TABLE IF NOT EXISTS ads.research_card_current (
-    security_id INTEGER PRIMARY KEY,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    as_of_date DATE NOT NULL,
-    thesis TEXT NOT NULL,
-    key_points JSONB NOT NULL,
-    risk_points JSONB NOT NULL,
-    next_watch_items JSONB NOT NULL,
-    evidence_refs JSONB NOT NULL,
-    stage TEXT NOT NULL,
-    total_score NUMERIC(10,2) NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS ads.price_map_current (
-    security_id INTEGER PRIMARY KEY,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    as_of_date DATE NOT NULL,
-    current_price NUMERIC(18,4),
-    posture TEXT NOT NULL,
-    posture_label TEXT NOT NULL,
-    confidence TEXT NOT NULL,
-    base_target JSONB NOT NULL,
-    bull_target JSONB NOT NULL,
-    bear_zone JSONB NOT NULL,
-    key_levels JSONB NOT NULL DEFAULT '[]'::jsonb,
-    scenario_paths JSONB NOT NULL DEFAULT '[]'::jsonb,
-    invalidation_rules JSONB NOT NULL DEFAULT '[]'::jsonb,
-    evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
-    explanation JSONB NOT NULL DEFAULT '{}'::jsonb,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS ads.price_map_history_daily (
-    security_id INTEGER NOT NULL,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    snapshot_date DATE NOT NULL,
-    current_price NUMERIC(18,4),
-    confidence TEXT NOT NULL,
-    method TEXT NOT NULL,
-    base_target JSONB NOT NULL,
-    bull_target JSONB NOT NULL,
-    bear_zone JSONB NOT NULL,
-    explanation JSONB NOT NULL DEFAULT '{}'::jsonb,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (security_id, snapshot_date)
-);
-
-CREATE TABLE IF NOT EXISTS ads.price_map_hit_review_daily (
-    security_id INTEGER NOT NULL,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    snapshot_date DATE NOT NULL,
-    review_date DATE NOT NULL,
-    horizon_days INTEGER NOT NULL,
-    base_hit BOOLEAN,
-    bull_hit BOOLEAN,
-    bear_breached BOOLEAN,
-    max_close NUMERIC(18,4),
-    min_close NUMERIC(18,4),
-    base_target_mid NUMERIC(18,4),
-    bull_target_low NUMERIC(18,4),
-    bear_zone_high NUMERIC(18,4),
-    hit_summary TEXT NOT NULL,
-    metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (security_id, snapshot_date, review_date)
-);
-
-CREATE TABLE IF NOT EXISTS ads.watchlist_alert_daily (
-    alert_id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    market TEXT NOT NULL DEFAULT 'US',
-    symbol TEXT NOT NULL,
-    trade_date DATE NOT NULL,
-    alert_type TEXT NOT NULL,
-    severity TEXT NOT NULL,
-    alert_message TEXT NOT NULL,
-    evidence_refs JSONB NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS ads.theme_radar_daily (
-    theme_id TEXT NOT NULL,
-    market TEXT NOT NULL DEFAULT 'US',
-    trade_date DATE NOT NULL,
-    theme_name TEXT NOT NULL,
-    heat_score NUMERIC(10,2) NOT NULL,
-    status TEXT NOT NULL,
-    key_drivers JSONB NOT NULL,
-    representative_symbols JSONB NOT NULL,
-    PRIMARY KEY (theme_id, trade_date)
-);
 """
 
 DROP_AND_RECREATE_SQL = """
-DROP SCHEMA IF EXISTS ads CASCADE;
-DROP SCHEMA IF EXISTS dws CASCADE;
-DROP SCHEMA IF EXISTS dwd CASCADE;
+DROP SCHEMA IF EXISTS olap CASCADE;
+DROP SCHEMA IF EXISTS oltp CASCADE;
 DROP SCHEMA IF EXISTS dim CASCADE;
-DROP SCHEMA IF EXISTS ods CASCADE;
 """
 
 FACTOR_DEFINITIONS = [
@@ -1009,107 +330,107 @@ def _infer_period_type(label: Any) -> str | None:
 
 
 ODS_SCHEMA_SYNC_SQL = """
-DROP TABLE IF EXISTS ods.security_corporate_action_polygon_raw CASCADE;
-DROP TABLE IF EXISTS ods.macro_fred_observation_raw CASCADE;
-DROP TABLE IF EXISTS ods.macro_fred_series_raw CASCADE;
-DROP TABLE IF EXISTS ods.user_feedback_raw CASCADE;
-DROP TABLE IF EXISTS ods.security_analyst_estimate_item_raw CASCADE;
-DROP TABLE IF EXISTS ods.security_earnings_event_raw CASCADE;
-DROP TABLE IF EXISTS ods.security_earnings_calendar_raw CASCADE;
-DROP TABLE IF EXISTS ods.sec_companyfact_item_raw CASCADE;
-DROP TABLE IF EXISTS ods.sec_submission_filing_raw CASCADE;
-DROP TABLE IF EXISTS ods.sec_companyfacts_raw CASCADE;
-DROP TABLE IF EXISTS ods.sec_submissions_raw CASCADE;
-DROP TABLE IF EXISTS ods.security_news_polygon_raw CASCADE;
-DROP TABLE IF EXISTS ods.theme_taxonomy_raw CASCADE;
-DROP TABLE IF EXISTS ods.security_industry_mapping_raw CASCADE;
-DROP TABLE IF EXISTS ods.security_symbol_master_raw CASCADE;
-DROP TABLE IF EXISTS ods.security_ticker_overview_polygon_raw CASCADE;
-DROP TABLE IF EXISTS ods.security_analyst_estimate_raw CASCADE;
-DROP TABLE IF EXISTS dwd.security_estimate_revision_daily CASCADE;
+DROP TABLE IF EXISTS olap.security_corporate_action_polygon_raw CASCADE;
+DROP TABLE IF EXISTS olap.macro_fred_observation_raw CASCADE;
+DROP TABLE IF EXISTS olap.macro_fred_series_raw CASCADE;
+DROP TABLE IF EXISTS olap.user_feedback_raw CASCADE;
+DROP TABLE IF EXISTS olap.security_analyst_estimate_item_raw CASCADE;
+DROP TABLE IF EXISTS olap.security_earnings_event_raw CASCADE;
+DROP TABLE IF EXISTS olap.security_earnings_calendar_raw CASCADE;
+DROP TABLE IF EXISTS olap.sec_companyfact_item_raw CASCADE;
+DROP TABLE IF EXISTS olap.sec_submission_filing_raw CASCADE;
+DROP TABLE IF EXISTS olap.sec_companyfacts_raw CASCADE;
+DROP TABLE IF EXISTS olap.sec_submissions_raw CASCADE;
+DROP TABLE IF EXISTS olap.security_news_polygon_raw CASCADE;
+DROP TABLE IF EXISTS olap.theme_taxonomy_raw CASCADE;
+DROP TABLE IF EXISTS olap.security_industry_mapping_raw CASCADE;
+DROP TABLE IF EXISTS olap.security_symbol_master_raw CASCADE;
+DROP TABLE IF EXISTS olap.security_ticker_overview_polygon_raw CASCADE;
+DROP TABLE IF EXISTS olap.security_analyst_estimate_raw CASCADE;
+DROP TABLE IF EXISTS olap.security_estimate_revision_daily CASCADE;
 
-ALTER TABLE IF EXISTS ods.us_equity_price_daily_raw ADD COLUMN IF NOT EXISTS currency TEXT;
-ALTER TABLE IF EXISTS ods.us_equity_price_daily_raw ADD COLUMN IF NOT EXISTS market_status TEXT;
-ALTER TABLE IF EXISTS ods.us_equity_price_daily_raw ADD COLUMN IF NOT EXISTS source_event_time TIMESTAMPTZ;
-ALTER TABLE IF EXISTS ods.us_equity_price_daily_raw ADD COLUMN IF NOT EXISTS payload_hash TEXT;
-ALTER TABLE IF EXISTS ods.us_equity_price_daily_raw ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS olap.us_equity_price_daily_raw ADD COLUMN IF NOT EXISTS currency TEXT;
+ALTER TABLE IF EXISTS olap.us_equity_price_daily_raw ADD COLUMN IF NOT EXISTS market_status TEXT;
+ALTER TABLE IF EXISTS olap.us_equity_price_daily_raw ADD COLUMN IF NOT EXISTS source_event_time TIMESTAMPTZ;
+ALTER TABLE IF EXISTS olap.us_equity_price_daily_raw ADD COLUMN IF NOT EXISTS payload_hash TEXT;
+ALTER TABLE IF EXISTS olap.us_equity_price_daily_raw ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
 
-ALTER TABLE IF EXISTS ods.security_financial_statement_raw ADD COLUMN IF NOT EXISTS fiscal_year INTEGER;
-ALTER TABLE IF EXISTS ods.security_financial_statement_raw ADD COLUMN IF NOT EXISTS period_type TEXT;
-ALTER TABLE IF EXISTS ods.security_financial_statement_raw ADD COLUMN IF NOT EXISTS filed_date DATE;
-ALTER TABLE IF EXISTS ods.security_financial_statement_raw ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
-ALTER TABLE IF EXISTS ods.security_financial_statement_raw ADD COLUMN IF NOT EXISTS source_filing_id TEXT;
-ALTER TABLE IF EXISTS ods.security_financial_statement_raw ADD COLUMN IF NOT EXISTS form_type TEXT;
-ALTER TABLE IF EXISTS ods.security_financial_statement_raw ADD COLUMN IF NOT EXISTS currency TEXT;
-ALTER TABLE IF EXISTS ods.security_financial_statement_raw ADD COLUMN IF NOT EXISTS data_quality_flag TEXT;
-ALTER TABLE IF EXISTS ods.security_financial_statement_raw ADD COLUMN IF NOT EXISTS restatement_flag BOOLEAN;
-ALTER TABLE IF EXISTS ods.security_financial_statement_raw ADD COLUMN IF NOT EXISTS payload_hash TEXT;
-ALTER TABLE IF EXISTS ods.security_financial_statement_raw ADD COLUMN IF NOT EXISTS netprofit_yoy NUMERIC(10,4);
-ALTER TABLE IF EXISTS ods.security_financial_statement_raw ADD COLUMN IF NOT EXISTS cfo_to_np NUMERIC(10,4);
-ALTER TABLE IF EXISTS ods.security_financial_statement_raw ADD COLUMN IF NOT EXISTS rd_ratio_ttm NUMERIC(10,4);
+ALTER TABLE IF EXISTS olap.security_financial_statement_raw ADD COLUMN IF NOT EXISTS fiscal_year INTEGER;
+ALTER TABLE IF EXISTS olap.security_financial_statement_raw ADD COLUMN IF NOT EXISTS period_type TEXT;
+ALTER TABLE IF EXISTS olap.security_financial_statement_raw ADD COLUMN IF NOT EXISTS filed_date DATE;
+ALTER TABLE IF EXISTS olap.security_financial_statement_raw ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS olap.security_financial_statement_raw ADD COLUMN IF NOT EXISTS source_filing_id TEXT;
+ALTER TABLE IF EXISTS olap.security_financial_statement_raw ADD COLUMN IF NOT EXISTS form_type TEXT;
+ALTER TABLE IF EXISTS olap.security_financial_statement_raw ADD COLUMN IF NOT EXISTS currency TEXT;
+ALTER TABLE IF EXISTS olap.security_financial_statement_raw ADD COLUMN IF NOT EXISTS data_quality_flag TEXT;
+ALTER TABLE IF EXISTS olap.security_financial_statement_raw ADD COLUMN IF NOT EXISTS restatement_flag BOOLEAN;
+ALTER TABLE IF EXISTS olap.security_financial_statement_raw ADD COLUMN IF NOT EXISTS payload_hash TEXT;
+ALTER TABLE IF EXISTS olap.security_financial_statement_raw ADD COLUMN IF NOT EXISTS netprofit_yoy NUMERIC(10,4);
+ALTER TABLE IF EXISTS olap.security_financial_statement_raw ADD COLUMN IF NOT EXISTS cfo_to_np NUMERIC(10,4);
+ALTER TABLE IF EXISTS olap.security_financial_statement_raw ADD COLUMN IF NOT EXISTS rd_ratio_ttm NUMERIC(10,4);
 
-ALTER TABLE IF EXISTS ods.sec_filing_document_raw ADD COLUMN IF NOT EXISTS cik TEXT;
-ALTER TABLE IF EXISTS ods.sec_filing_document_raw ADD COLUMN IF NOT EXISTS accession_number TEXT;
-ALTER TABLE IF EXISTS ods.sec_filing_document_raw ADD COLUMN IF NOT EXISTS filing_date DATE;
-ALTER TABLE IF EXISTS ods.sec_filing_document_raw ADD COLUMN IF NOT EXISTS report_period DATE;
-ALTER TABLE IF EXISTS ods.sec_filing_document_raw ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
-ALTER TABLE IF EXISTS ods.sec_filing_document_raw ADD COLUMN IF NOT EXISTS primary_document TEXT;
-ALTER TABLE IF EXISTS ods.sec_filing_document_raw ADD COLUMN IF NOT EXISTS filing_url TEXT;
-ALTER TABLE IF EXISTS ods.sec_filing_document_raw ADD COLUMN IF NOT EXISTS content_sha256 TEXT;
-ALTER TABLE IF EXISTS ods.sec_filing_document_raw ADD COLUMN IF NOT EXISTS payload_hash TEXT;
+ALTER TABLE IF EXISTS olap.sec_filing_document_raw ADD COLUMN IF NOT EXISTS cik TEXT;
+ALTER TABLE IF EXISTS olap.sec_filing_document_raw ADD COLUMN IF NOT EXISTS accession_number TEXT;
+ALTER TABLE IF EXISTS olap.sec_filing_document_raw ADD COLUMN IF NOT EXISTS filing_date DATE;
+ALTER TABLE IF EXISTS olap.sec_filing_document_raw ADD COLUMN IF NOT EXISTS report_period DATE;
+ALTER TABLE IF EXISTS olap.sec_filing_document_raw ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS olap.sec_filing_document_raw ADD COLUMN IF NOT EXISTS primary_document TEXT;
+ALTER TABLE IF EXISTS olap.sec_filing_document_raw ADD COLUMN IF NOT EXISTS filing_url TEXT;
+ALTER TABLE IF EXISTS olap.sec_filing_document_raw ADD COLUMN IF NOT EXISTS content_sha256 TEXT;
+ALTER TABLE IF EXISTS olap.sec_filing_document_raw ADD COLUMN IF NOT EXISTS payload_hash TEXT;
 
-ALTER TABLE IF EXISTS ods.security_news_article_raw ADD COLUMN IF NOT EXISTS updated_time TIMESTAMPTZ;
-ALTER TABLE IF EXISTS ods.security_news_article_raw ADD COLUMN IF NOT EXISTS summary TEXT;
-ALTER TABLE IF EXISTS ods.security_news_article_raw ADD COLUMN IF NOT EXISTS article_url TEXT;
-ALTER TABLE IF EXISTS ods.security_news_article_raw ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
-ALTER TABLE IF EXISTS ods.security_news_article_raw ADD COLUMN IF NOT EXISTS language TEXT;
-ALTER TABLE IF EXISTS ods.security_news_article_raw ADD COLUMN IF NOT EXISTS author TEXT;
-ALTER TABLE IF EXISTS ods.security_news_article_raw ADD COLUMN IF NOT EXISTS publisher_name TEXT;
-ALTER TABLE IF EXISTS ods.security_news_article_raw ADD COLUMN IF NOT EXISTS publisher_homepage TEXT;
-ALTER TABLE IF EXISTS ods.security_news_article_raw ADD COLUMN IF NOT EXISTS primary_symbol TEXT;
-ALTER TABLE IF EXISTS ods.security_news_article_raw ADD COLUMN IF NOT EXISTS related_symbols JSONB;
-ALTER TABLE IF EXISTS ods.security_news_article_raw ADD COLUMN IF NOT EXISTS content_sha256 TEXT;
-ALTER TABLE IF EXISTS ods.security_news_article_raw ADD COLUMN IF NOT EXISTS payload_hash TEXT;
-ALTER TABLE IF EXISTS ods.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
-ALTER TABLE IF EXISTS ods.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS report_period DATE;
-ALTER TABLE IF EXISTS ods.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS filing_date DATE;
-ALTER TABLE IF EXISTS ods.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS title TEXT;
-ALTER TABLE IF EXISTS ods.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS manager_symbol TEXT;
-ALTER TABLE IF EXISTS ods.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS manager_name TEXT;
-ALTER TABLE IF EXISTS ods.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS manager_cik TEXT;
-ALTER TABLE IF EXISTS ods.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS filing_id TEXT;
-ALTER TABLE IF EXISTS ods.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS filing_type TEXT;
-ALTER TABLE IF EXISTS ods.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS position_value_usd NUMERIC(18,2);
-ALTER TABLE IF EXISTS ods.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS position_shares NUMERIC(18,2);
-ALTER TABLE IF EXISTS ods.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS source_url TEXT;
-ALTER TABLE IF EXISTS ods.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS content_sha256 TEXT;
-ALTER TABLE IF EXISTS ods.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS payload_hash TEXT;
+ALTER TABLE IF EXISTS olap.security_news_article_raw ADD COLUMN IF NOT EXISTS updated_time TIMESTAMPTZ;
+ALTER TABLE IF EXISTS olap.security_news_article_raw ADD COLUMN IF NOT EXISTS summary TEXT;
+ALTER TABLE IF EXISTS olap.security_news_article_raw ADD COLUMN IF NOT EXISTS article_url TEXT;
+ALTER TABLE IF EXISTS olap.security_news_article_raw ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS olap.security_news_article_raw ADD COLUMN IF NOT EXISTS language TEXT;
+ALTER TABLE IF EXISTS olap.security_news_article_raw ADD COLUMN IF NOT EXISTS author TEXT;
+ALTER TABLE IF EXISTS olap.security_news_article_raw ADD COLUMN IF NOT EXISTS publisher_name TEXT;
+ALTER TABLE IF EXISTS olap.security_news_article_raw ADD COLUMN IF NOT EXISTS publisher_homepage TEXT;
+ALTER TABLE IF EXISTS olap.security_news_article_raw ADD COLUMN IF NOT EXISTS primary_symbol TEXT;
+ALTER TABLE IF EXISTS olap.security_news_article_raw ADD COLUMN IF NOT EXISTS related_symbols JSONB;
+ALTER TABLE IF EXISTS olap.security_news_article_raw ADD COLUMN IF NOT EXISTS content_sha256 TEXT;
+ALTER TABLE IF EXISTS olap.security_news_article_raw ADD COLUMN IF NOT EXISTS payload_hash TEXT;
+ALTER TABLE IF EXISTS olap.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS olap.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS report_period DATE;
+ALTER TABLE IF EXISTS olap.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS filing_date DATE;
+ALTER TABLE IF EXISTS olap.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS title TEXT;
+ALTER TABLE IF EXISTS olap.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS manager_symbol TEXT;
+ALTER TABLE IF EXISTS olap.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS manager_name TEXT;
+ALTER TABLE IF EXISTS olap.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS manager_cik TEXT;
+ALTER TABLE IF EXISTS olap.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS filing_id TEXT;
+ALTER TABLE IF EXISTS olap.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS filing_type TEXT;
+ALTER TABLE IF EXISTS olap.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS position_value_usd NUMERIC(18,2);
+ALTER TABLE IF EXISTS olap.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS position_shares NUMERIC(18,2);
+ALTER TABLE IF EXISTS olap.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS source_url TEXT;
+ALTER TABLE IF EXISTS olap.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS content_sha256 TEXT;
+ALTER TABLE IF EXISTS olap.security_institutional_activity_raw ADD COLUMN IF NOT EXISTS payload_hash TEXT;
 
-ALTER TABLE IF EXISTS ods.user_watch_action_raw ADD COLUMN IF NOT EXISTS action_source TEXT;
-ALTER TABLE IF EXISTS ods.user_watch_action_raw ADD COLUMN IF NOT EXISTS trigger_scene TEXT;
-ALTER TABLE IF EXISTS ods.user_watch_action_raw ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
-ALTER TABLE IF EXISTS ods.user_watch_action_raw ADD COLUMN IF NOT EXISTS session_id TEXT;
-ALTER TABLE IF EXISTS ods.user_watch_action_raw ADD COLUMN IF NOT EXISTS device_id TEXT;
-ALTER TABLE IF EXISTS ods.user_watch_action_raw ADD COLUMN IF NOT EXISTS ingest_time TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE IF EXISTS oltp.user_watch_action_raw ADD COLUMN IF NOT EXISTS action_source TEXT;
+ALTER TABLE IF EXISTS oltp.user_watch_action_raw ADD COLUMN IF NOT EXISTS trigger_scene TEXT;
+ALTER TABLE IF EXISTS oltp.user_watch_action_raw ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS oltp.user_watch_action_raw ADD COLUMN IF NOT EXISTS session_id TEXT;
+ALTER TABLE IF EXISTS oltp.user_watch_action_raw ADD COLUMN IF NOT EXISTS device_id TEXT;
+ALTER TABLE IF EXISTS oltp.user_watch_action_raw ADD COLUMN IF NOT EXISTS ingest_time TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
 ALTER TABLE IF EXISTS dim.security ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
 ALTER TABLE IF EXISTS dim.security ADD COLUMN IF NOT EXISTS listed_date DATE;
 
-ALTER TABLE IF EXISTS dwd.security_market_daily ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
-ALTER TABLE IF EXISTS dwd.security_market_daily ADD COLUMN IF NOT EXISTS pe_ttm NUMERIC(18,4);
-ALTER TABLE IF EXISTS dwd.security_market_daily ADD COLUMN IF NOT EXISTS pb NUMERIC(18,4);
-ALTER TABLE IF EXISTS dwd.security_market_daily ADD COLUMN IF NOT EXISTS turnover_rate NUMERIC(18,4);
+ALTER TABLE IF EXISTS olap.security_market_daily ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS olap.security_market_daily ADD COLUMN IF NOT EXISTS pe_ttm NUMERIC(18,4);
+ALTER TABLE IF EXISTS olap.security_market_daily ADD COLUMN IF NOT EXISTS pb NUMERIC(18,4);
+ALTER TABLE IF EXISTS olap.security_market_daily ADD COLUMN IF NOT EXISTS turnover_rate NUMERIC(18,4);
 
-ALTER TABLE IF EXISTS dwd.security_financial_quarterly ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
-ALTER TABLE IF EXISTS dwd.security_financial_quarterly ADD COLUMN IF NOT EXISTS netprofit_yoy NUMERIC(10,4);
-ALTER TABLE IF EXISTS dwd.security_financial_quarterly ADD COLUMN IF NOT EXISTS cfo_to_np NUMERIC(10,4);
-ALTER TABLE IF EXISTS dwd.security_financial_quarterly ADD COLUMN IF NOT EXISTS rd_ratio_ttm NUMERIC(10,4);
+ALTER TABLE IF EXISTS olap.security_financial_quarterly ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS olap.security_financial_quarterly ADD COLUMN IF NOT EXISTS netprofit_yoy NUMERIC(10,4);
+ALTER TABLE IF EXISTS olap.security_financial_quarterly ADD COLUMN IF NOT EXISTS cfo_to_np NUMERIC(10,4);
+ALTER TABLE IF EXISTS olap.security_financial_quarterly ADD COLUMN IF NOT EXISTS rd_ratio_ttm NUMERIC(10,4);
 
-ALTER TABLE IF EXISTS dwd.security_event_timeline ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
-ALTER TABLE IF EXISTS dwd.security_document_signal ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
-ALTER TABLE IF EXISTS dwd.user_watchlist_state_current ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS olap.security_event_timeline ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS olap.security_document_signal ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS oltp.user_watchlist_state_current ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
 
-CREATE TABLE IF NOT EXISTS dwd.user_alert_rule_current (
+CREATE TABLE IF NOT EXISTS oltp.user_alert_rule_current (
     rule_id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
     market TEXT NOT NULL DEFAULT 'US',
@@ -1124,7 +445,7 @@ CREATE TABLE IF NOT EXISTS dwd.user_alert_rule_current (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS dwd.user_event_monitor_event_current (
+CREATE TABLE IF NOT EXISTS oltp.user_event_monitor_event_current (
     monitor_event_id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
     market TEXT NOT NULL DEFAULT 'US',
@@ -1152,37 +473,38 @@ CREATE TABLE IF NOT EXISTS dwd.user_event_monitor_event_current (
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_event_monitor_market_time
-ON dwd.user_event_monitor_event_current (user_id, market, event_time);
+ON oltp.user_event_monitor_event_current (user_id, market, event_time);
 
-ALTER TABLE IF EXISTS dws.security_feature_daily ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
-ALTER TABLE IF EXISTS dws.security_feature_daily ADD COLUMN IF NOT EXISTS netprofit_yoy NUMERIC(10,4);
-ALTER TABLE IF EXISTS dws.security_feature_daily ADD COLUMN IF NOT EXISTS cfo_to_np NUMERIC(10,4);
-ALTER TABLE IF EXISTS dws.security_feature_daily ADD COLUMN IF NOT EXISTS rd_ratio_ttm NUMERIC(10,4);
-ALTER TABLE IF EXISTS dws.security_feature_daily ADD COLUMN IF NOT EXISTS pe_ttm NUMERIC(18,4);
-ALTER TABLE IF EXISTS dws.security_feature_daily ADD COLUMN IF NOT EXISTS pb NUMERIC(18,4);
-ALTER TABLE IF EXISTS dws.security_feature_daily ADD COLUMN IF NOT EXISTS turnover_rate NUMERIC(18,4);
+ALTER TABLE IF EXISTS olap.security_feature_daily ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS olap.security_feature_daily ADD COLUMN IF NOT EXISTS netprofit_yoy NUMERIC(10,4);
+ALTER TABLE IF EXISTS olap.security_feature_daily ADD COLUMN IF NOT EXISTS cfo_to_np NUMERIC(10,4);
+ALTER TABLE IF EXISTS olap.security_feature_daily ADD COLUMN IF NOT EXISTS rd_ratio_ttm NUMERIC(10,4);
+ALTER TABLE IF EXISTS olap.security_feature_daily ADD COLUMN IF NOT EXISTS pe_ttm NUMERIC(18,4);
+ALTER TABLE IF EXISTS olap.security_feature_daily ADD COLUMN IF NOT EXISTS pb NUMERIC(18,4);
+ALTER TABLE IF EXISTS olap.security_feature_daily ADD COLUMN IF NOT EXISTS turnover_rate NUMERIC(18,4);
 
-ALTER TABLE IF EXISTS dws.security_score_component_daily ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
-ALTER TABLE IF EXISTS dws.security_score_component_daily ADD COLUMN IF NOT EXISTS industry_prosperity_score NUMERIC(10,2);
-ALTER TABLE IF EXISTS dws.security_score_component_daily ADD COLUMN IF NOT EXISTS leader_position_score NUMERIC(10,2);
-ALTER TABLE IF EXISTS dws.security_score_component_daily ADD COLUMN IF NOT EXISTS financial_acceleration_score NUMERIC(10,2);
-ALTER TABLE IF EXISTS dws.security_score_component_daily ADD COLUMN IF NOT EXISTS cashflow_quality_score NUMERIC(10,2);
-ALTER TABLE IF EXISTS dws.security_score_component_daily ADD COLUMN IF NOT EXISTS moat_score NUMERIC(10,2);
-ALTER TABLE IF EXISTS dws.security_score_component_daily ADD COLUMN IF NOT EXISTS valuation_chip_score NUMERIC(10,2);
+ALTER TABLE IF EXISTS olap.security_score_component_daily ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS olap.security_score_component_daily ADD COLUMN IF NOT EXISTS industry_prosperity_score NUMERIC(10,2);
+ALTER TABLE IF EXISTS olap.security_score_component_daily ADD COLUMN IF NOT EXISTS leader_position_score NUMERIC(10,2);
+ALTER TABLE IF EXISTS olap.security_score_component_daily ADD COLUMN IF NOT EXISTS financial_acceleration_score NUMERIC(10,2);
+ALTER TABLE IF EXISTS olap.security_score_component_daily ADD COLUMN IF NOT EXISTS cashflow_quality_score NUMERIC(10,2);
+ALTER TABLE IF EXISTS olap.security_score_component_daily ADD COLUMN IF NOT EXISTS moat_score NUMERIC(10,2);
+ALTER TABLE IF EXISTS olap.security_score_component_daily ADD COLUMN IF NOT EXISTS valuation_chip_score NUMERIC(10,2);
 
-ALTER TABLE IF EXISTS dws.theme_heat_daily ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
-ALTER TABLE IF EXISTS dws.security_candidate_rank_daily ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS olap.theme_heat_daily ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS olap.security_candidate_rank_daily ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
 
-ALTER TABLE IF EXISTS ads.candidate_pool_daily ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
-ALTER TABLE IF EXISTS ads.research_card_current ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
-ALTER TABLE IF EXISTS ads.watchlist_alert_daily ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
-ALTER TABLE IF EXISTS ads.theme_radar_daily ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS olap.candidate_pool_daily ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS olap.research_card_current ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS olap.watchlist_alert_daily ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
+ALTER TABLE IF EXISTS olap.theme_radar_daily ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'US';
 """
 
 
 def ensure_schema(settings: Settings) -> None:
     with connect(settings) as conn:
         conn.execute(SCHEMA_SQL)
+        PgStore.ensure_full_schema_from_conn(conn)
         conn.execute(OPTION_CHAIN_SCHEMA_SQL)
         _sync_existing_ods_schema(conn, settings)
 
@@ -1192,38 +514,39 @@ def reset_all(settings: Settings) -> None:
     with connect(settings) as conn:
         conn.execute(DROP_AND_RECREATE_SQL)
         conn.execute(SCHEMA_SQL)
+        PgStore.ensure_full_schema_from_conn(conn)
         conn.execute(OPTION_CHAIN_SCHEMA_SQL)
 
 
 def _clear_market_data(conn, market: str) -> None:
-    conn.execute("DELETE FROM ads.price_map_hit_review_daily WHERE market = %s", (market,))
-    conn.execute("DELETE FROM ads.price_map_history_daily WHERE market = %s", (market,))
-    conn.execute("DELETE FROM ads.price_map_current WHERE market = %s", (market,))
-    conn.execute("DELETE FROM ads.watchlist_alert_daily WHERE market = %s", (market,))
-    conn.execute("DELETE FROM ads.theme_radar_daily WHERE market = %s", (market,))
-    conn.execute("DELETE FROM ads.candidate_pool_daily WHERE market = %s", (market,))
-    conn.execute("DELETE FROM ads.research_card_current WHERE market = %s", (market,))
-    conn.execute("DELETE FROM dws.security_scenario_path_daily WHERE market = %s", (market,))
-    conn.execute("DELETE FROM dws.security_key_level_daily WHERE market = %s", (market,))
-    conn.execute("DELETE FROM dws.security_target_range_daily WHERE market = %s", (market,))
-    conn.execute("DELETE FROM dws.theme_heat_daily WHERE market = %s", (market,))
-    conn.execute("DELETE FROM dws.security_candidate_rank_daily WHERE market = %s", (market,))
-    conn.execute("DELETE FROM dws.security_score_component_daily WHERE market = %s", (market,))
-    conn.execute("DELETE FROM dws.security_feature_daily WHERE market = %s", (market,))
-    conn.execute("DELETE FROM dwd.security_price_technical_daily WHERE market = %s", (market,))
-    conn.execute("DELETE FROM dwd.security_earnings_calendar_current WHERE market = %s", (market,))
-    conn.execute("DELETE FROM dwd.security_estimate_current WHERE market = %s", (market,))
-    conn.execute("DELETE FROM dwd.security_document_signal WHERE market = %s", (market,))
-    conn.execute("DELETE FROM dwd.security_event_timeline WHERE market = %s", (market,))
-    conn.execute("DELETE FROM dwd.security_financial_quarterly WHERE market = %s", (market,))
-    conn.execute("DELETE FROM dwd.security_market_daily WHERE market = %s", (market,))
-    conn.execute("DELETE FROM ods.security_institutional_activity_raw WHERE market = %s", (market,))
-    conn.execute("DELETE FROM ods.us_earnings_calendar_raw WHERE market = %s", (market,))
-    conn.execute("DELETE FROM ods.us_analyst_estimate_raw WHERE market = %s", (market,))
-    conn.execute("DELETE FROM ods.security_news_article_raw WHERE market = %s", (market,))
-    conn.execute("DELETE FROM ods.sec_filing_document_raw WHERE market = %s", (market,))
-    conn.execute("DELETE FROM ods.security_financial_statement_raw WHERE market = %s", (market,))
-    conn.execute("DELETE FROM ods.us_equity_price_daily_raw WHERE market = %s", (market,))
+    conn.execute("DELETE FROM olap.price_map_hit_review_daily WHERE market = %s", (market,))
+    conn.execute("DELETE FROM olap.price_map_history_daily WHERE market = %s", (market,))
+    conn.execute("DELETE FROM olap.price_map_current WHERE market = %s", (market,))
+    conn.execute("DELETE FROM olap.watchlist_alert_daily WHERE market = %s", (market,))
+    conn.execute("DELETE FROM olap.theme_radar_daily WHERE market = %s", (market,))
+    conn.execute("DELETE FROM olap.candidate_pool_daily WHERE market = %s", (market,))
+    conn.execute("DELETE FROM olap.research_card_current WHERE market = %s", (market,))
+    conn.execute("DELETE FROM olap.security_scenario_path_daily WHERE market = %s", (market,))
+    conn.execute("DELETE FROM olap.security_key_level_daily WHERE market = %s", (market,))
+    conn.execute("DELETE FROM olap.security_target_range_daily WHERE market = %s", (market,))
+    conn.execute("DELETE FROM olap.theme_heat_daily WHERE market = %s", (market,))
+    conn.execute("DELETE FROM olap.security_candidate_rank_daily WHERE market = %s", (market,))
+    conn.execute("DELETE FROM olap.security_score_component_daily WHERE market = %s", (market,))
+    conn.execute("DELETE FROM olap.security_feature_daily WHERE market = %s", (market,))
+    conn.execute("DELETE FROM olap.security_price_technical_daily WHERE market = %s", (market,))
+    conn.execute("DELETE FROM olap.security_earnings_calendar_current WHERE market = %s", (market,))
+    conn.execute("DELETE FROM olap.security_estimate_current WHERE market = %s", (market,))
+    conn.execute("DELETE FROM olap.security_document_signal WHERE market = %s", (market,))
+    conn.execute("DELETE FROM olap.security_event_timeline WHERE market = %s", (market,))
+    conn.execute("DELETE FROM olap.security_financial_quarterly WHERE market = %s", (market,))
+    conn.execute("DELETE FROM olap.security_market_daily WHERE market = %s", (market,))
+    conn.execute("DELETE FROM olap.security_institutional_activity_raw WHERE market = %s", (market,))
+    conn.execute("DELETE FROM olap.us_earnings_calendar_raw WHERE market = %s", (market,))
+    conn.execute("DELETE FROM olap.us_analyst_estimate_raw WHERE market = %s", (market,))
+    conn.execute("DELETE FROM olap.security_news_article_raw WHERE market = %s", (market,))
+    conn.execute("DELETE FROM olap.sec_filing_document_raw WHERE market = %s", (market,))
+    conn.execute("DELETE FROM olap.security_financial_statement_raw WHERE market = %s", (market,))
+    conn.execute("DELETE FROM olap.us_equity_price_daily_raw WHERE market = %s", (market,))
     conn.execute(
         """
         DELETE FROM dim.security_theme
@@ -1348,7 +671,7 @@ def _insert_price_rows(conn, prices: list[Any]) -> None:
         payload = _row_get(row, "raw_payload") or (dict(row) if isinstance(row, dict) else dict(getattr(row, "__dict__", {})))
         conn.execute(
             """
-            INSERT INTO ods.us_equity_price_daily_raw (
+            INSERT INTO olap.us_equity_price_daily_raw (
                 market, symbol, trade_date, open, high, low, close, adj_close, volume,
                 currency, market_status, source_event_time, source_vendor, raw_payload, payload_hash
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -1394,7 +717,7 @@ def _insert_financial_rows(conn, financials: list[Any]) -> None:
         revenue_fact = revenue_fact if isinstance(revenue_fact, dict) else {}
         conn.execute(
             """
-            INSERT INTO ods.security_financial_statement_raw (
+            INSERT INTO olap.security_financial_statement_raw (
                 market, symbol, report_period, fiscal_quarter, fiscal_year, period_type,
                 filed_date, revenue, gross_margin, op_margin, fcf_margin,
                 cash, debt, shares_outstanding, revenue_yoy, netprofit_yoy, cfo_to_np, rd_ratio_ttm, source_filing_id,
@@ -1472,7 +795,7 @@ def _insert_estimate_rows(conn, estimates: list[Any]) -> None:
             fiscal_year_offset = 2 if _safe_str(_row_get(row, "period_label")) == "+1y" else 1
         conn.execute(
             """
-            INSERT INTO ods.us_analyst_estimate_raw (
+            INSERT INTO olap.us_analyst_estimate_raw (
                 market, symbol, snapshot_date, fiscal_year_offset, period_label,
                 revenue_estimate, eps_estimate, analyst_count, currency,
                 request_status, source_vendor, raw_payload, payload_hash
@@ -1516,7 +839,7 @@ def _insert_earnings_calendar_rows(conn, earnings_calendar: list[Any]) -> None:
         )
         conn.execute(
             """
-            INSERT INTO ods.us_earnings_calendar_raw (
+            INSERT INTO olap.us_earnings_calendar_raw (
                 event_id, market, symbol, snapshot_date, earnings_date, fiscal_period,
                 time_of_day, eps_estimate, revenue_estimate, currency,
                 request_status, source_vendor, raw_payload, payload_hash
@@ -1586,7 +909,7 @@ def _insert_filings_rows(conn, storage: ObjectStorage | None, filings: list[Any]
         content_sha256 = _coalesce(_safe_str(_row_get(row, "content_sha256")), _sha256_text(content))
         conn.execute(
             """
-            INSERT INTO ods.sec_filing_document_raw (
+            INSERT INTO olap.sec_filing_document_raw (
                 filing_id, market, symbol, cik, accession_number, filing_type, filing_date,
                 filing_time, report_period, title, primary_document, filing_url,
                 object_key, content_sha256, source_vendor, raw_payload, payload_hash
@@ -1649,7 +972,7 @@ def _insert_news_rows(conn, storage: ObjectStorage | None, news_items: list[Any]
         content_sha256 = _coalesce(_safe_str(_row_get(row, "content_sha256")), _sha256_text(content))
         conn.execute(
             """
-            INSERT INTO ods.security_news_article_raw (
+            INSERT INTO olap.security_news_article_raw (
                 news_id, market, symbol, published_time, updated_time, title, summary,
                 article_url, language, author, publisher_name, publisher_homepage,
                 primary_symbol, related_symbols, object_key, content_sha256,
@@ -1715,7 +1038,7 @@ def _insert_institutional_activity_rows(conn, storage: ObjectStorage | None, act
         content_sha256 = _coalesce(_safe_str(_row_get(row, "content_sha256")), _sha256_text(content))
         conn.execute(
             """
-            INSERT INTO ods.security_institutional_activity_raw (
+            INSERT INTO olap.security_institutional_activity_raw (
                 activity_id, market, symbol, activity_time, activity_type, report_period,
                 filing_date, title, manager_symbol, manager_name, manager_cik, filing_id,
                 filing_type, position_value_usd, position_shares, source_url, object_key,
@@ -1774,7 +1097,7 @@ def _insert_watch_actions(conn, watch_actions: list[dict[str, Any] | Any]) -> No
         payload = _row_get(action, "raw_payload") or (dict(action) if isinstance(action, dict) else dict(getattr(action, "__dict__", {})))
         conn.execute(
             """
-            INSERT INTO ods.user_watch_action_raw (
+            INSERT INTO oltp.user_watch_action_raw (
                 action_id, user_id, market, symbol, action, action_time,
                 action_source, trigger_scene, session_id, device_id, raw_payload
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -1826,7 +1149,7 @@ def _upsert_synthetic_signal(
 ) -> None:
     conn.execute(
         """
-        INSERT INTO dwd.security_event_timeline (
+        INSERT INTO olap.security_event_timeline (
             event_id, security_id, market, symbol, event_time, event_type, title,
             source_kind, sentiment, importance, object_key, theme_tags
         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -1860,7 +1183,7 @@ def _upsert_synthetic_signal(
     )
     conn.execute(
         """
-        INSERT INTO dwd.security_document_signal (
+        INSERT INTO olap.security_document_signal (
             signal_id, event_id, security_id, market, symbol, source_kind, summary,
             sentiment, risk_tags, theme_tags, evidence_path, positive_hits, negative_hits
         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -1906,24 +1229,24 @@ def _sync_existing_ods_schema(conn, settings: Settings) -> None:
         storage = None
 
     backfill_specs: list[tuple[str, Any]] = [
-        ("SELECT * FROM ods.us_equity_price_daily_raw", _insert_price_rows),
-        ("SELECT * FROM ods.security_financial_statement_raw", _insert_financial_rows),
-        ("SELECT * FROM ods.user_watch_action_raw", _insert_watch_actions),
+        ("SELECT * FROM olap.us_equity_price_daily_raw", _insert_price_rows),
+        ("SELECT * FROM olap.security_financial_statement_raw", _insert_financial_rows),
+        ("SELECT * FROM oltp.user_watch_action_raw", _insert_watch_actions),
     ]
     for sql, loader in backfill_specs:
         rows = conn.execute(sql).fetchall()
         if rows:
             loader(conn, rows)
 
-    filing_rows = conn.execute("SELECT * FROM ods.sec_filing_document_raw").fetchall()
+    filing_rows = conn.execute("SELECT * FROM olap.sec_filing_document_raw").fetchall()
     if filing_rows:
         _insert_filings_rows(conn, storage, filing_rows)
 
-    news_rows = conn.execute("SELECT * FROM ods.security_news_article_raw").fetchall()
+    news_rows = conn.execute("SELECT * FROM olap.security_news_article_raw").fetchall()
     if news_rows:
         _insert_news_rows(conn, storage, news_rows)
 
-    institutional_rows = conn.execute("SELECT * FROM ods.security_institutional_activity_raw").fetchall()
+    institutional_rows = conn.execute("SELECT * FROM olap.security_institutional_activity_raw").fetchall()
     if institutional_rows:
         _insert_institutional_activity_rows(conn, storage, institutional_rows)
 
@@ -2141,13 +1464,13 @@ def build_dwd(settings: Settings) -> None:
         conn.execute(
             """
             TRUNCATE TABLE
-                dwd.user_watchlist_state_current,
-                dwd.security_document_signal,
-                dwd.security_event_timeline,
-                dwd.security_earnings_calendar_current,
-                dwd.security_estimate_current,
-                dwd.security_financial_quarterly,
-                dwd.security_market_daily
+                oltp.user_watchlist_state_current,
+                olap.security_document_signal,
+                olap.security_event_timeline,
+                olap.security_earnings_calendar_current,
+                olap.security_estimate_current,
+                olap.security_financial_quarterly,
+                olap.security_market_daily
             RESTART IDENTITY CASCADE;
             """
         )
@@ -2163,7 +1486,7 @@ def build_dwd(settings: Settings) -> None:
                             THEN revenue
                         ELSE revenue * 4
                     END AS annualized_revenue
-                FROM ods.security_financial_statement_raw
+                FROM olap.security_financial_statement_raw
                 ORDER BY symbol, report_period DESC
             ),
             priced AS (
@@ -2188,11 +1511,11 @@ def build_dwd(settings: Settings) -> None:
                     ) AS recent_high,
                     lf.shares_outstanding,
                     lf.annualized_revenue
-                FROM ods.us_equity_price_daily_raw p
+                FROM olap.us_equity_price_daily_raw p
                 JOIN dim.security s ON s.symbol = p.symbol AND s.market = p.market
                 LEFT JOIN latest_financial lf ON lf.symbol = p.symbol
             )
-            INSERT INTO dwd.security_market_daily (
+            INSERT INTO olap.security_market_daily (
                 security_id, market, symbol, trade_date, open, high, low, close, adj_close,
                 volume, return_1d, return_5d, distance_from_recent_high, market_cap, ps_ttm, pe_ttm, pb, turnover_rate
             )
@@ -2231,7 +1554,7 @@ def build_dwd(settings: Settings) -> None:
 
         conn.execute(
             """
-            INSERT INTO dwd.security_financial_quarterly (
+            INSERT INTO olap.security_financial_quarterly (
                 security_id, market, symbol, report_period, revenue, revenue_yoy, netprofit_yoy, gross_margin,
                 op_margin, fcf_margin, cfo_to_np, rd_ratio_ttm, cash, debt, net_cash, shares_outstanding
             )
@@ -2252,7 +1575,7 @@ def build_dwd(settings: Settings) -> None:
                 f.debt,
                 COALESCE(f.cash, 0) - COALESCE(f.debt, 0) AS net_cash,
                 f.shares_outstanding
-            FROM ods.security_financial_statement_raw f
+            FROM olap.security_financial_statement_raw f
             JOIN dim.security s ON s.symbol = f.symbol AND s.market = f.market;
             """
         )
@@ -2261,18 +1584,18 @@ def build_dwd(settings: Settings) -> None:
             """
             WITH latest_estimate_dates AS (
                 SELECT market, symbol, MAX(snapshot_date) AS snapshot_date
-                FROM ods.us_analyst_estimate_raw
+                FROM olap.us_analyst_estimate_raw
                 GROUP BY market, symbol
             ),
             latest_estimates AS (
                 SELECT e.*
-                FROM ods.us_analyst_estimate_raw e
+                FROM olap.us_analyst_estimate_raw e
                 JOIN latest_estimate_dates led
                   ON led.market = e.market
                  AND led.symbol = e.symbol
                  AND led.snapshot_date = e.snapshot_date
             )
-            INSERT INTO dwd.security_estimate_current (
+            INSERT INTO olap.security_estimate_current (
                 security_id, market, symbol, snapshot_date,
                 fy1_revenue_estimate, fy2_revenue_estimate, fy1_eps, fy2_eps,
                 fy1_analyst_count, fy2_analyst_count, currency,
@@ -2314,9 +1637,9 @@ def build_dwd(settings: Settings) -> None:
                             e.earnings_date NULLS LAST,
                             e.snapshot_date DESC
                     ) AS rn
-                FROM ods.us_earnings_calendar_raw e
+                FROM olap.us_earnings_calendar_raw e
             )
-            INSERT INTO dwd.security_earnings_calendar_current (
+            INSERT INTO olap.security_earnings_calendar_current (
                 security_id, market, symbol, snapshot_date, next_earnings_date, days_to_earnings,
                 fiscal_period, time_of_day, eps_estimate, revenue_estimate, currency,
                 data_quality_flag, source_vendor, raw_payload
@@ -2346,7 +1669,7 @@ def build_dwd(settings: Settings) -> None:
             """
             SELECT s.security_id, s.market, f.filing_id AS source_id, f.symbol, f.filing_time AS event_time,
                    f.title, f.object_key, 'filing' AS source_kind, f.filing_type AS event_type
-            FROM ods.sec_filing_document_raw f
+            FROM olap.sec_filing_document_raw f
             JOIN dim.security s ON s.symbol = f.symbol AND s.market = f.market
             ORDER BY f.filing_time
             """
@@ -2356,7 +1679,7 @@ def build_dwd(settings: Settings) -> None:
             """
             SELECT s.security_id, s.market, n.news_id AS source_id, n.symbol, n.published_time AS event_time,
                    n.title, n.object_key, 'news' AS source_kind, 'news' AS event_type
-            FROM ods.security_news_article_raw n
+            FROM olap.security_news_article_raw n
             JOIN dim.security s ON s.symbol = n.symbol AND s.market = n.market
             ORDER BY n.published_time
             """
@@ -2366,7 +1689,7 @@ def build_dwd(settings: Settings) -> None:
             """
             SELECT s.security_id, s.market, a.activity_id AS source_id, a.symbol, a.activity_time AS event_time,
                    a.title, a.object_key, 'institutional' AS source_kind, a.filing_type AS event_type
-            FROM ods.security_institutional_activity_raw a
+            FROM olap.security_institutional_activity_raw a
             JOIN dim.security s ON s.symbol = a.symbol AND s.market = a.market
             ORDER BY a.activity_time
             """
@@ -2378,7 +1701,7 @@ def build_dwd(settings: Settings) -> None:
             event_id = f"{row['source_kind']}::{row['source_id']}"
             conn.execute(
                 """
-                INSERT INTO dwd.security_event_timeline (
+                INSERT INTO olap.security_event_timeline (
                     event_id, security_id, market, symbol, event_time, event_type, title,
                     source_kind, sentiment, importance, object_key, theme_tags
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -2403,7 +1726,7 @@ def build_dwd(settings: Settings) -> None:
             )
             conn.execute(
                 """
-                INSERT INTO dwd.security_document_signal (
+                INSERT INTO olap.security_document_signal (
                     signal_id, event_id, security_id, market, symbol, source_kind, summary,
                     sentiment, risk_tags, theme_tags, evidence_path, positive_hits, negative_hits
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -2448,10 +1771,10 @@ def build_dwd(settings: Settings) -> None:
                     symbol,
                     action,
                     action_time
-                FROM ods.user_watch_action_raw
+                FROM oltp.user_watch_action_raw
                 ORDER BY user_id, market, symbol, action_time DESC
             )
-            INSERT INTO dwd.user_watchlist_state_current (
+            INSERT INTO oltp.user_watchlist_state_current (
                 user_id, security_id, market, symbol, state, latest_action_time
             )
             SELECT
@@ -2481,10 +1804,10 @@ def build_dwd(settings: Settings) -> None:
         cn_financial_rows = conn.execute(
             """
             SELECT security_id, symbol, report_period, revenue_yoy, netprofit_yoy, op_margin
-            FROM dwd.security_financial_quarterly
+            FROM olap.security_financial_quarterly
             WHERE market = 'CN'
             AND report_period = (
-                SELECT MAX(report_period) FROM dwd.security_financial_quarterly f2 WHERE f2.security_id = dwd.security_financial_quarterly.security_id
+                SELECT MAX(report_period) FROM olap.security_financial_quarterly f2 WHERE f2.security_id = olap.security_financial_quarterly.security_id
             )
             """
         ).fetchall()
@@ -2513,13 +1836,13 @@ def build_dwd(settings: Settings) -> None:
                 object_key=f"synthetic://cn/financial/{row['symbol']}/{row['report_period']}",
             )
 
-        cn_latest_trade = conn.execute("SELECT MAX(trade_date) AS trade_date FROM dwd.security_market_daily WHERE market = 'CN'").fetchone()
+        cn_latest_trade = conn.execute("SELECT MAX(trade_date) AS trade_date FROM olap.security_market_daily WHERE market = 'CN'").fetchone()
         latest_cn_trade_date = cn_latest_trade["trade_date"] if cn_latest_trade else None
         if latest_cn_trade_date is not None:
             cn_market_rows = conn.execute(
                 """
                 SELECT security_id, symbol, trade_date, return_1d, return_5d, distance_from_recent_high
-                FROM dwd.security_market_daily
+                FROM olap.security_market_daily
                 WHERE market = 'CN' AND trade_date = %s
                 """,
                 (latest_cn_trade_date,),
@@ -2555,37 +1878,37 @@ def build_dws(settings: Settings) -> None:
         conn.execute(
             """
             TRUNCATE TABLE
-                dws.security_candidate_rank_daily,
-                dws.security_scenario_path_daily,
-                dws.security_key_level_daily,
-                dws.security_target_range_daily,
-                dws.theme_heat_daily,
-                dws.security_score_component_daily,
-                dws.security_feature_daily,
-                dwd.security_price_technical_daily
+                olap.security_candidate_rank_daily,
+                olap.security_scenario_path_daily,
+                olap.security_key_level_daily,
+                olap.security_target_range_daily,
+                olap.theme_heat_daily,
+                olap.security_score_component_daily,
+                olap.security_feature_daily,
+                olap.security_price_technical_daily
             RESTART IDENTITY CASCADE;
             """
         )
         latest_trade_dates = conn.execute(
             """
             SELECT market, MAX(trade_date) AS trade_date
-            FROM dwd.security_market_daily
+            FROM olap.security_market_daily
             GROUP BY market
             """
         ).fetchall()
         if not latest_trade_dates:
-            raise RuntimeError("No market data available in dwd.security_market_daily")
+            raise RuntimeError("No market data available in olap.security_market_daily")
         latest_trade_date_by_market = {row["market"]: row["trade_date"] for row in latest_trade_dates}
 
         latest_bars = conn.execute(
             """
             WITH latest AS (
                 SELECT market, MAX(trade_date) AS trade_date
-                FROM dwd.security_market_daily
+                FROM olap.security_market_daily
                 GROUP BY market
             )
             SELECT m.*
-            FROM dwd.security_market_daily m
+            FROM olap.security_market_daily m
             JOIN latest l ON l.market = m.market AND l.trade_date = m.trade_date
             ORDER BY m.market, m.symbol
             """
@@ -2600,7 +1923,7 @@ def build_dws(settings: Settings) -> None:
             trade_date = latest_trade_date_by_market[market]
             financial = conn.execute(
                 """
-                SELECT * FROM dwd.security_financial_quarterly
+                SELECT * FROM olap.security_financial_quarterly
                 WHERE security_id = %s
                 ORDER BY report_period DESC
                 LIMIT 1
@@ -2614,7 +1937,7 @@ def build_dws(settings: Settings) -> None:
                     COALESCE(SUM(CASE WHEN sentiment = 'positive' THEN 1 ELSE 0 END), 0) AS positive_signal_count,
                     COALESCE(jsonb_agg(DISTINCT risk_tags) FILTER (WHERE jsonb_array_length(risk_tags) > 0), '[]'::jsonb) AS risk_tag_groups,
                     COALESCE(jsonb_agg(DISTINCT theme_tags) FILTER (WHERE jsonb_array_length(theme_tags) > 0), '[]'::jsonb) AS theme_tag_groups
-                FROM dwd.security_document_signal
+                FROM olap.security_document_signal
                 WHERE security_id = %s
                 """,
                 (security_id,),
@@ -2673,7 +1996,7 @@ def build_dws(settings: Settings) -> None:
 
             conn.execute(
                 """
-                INSERT INTO dws.security_feature_daily (
+                INSERT INTO olap.security_feature_daily (
                     security_id, market, symbol, trade_date, revenue_yoy, netprofit_yoy, op_margin, fcf_margin,
                     cfo_to_np, rd_ratio_ttm, return_1d, return_5d, distance_from_recent_high, ps_ttm, pe_ttm, pb, turnover_rate,
                     risk_count, negative_event_count, theme_count, positive_signal_count
@@ -2706,7 +2029,7 @@ def build_dws(settings: Settings) -> None:
 
             conn.execute(
                 """
-                INSERT INTO dws.security_score_component_daily (
+                INSERT INTO olap.security_score_component_daily (
                     security_id, market, symbol, trade_date, growth_score, quality_score,
                     momentum_score, valuation_score, size_score, evidence_score,
                     risk_score, theme_score, industry_prosperity_score, leader_position_score, financial_acceleration_score,
@@ -2760,7 +2083,7 @@ def build_dws(settings: Settings) -> None:
             for idx, row in enumerate(rows, start=1):
                 conn.execute(
                     """
-                    INSERT INTO dws.security_candidate_rank_daily (
+                    INSERT INTO olap.security_candidate_rank_daily (
                         security_id, market, symbol, trade_date, total_score, stage, rank_no, entry_reason,
                         risk_tags, theme_tags
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -2792,10 +2115,10 @@ def build_dws(settings: Settings) -> None:
             FROM dim.theme t
             JOIN dim.security_theme st ON st.theme_id = t.theme_id
             JOIN dim.security s ON s.security_id = st.security_id
-            JOIN dws.security_score_component_daily sc ON sc.security_id = st.security_id
+            JOIN olap.security_score_component_daily sc ON sc.security_id = st.security_id
             LEFT JOIN (
                 SELECT security_id, COUNT(*) AS signal_count
-                FROM dwd.security_document_signal
+                FROM olap.security_document_signal
                 GROUP BY security_id
             ) sig ON sig.security_id = st.security_id
             ORDER BY s.market, t.theme_id, sc.total_score DESC
@@ -2828,7 +2151,7 @@ def build_dws(settings: Settings) -> None:
             leader_symbols = [symbol for symbol, _score in sorted(bucket["leaders"], key=lambda item: item[1], reverse=True)[:3]]
             conn.execute(
                 """
-                INSERT INTO dws.theme_heat_daily (
+                INSERT INTO olap.theme_heat_daily (
                     theme_id, market, trade_date, theme_name, heat_score, status,
                     symbol_count, evidence_count, leader_symbols
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -2852,29 +2175,29 @@ def build_ads(settings: Settings) -> None:
         conn.execute(
             """
             TRUNCATE TABLE
-                ads.price_map_current,
-                ads.watchlist_alert_daily,
-                ads.research_card_current,
-                ads.candidate_pool_daily,
-                ads.theme_radar_daily
+                olap.price_map_current,
+                olap.watchlist_alert_daily,
+                olap.research_card_current,
+                olap.candidate_pool_daily,
+                olap.theme_radar_daily
             RESTART IDENTITY CASCADE;
             """
         )
         latest_trade_dates = conn.execute(
             """
             SELECT market, MAX(trade_date) AS trade_date
-            FROM dws.security_candidate_rank_daily
+            FROM olap.security_candidate_rank_daily
             GROUP BY market
             """
         ).fetchall()
         if not latest_trade_dates:
-            raise RuntimeError("No ranked candidates available in dws.security_candidate_rank_daily")
+            raise RuntimeError("No ranked candidates available in olap.security_candidate_rank_daily")
         latest_trade_date_by_market = {row["market"]: row["trade_date"] for row in latest_trade_dates}
 
         ranked_rows = conn.execute(
             """
             SELECT *
-            FROM dws.security_candidate_rank_daily
+            FROM olap.security_candidate_rank_daily
             ORDER BY market, rank_no
             """
         ).fetchall()
@@ -2890,7 +2213,7 @@ def build_ads(settings: Settings) -> None:
                 summary = f"{row['symbol']} 主候选排名第 {new_rank}，所处阶段 {row['stage']}，核心强项：{row['entry_reason']}。"
                 conn.execute(
                     """
-                    INSERT INTO ads.candidate_pool_daily (
+                    INSERT INTO olap.candidate_pool_daily (
                         security_id, market, symbol, trade_date, rank_no, total_score, stage,
                         reason_summary, risk_tags, theme_tags
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -2916,7 +2239,7 @@ def build_ads(settings: Settings) -> None:
                 continue
             score = conn.execute(
                 """
-                SELECT * FROM dws.security_score_component_daily
+                SELECT * FROM olap.security_score_component_daily
                 WHERE security_id = %s AND trade_date = %s
                 """,
                 (sec["security_id"], trade_date),
@@ -2925,7 +2248,7 @@ def build_ads(settings: Settings) -> None:
                 continue
             financial = conn.execute(
                 """
-                SELECT * FROM dwd.security_financial_quarterly
+                SELECT * FROM olap.security_financial_quarterly
                 WHERE security_id = %s
                 ORDER BY report_period DESC
                 LIMIT 1
@@ -2935,7 +2258,7 @@ def build_ads(settings: Settings) -> None:
             events = conn.execute(
                 """
                 SELECT title, sentiment, object_key
-                FROM dwd.security_event_timeline
+                FROM olap.security_event_timeline
                 WHERE security_id = %s
                 ORDER BY event_time DESC
                 LIMIT 3
@@ -2973,7 +2296,7 @@ def build_ads(settings: Settings) -> None:
             evidence_refs = [event["object_key"] for event in events]
             conn.execute(
                 """
-                INSERT INTO ads.research_card_current (
+                INSERT INTO olap.research_card_current (
                     security_id, market, symbol, as_of_date, thesis, key_points,
                     risk_points, next_watch_items, evidence_refs, stage, total_score
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -3008,14 +2331,14 @@ def build_ads(settings: Settings) -> None:
             """
             WITH latest AS (
                 SELECT market, MAX(trade_date) AS trade_date
-                FROM ads.candidate_pool_daily
+                FROM olap.candidate_pool_daily
                 GROUP BY market
             )
             SELECT w.user_id, w.market, w.security_id, w.symbol, c.rank_no, c.total_score, c.reason_summary,
                    c.risk_tags
-            FROM dwd.user_watchlist_state_current w
+            FROM oltp.user_watchlist_state_current w
             LEFT JOIN latest l ON l.market = w.market
-            LEFT JOIN ads.candidate_pool_daily c
+            LEFT JOIN olap.candidate_pool_daily c
               ON c.security_id = w.security_id AND c.trade_date = l.trade_date
             WHERE w.state = 'watching'
             """
@@ -3025,7 +2348,7 @@ def build_ads(settings: Settings) -> None:
             if risk_tags and risk_tags != []:
                 conn.execute(
                     """
-                    INSERT INTO ads.watchlist_alert_daily (
+                    INSERT INTO olap.watchlist_alert_daily (
                         alert_id, user_id, market, symbol, trade_date, alert_type, severity,
                         alert_message, evidence_refs
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -3045,7 +2368,7 @@ def build_ads(settings: Settings) -> None:
             if row["rank_no"] is not None and row["rank_no"] <= 2:
                 conn.execute(
                     """
-                    INSERT INTO ads.watchlist_alert_daily (
+                    INSERT INTO olap.watchlist_alert_daily (
                         alert_id, user_id, market, symbol, trade_date, alert_type, severity,
                         alert_message, evidence_refs
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -3065,7 +2388,7 @@ def build_ads(settings: Settings) -> None:
 
         themes = conn.execute(
             """
-            SELECT * FROM dws.theme_heat_daily
+            SELECT * FROM olap.theme_heat_daily
             ORDER BY heat_score DESC
             """
         ).fetchall()
@@ -3074,7 +2397,7 @@ def build_ads(settings: Settings) -> None:
                 continue
             conn.execute(
                 """
-                INSERT INTO ads.theme_radar_daily (
+                INSERT INTO olap.theme_radar_daily (
                     theme_id, market, trade_date, theme_name, heat_score, status,
                     key_drivers, representative_symbols
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
@@ -3248,25 +2571,25 @@ def build_price_map(settings: Settings) -> None:
         symbol_filter = _price_map_symbol_filter()
         if symbol_filter:
             for table in (
-                "ads.watchlist_alert_daily",
-                "ads.price_map_hit_review_daily",
-                "ads.price_map_history_daily",
-                "ads.price_map_current",
-                "dws.security_scenario_path_daily",
-                "dws.security_key_level_daily",
-                "dws.security_target_range_daily",
-                "dwd.security_price_technical_daily",
+                "olap.watchlist_alert_daily",
+                "olap.price_map_hit_review_daily",
+                "olap.price_map_history_daily",
+                "olap.price_map_current",
+                "olap.security_scenario_path_daily",
+                "olap.security_key_level_daily",
+                "olap.security_target_range_daily",
+                "olap.security_price_technical_daily",
             ):
                 conn.execute(f"DELETE FROM {table} WHERE UPPER(symbol) = ANY(%s)", (symbol_filter,))
         else:
             conn.execute(
                 """
                 TRUNCATE TABLE
-                    ads.price_map_current,
-                    dws.security_scenario_path_daily,
-                    dws.security_key_level_daily,
-                    dws.security_target_range_daily,
-                    dwd.security_price_technical_daily
+                    olap.price_map_current,
+                    olap.security_scenario_path_daily,
+                    olap.security_key_level_daily,
+                    olap.security_target_range_daily,
+                    olap.security_price_technical_daily
                 RESTART IDENTITY CASCADE;
                 """
             )
@@ -3274,7 +2597,7 @@ def build_price_map(settings: Settings) -> None:
         latest_trade_dates = conn.execute(
             """
             SELECT market, MAX(trade_date) AS trade_date
-            FROM dwd.security_market_daily
+            FROM olap.security_market_daily
             GROUP BY market
             """
         ).fetchall()
@@ -3296,7 +2619,7 @@ def build_price_map(settings: Settings) -> None:
             price_rows = conn.execute(
                 """
                 SELECT *
-                FROM dwd.security_market_daily
+                FROM olap.security_market_daily
                 WHERE security_id = %s
                 ORDER BY trade_date
                 """,
@@ -3310,7 +2633,7 @@ def build_price_map(settings: Settings) -> None:
             financial = conn.execute(
                 """
                 SELECT *
-                FROM dwd.security_financial_quarterly
+                FROM olap.security_financial_quarterly
                 WHERE security_id = %s
                 ORDER BY report_period DESC
                 LIMIT 1
@@ -3320,7 +2643,7 @@ def build_price_map(settings: Settings) -> None:
             score = conn.execute(
                 """
                 SELECT *
-                FROM dws.security_score_component_daily
+                FROM olap.security_score_component_daily
                 WHERE security_id = %s AND trade_date = %s
                 """,
                 (security_id, trade_date),
@@ -3328,7 +2651,7 @@ def build_price_map(settings: Settings) -> None:
             evidence_rows = conn.execute(
                 """
                 SELECT object_key
-                FROM dwd.security_event_timeline
+                FROM olap.security_event_timeline
                 WHERE security_id = %s
                 ORDER BY event_time DESC
                 LIMIT 3
@@ -3341,7 +2664,7 @@ def build_price_map(settings: Settings) -> None:
                 option_row = conn.execute(
                     """
                     SELECT *
-                    FROM dws.security_option_chain_summary_daily
+                    FROM olap.security_option_chain_summary_daily
                     WHERE market = %s AND symbol = %s
                     ORDER BY trade_date DESC
                     LIMIT 1
@@ -3352,7 +2675,7 @@ def build_price_map(settings: Settings) -> None:
             estimate = conn.execute(
                 """
                 SELECT *
-                FROM dwd.security_estimate_current
+                FROM olap.security_estimate_current
                 WHERE security_id = %s
                 """,
                 (security_id,),
@@ -3360,7 +2683,7 @@ def build_price_map(settings: Settings) -> None:
             earnings_calendar = conn.execute(
                 """
                 SELECT *
-                FROM dwd.security_earnings_calendar_current
+                FROM olap.security_earnings_calendar_current
                 WHERE security_id = %s
                 """,
                 (security_id,),
@@ -3382,7 +2705,7 @@ def build_price_map(settings: Settings) -> None:
 
             conn.execute(
                 """
-                INSERT INTO dwd.security_price_technical_daily (
+                INSERT INTO olap.security_price_technical_daily (
                     security_id, market, symbol, trade_date, close, high_52w, low_52w, position_52w,
                     ma20, ma60, ma120, ma250, atr14, volatility20, support_level, resistance_level,
                     volume_price_low, volume_price_high, valuation_percentile
@@ -3414,7 +2737,7 @@ def build_price_map(settings: Settings) -> None:
             for target in price_map.targets:
                 conn.execute(
                     """
-                    INSERT INTO dws.security_target_range_daily (
+                    INSERT INTO olap.security_target_range_daily (
                         security_id, market, symbol, trade_date, scenario, horizon, target_low, target_high,
                         target_mid, upside_pct_mid, method, confidence, assumptions, evidence_refs
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -3440,7 +2763,7 @@ def build_price_map(settings: Settings) -> None:
             for level in price_map.key_levels:
                 conn.execute(
                     """
-                    INSERT INTO dws.security_key_level_daily (
+                    INSERT INTO olap.security_key_level_daily (
                         level_id, security_id, market, symbol, trade_date, level_type, level_low, level_high,
                         strength, distance_pct, source, note, evidence_refs
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -3465,7 +2788,7 @@ def build_price_map(settings: Settings) -> None:
             for path in price_map.scenario_paths:
                 conn.execute(
                     """
-                    INSERT INTO dws.security_scenario_path_daily (
+                    INSERT INTO olap.security_scenario_path_daily (
                         path_id, security_id, market, symbol, trade_date, path_name, probability, confidence,
                         trigger, target_scenario, invalidation, explanation, evidence_refs
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -3492,7 +2815,7 @@ def build_price_map(settings: Settings) -> None:
             scenario_paths = [_scenario_path_payload(path) for path in price_map.scenario_paths]
             conn.execute(
                 """
-                INSERT INTO ads.price_map_current (
+                INSERT INTO olap.price_map_current (
                     security_id, market, symbol, as_of_date, current_price, posture, posture_label, confidence,
                     base_target, bull_target, bear_zone, key_levels, scenario_paths, invalidation_rules,
                     evidence_refs, explanation
@@ -3540,7 +2863,7 @@ def build_price_map(settings: Settings) -> None:
             bear_payload = _target_range_payload(targets_by_scenario["bear"])
             conn.execute(
                 """
-                INSERT INTO ads.price_map_history_daily (
+                INSERT INTO olap.price_map_history_daily (
                     security_id, market, symbol, snapshot_date, current_price, confidence, method,
                     base_target, bull_target, bear_zone, explanation
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -3573,7 +2896,7 @@ def build_price_map(settings: Settings) -> None:
             watchlist = conn.execute(
                 """
                 SELECT user_id
-                FROM dwd.user_watchlist_state_current
+                FROM oltp.user_watchlist_state_current
                 WHERE security_id = %s AND state = 'watching'
                 """,
                 (security_id,),
@@ -3604,7 +2927,7 @@ def build_price_map(settings: Settings) -> None:
             for item in watchlist:
                 conn.execute(
                     """
-                    INSERT INTO ads.watchlist_alert_daily (
+                    INSERT INTO olap.watchlist_alert_daily (
                         alert_id, user_id, market, symbol, trade_date, alert_type, severity,
                         alert_message, evidence_refs
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -3634,7 +2957,7 @@ def _build_price_map_hit_review(conn) -> None:
     histories = conn.execute(
         """
         SELECT *
-        FROM ads.price_map_history_daily
+        FROM olap.price_map_history_daily
         ORDER BY market, symbol, snapshot_date
         """
     ).fetchall()
@@ -3642,7 +2965,7 @@ def _build_price_map_hit_review(conn) -> None:
         future_prices = conn.execute(
             """
             SELECT trade_date, close
-            FROM dwd.security_market_daily
+            FROM olap.security_market_daily
             WHERE security_id = %s
               AND trade_date > %s
               AND trade_date <= %s::date + INTERVAL '180 days'
@@ -3675,7 +2998,7 @@ def _build_price_map_hit_review(conn) -> None:
         )
         conn.execute(
             """
-            INSERT INTO ads.price_map_hit_review_daily (
+            INSERT INTO olap.price_map_hit_review_daily (
                 security_id, market, symbol, snapshot_date, review_date, horizon_days,
                 base_hit, bull_hit, bear_breached, max_close, min_close,
                 base_target_mid, bull_target_low, bear_zone_high, hit_summary, metrics
@@ -3732,22 +3055,22 @@ def fetch_ads_preview(settings: Settings) -> dict[str, list[dict[str, Any]]]:
     with connect(settings) as conn:
         return {
             "candidate_pool": conn.execute(
-                "SELECT market, symbol, rank_no, total_score, reason_summary FROM ads.candidate_pool_daily ORDER BY market, rank_no"
+                "SELECT market, symbol, rank_no, total_score, reason_summary FROM olap.candidate_pool_daily ORDER BY market, rank_no"
             ).fetchall(),
             "research_cards": conn.execute(
-                "SELECT market, symbol, total_score, thesis FROM ads.research_card_current ORDER BY market, total_score DESC"
+                "SELECT market, symbol, total_score, thesis FROM olap.research_card_current ORDER BY market, total_score DESC"
             ).fetchall(),
             "watchlist_alerts": conn.execute(
-                "SELECT user_id, market, symbol, alert_type, severity, alert_message FROM ads.watchlist_alert_daily ORDER BY created_at, market, symbol"
+                "SELECT user_id, market, symbol, alert_type, severity, alert_message FROM olap.watchlist_alert_daily ORDER BY created_at, market, symbol"
             ).fetchall(),
             "theme_radar": conn.execute(
-                "SELECT market, theme_name, heat_score, status FROM ads.theme_radar_daily ORDER BY market, heat_score DESC"
+                "SELECT market, theme_name, heat_score, status FROM olap.theme_radar_daily ORDER BY market, heat_score DESC"
             ).fetchall(),
             "price_maps": conn.execute(
-                "SELECT market, symbol, current_price, posture_label, confidence, base_target, bear_zone FROM ads.price_map_current ORDER BY market, symbol"
+                "SELECT market, symbol, current_price, posture_label, confidence, base_target, bear_zone FROM olap.price_map_current ORDER BY market, symbol"
             ).fetchall(),
             "price_map_hit_reviews": conn.execute(
-                "SELECT market, symbol, snapshot_date, review_date, horizon_days, base_hit, bull_hit, bear_breached, hit_summary FROM ads.price_map_hit_review_daily ORDER BY market, symbol, snapshot_date DESC"
+                "SELECT market, symbol, snapshot_date, review_date, horizon_days, base_hit, bull_hit, bear_breached, hit_summary FROM olap.price_map_hit_review_daily ORDER BY market, symbol, snapshot_date DESC"
             ).fetchall(),
         }
 
@@ -3759,7 +3082,7 @@ def fetch_price_map_preview(settings: Settings, market: str, symbol: str) -> dic
             SELECT market, symbol, as_of_date, current_price, posture, posture_label, confidence,
                    base_target, bull_target, bear_zone, key_levels, scenario_paths,
                    invalidation_rules, evidence_refs, explanation
-            FROM ads.price_map_current
+            FROM olap.price_map_current
             WHERE market = %s AND symbol = %s
             """,
             (market.upper(), symbol.upper()),
@@ -3773,7 +3096,7 @@ def fetch_price_map_hit_review_preview(settings: Settings, market: str, symbol: 
             SELECT market, symbol, snapshot_date, review_date, horizon_days,
                    base_hit, bull_hit, bear_breached, max_close, min_close,
                    base_target_mid, bull_target_low, bear_zone_high, hit_summary, metrics
-            FROM ads.price_map_hit_review_daily
+            FROM olap.price_map_hit_review_daily
             WHERE market = %s AND symbol = %s
             ORDER BY snapshot_date DESC, review_date DESC
             LIMIT 20

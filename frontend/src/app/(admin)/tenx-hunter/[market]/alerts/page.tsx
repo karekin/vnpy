@@ -42,6 +42,7 @@ export default async function TenxHunterAlertsMarketPage({
         title="TenX Hunter · Alerts"
         subtitle="提醒中心只展示逻辑变化，而不是噪音通知。"
         marketLabel={marketLabel(market)}
+        pipelineStage="alerts"
       >
         <TenxDataStateCard
           title="Alert Center 暂不可用"
@@ -63,6 +64,7 @@ export default async function TenxHunterAlertsMarketPage({
       title="TenX Hunter · Alerts"
       subtitle="把值得打断注意力的逻辑变化集中起来。"
       marketLabel={`${marketLabel(market)} · Alert Center`}
+      pipelineStage="alerts"
     >
       {eventMonitor ? <EventMonitorStrip monitor={eventMonitor} marketSlug={normalizedMarketSlug} /> : null}
 

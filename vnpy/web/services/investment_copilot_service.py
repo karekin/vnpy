@@ -3,8 +3,6 @@ from __future__ import annotations
 import csv
 from datetime import datetime, timezone
 from io import StringIO
-import os
-from pathlib import Path
 import re
 
 from vnpy.web.contracts.investment_copilot import (
@@ -36,6 +34,7 @@ from vnpy.web.contracts.investment_copilot import (
     InvestmentLedgerReconciliationResponse,
     InvestmentLedgerSummaryResponse,
 )
+from vnpy.web.db import load_db_settings
 from vnpy.web.domain.investment_copilot.store import InvestmentCopilotStore
 
 
@@ -43,14 +42,7 @@ class InvestmentCopilotService:
     """Aggregation and decision-memory layer for the AI-native investment cockpit."""
 
     def __init__(self, store: InvestmentCopilotStore | None = None) -> None:
-        self._store = store or InvestmentCopilotStore(self._default_db_path())
-
-    @staticmethod
-    def _default_db_path() -> Path:
-        configured = os.getenv("VNPY_INVESTMENT_COPILOT_DB_PATH", "").strip()
-        if configured:
-            return Path(configured).expanduser()
-        return Path.home() / ".vntrader" / "investment_copilot" / "investment_copilot.db"
+        self._store = store or InvestmentCopilotStore(load_db_settings())
 
     def get_daily_brief(self, market: str = "US") -> InvestmentCopilotDailyBriefResponse:
         source_health: list[InvestmentCopilotSourceHealth] = []

@@ -3,25 +3,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
-from pathlib import Path
-import sqlite3
-from threading import Lock
 import time
 from typing import Any
 
+from psycopg.types.json import Jsonb
+
+from vnpy.web.base_store import PgStore, _jsonb
+from vnpy.web.db import DbSettings
 from vnpy.web.contracts.social_hot_stocks import SocialHotStockItem, SocialHotStocksResponse
 
 
 def _now_label() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-
-
-def _dumps(payload: Any) -> str:
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-
-
-def _loads(payload: str) -> Any:
-    return json.loads(payload)
 
 
 @dataclass(frozen=True)
@@ -46,18 +39,11 @@ class StoredSocialHotSnapshot:
         return datetime.fromtimestamp(self.fetched_at_epoch, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
-class SocialHotStocksStore:
-    """SQLite-backed ApeWisdom snapshot store."""
+class SocialHotStocksStore(PgStore):
+    """PostgreSQL-backed ApeWisdom snapshot store."""
 
-    def __init__(self, db_path: Path) -> None:
-        self._db_path = db_path
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = Lock()
-        self._ensure_schema()
-
-    @property
-    def db_path(self) -> Path:
-        return self._db_path
+    def __init__(self, settings: DbSettings) -> None:
+        super().__init__(settings)
 
     def insert_snapshot(
         self,
@@ -68,26 +54,16 @@ class SocialHotStocksStore:
         fetched_at_epoch: float | None = None,
     ) -> int:
         fetched_at = fetched_at_epoch or time.time()
-        items_json = _dumps([item.model_dump(mode="json") for item in response.items])
-        with self._lock, self._connect() as conn:
+        items_jsonb = _jsonb([item.model_dump(mode="json") for item in response.items])
+        with self._connect() as conn:
             cursor = conn.execute(
                 """
-                INSERT INTO social_hot_stock_snapshot (
-                    source,
-                    source_label,
-                    source_filter,
-                    source_url,
-                    window_hours,
-                    refresh_seconds,
-                    generated_at,
-                    fetched_at_epoch,
-                    count,
-                    provider_pages,
-                    provider_pages_fetched,
-                    item_count,
-                    items_json
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO oltp.social_hot_stock_snapshot (
+                    source, source_label, source_filter, source_url,
+                    window_hours, refresh_seconds, generated_at, fetched_at_epoch,
+                    count, provider_pages, provider_pages_fetched, item_count, items_json
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
                 """,
                 (
                     response.source,
@@ -102,11 +78,11 @@ class SocialHotStocksStore:
                     provider_pages,
                     provider_pages_fetched,
                     len(response.items),
-                    items_json,
+                    items_jsonb,
                 ),
             )
-            conn.commit()
-            return int(cursor.lastrowid)
+            row = cursor.fetchone()
+            return int(row["id"])
 
     def load_latest_snapshot(
         self,
@@ -118,12 +94,12 @@ class SocialHotStocksStore:
     ) -> StoredSocialHotSnapshot | None:
         cutoff = time.time() - max_age_seconds if max_age_seconds is not None else None
         query = (
-            "SELECT * FROM social_hot_stock_snapshot "
-            "WHERE source = ? AND source_filter = ? AND item_count >= ? "
+            "SELECT * FROM oltp.social_hot_stock_snapshot "
+            "WHERE source = %s AND source_filter = %s AND item_count >= %s "
         )
         params: list[Any] = [source, source_filter, min_item_count]
         if cutoff is not None:
-            query += "AND fetched_at_epoch >= ? "
+            query += "AND fetched_at_epoch >= %s "
             params.append(cutoff)
         query += "ORDER BY fetched_at_epoch DESC, id DESC LIMIT 1"
 
@@ -134,62 +110,28 @@ class SocialHotStocksStore:
     def prune_snapshots(self, *, source: str, source_filter: str, keep: int) -> None:
         if keep <= 0:
             return
-        with self._lock, self._connect() as conn:
+        with self._connect() as conn:
             conn.execute(
                 """
-                DELETE FROM social_hot_stock_snapshot
-                WHERE source = ?
-                  AND source_filter = ?
+                DELETE FROM oltp.social_hot_stock_snapshot
+                WHERE source = %s
+                  AND source_filter = %s
                   AND id NOT IN (
                       SELECT id
-                      FROM social_hot_stock_snapshot
-                      WHERE source = ? AND source_filter = ?
+                      FROM oltp.social_hot_stock_snapshot
+                      WHERE source = %s AND source_filter = %s
                       ORDER BY fetched_at_epoch DESC, id DESC
-                      LIMIT ?
+                      LIMIT %s
                   )
                 """,
                 (source, source_filter, source, source_filter, keep),
             )
-            conn.commit()
-
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        return conn
-
-    def _ensure_schema(self) -> None:
-        with self._lock, self._connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS social_hot_stock_snapshot (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    source TEXT NOT NULL,
-                    source_label TEXT NOT NULL,
-                    source_filter TEXT NOT NULL,
-                    source_url TEXT NOT NULL,
-                    window_hours INTEGER NOT NULL,
-                    refresh_seconds INTEGER NOT NULL,
-                    generated_at TEXT NOT NULL,
-                    fetched_at_epoch REAL NOT NULL,
-                    count INTEGER NOT NULL,
-                    provider_pages INTEGER NOT NULL,
-                    provider_pages_fetched INTEGER NOT NULL,
-                    item_count INTEGER NOT NULL,
-                    items_json TEXT NOT NULL
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_social_hot_snapshot_lookup
-                ON social_hot_stock_snapshot (source, source_filter, item_count, fetched_at_epoch DESC, id DESC)
-                """
-            )
-            conn.commit()
 
     @staticmethod
-    def _row_to_snapshot(row: sqlite3.Row) -> StoredSocialHotSnapshot:
-        raw_items = _loads(str(row["items_json"]))
+    def _row_to_snapshot(row: dict[str, Any]) -> StoredSocialHotSnapshot:
+        raw_items = row["items_json"]
+        if isinstance(raw_items, str):
+            raw_items = json.loads(raw_items)
         items = [
             SocialHotStockItem.model_validate(item)
             for item in raw_items

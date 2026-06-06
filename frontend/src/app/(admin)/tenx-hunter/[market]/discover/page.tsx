@@ -16,6 +16,7 @@ export default async function TenxHunterDiscoverMarketPage({ params }: { params:
         title="TenX Hunter · Discover"
         subtitle="围绕真实数据做候选发现，不再回退任何 mock 结果。"
         marketLabel={market === "CN" ? "A股发现" : "US Discover"}
+        pipelineStage="discover"
       >
         <TenxDataStateCard
           title="TenX 实时候选池暂不可用"

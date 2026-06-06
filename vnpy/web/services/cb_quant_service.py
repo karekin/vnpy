@@ -30,6 +30,7 @@ from typing import Any, Iterable, TypeVar
 import requests
 
 from vnpy.web.core import cb_backtest
+from vnpy.web.db import load_db_settings
 from vnpy.web.domain.cb_quant.factor_support import STRONG_SUPPORTED_FACTOR_KEYS, is_template_selectable_factor
 from vnpy.web.domain.cb_quant.strategy_factor_registry import (
     StrategyFactorKind,
@@ -374,7 +375,7 @@ class CbQuantService:
         self._leaderboard_business_dates: dict[tuple[str, str, str], str] = {}
         self._storage_dir: Path = self._backtest_service.data_dir / "_cb_quant"
         self._storage_dir.mkdir(parents=True, exist_ok=True)
-        self._store: CbQuantStore = CbQuantStore(self._storage_dir / "cb_quant.db")
+        self._store: CbQuantStore = CbQuantStore(load_db_settings())
         self._templates_file: Path = self._storage_dir / "templates.json"
 
         self._templates, self._template_configs = self._load_templates_and_configs()

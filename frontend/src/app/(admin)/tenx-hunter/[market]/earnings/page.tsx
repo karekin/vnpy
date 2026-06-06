@@ -15,6 +15,7 @@ export default async function TenxHunterEarningsMarketPage({ params }: { params:
         title="TenX Hunter · Earnings"
         subtitle="财报日历是从候选发现进入观察池前的事件筛选层，集中处理财报窗口、预期和期权链。"
         marketLabel={`${marketLabel(market)} · Earnings Calendar`}
+        pipelineStage="earnings"
       >
         <TenxEarningsLensPanel lens={lens} />
       </TenxPageShell>
@@ -26,6 +27,7 @@ export default async function TenxHunterEarningsMarketPage({ params }: { params:
         title="TenX Hunter · Earnings"
         subtitle="财报日历不再混在 Discover 里，单独承接事件窗口和财报期权验证。"
         marketLabel={`${marketLabel(market)} · Earnings Calendar`}
+        pipelineStage="earnings"
       >
         <TenxDataStateCard
           title="Earnings Calendar 实时数据暂不可用"

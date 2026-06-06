@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import json
-import sqlite3
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from vnpy.web.base_store import PgStore, _jsonb
+from vnpy.web.db import DbSettings
 from vnpy.web.contracts.investment_copilot import (
     ActionStatus,
     InvestmentCopilotActionDecisionResponse,
@@ -27,13 +26,12 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
-def _dumps(payload: Any) -> str:
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
-
-
-def _loads(raw: str | None) -> dict[str, Any]:
+def _loads(raw: Any) -> dict[str, Any]:
     if not raw:
         return {}
+    if isinstance(raw, dict):
+        return raw
+    import json
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError:
@@ -41,84 +39,21 @@ def _loads(raw: str | None) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-class InvestmentCopilotStore:
-    def __init__(self, db_path: Path) -> None:
-        self.db_path = db_path
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._ensure_schema()
-
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
-
-    def _ensure_schema(self) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS investment_copilot_policy (
-                    id TEXT PRIMARY KEY,
-                    row_json TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS investment_copilot_action_decision (
-                    action_id TEXT PRIMARY KEY,
-                    status TEXT NOT NULL,
-                    user_note TEXT NOT NULL DEFAULT '',
-                    decision_reason TEXT NOT NULL DEFAULT '',
-                    snapshot_json TEXT NOT NULL DEFAULT '{}',
-                    updated_at TEXT NOT NULL
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS investment_ledger_account (
-                    account_id TEXT PRIMARY KEY,
-                    row_json TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS investment_ledger_holding (
-                    account_id TEXT NOT NULL,
-                    symbol TEXT NOT NULL,
-                    asset_type TEXT NOT NULL,
-                    row_json TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    PRIMARY KEY (account_id, symbol, asset_type)
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS investment_ledger_cashflow (
-                    event_id TEXT PRIMARY KEY,
-                    account_id TEXT NOT NULL,
-                    event_date TEXT NOT NULL,
-                    row_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                )
-                """
-            )
+class InvestmentCopilotStore(PgStore):
+    def __init__(self, settings: DbSettings) -> None:
+        super().__init__(settings)
 
     def load_policy(self) -> InvestmentCopilotInvestorPolicy:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT row_json, updated_at FROM investment_copilot_policy WHERE id = ?",
+                "SELECT payload, updated_at FROM oltp.copilot_policy WHERE id = %s",
                 ("default",),
             ).fetchone()
 
         if row is None:
             return InvestmentCopilotInvestorPolicy()
 
-        payload = _loads(row["row_json"])
+        payload = _loads(row["payload"])
         payload["updated_at"] = row["updated_at"]
         return InvestmentCopilotInvestorPolicy.model_validate(payload)
 
@@ -130,18 +65,18 @@ class InvestmentCopilotStore:
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO investment_copilot_policy (id, row_json, updated_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET row_json = excluded.row_json, updated_at = excluded.updated_at
+                INSERT INTO oltp.copilot_policy (id, payload, updated_at)
+                VALUES (%s, %s, %s)
+                ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at
                 """,
-                ("default", _dumps(normalized.model_dump()), updated_at),
+                ("default", _jsonb(normalized.model_dump()), updated_at),
             )
         return normalized
 
     def load_action_decisions(self) -> dict[str, InvestmentCopilotActionDecisionResponse]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT action_id, status, user_note, decision_reason, updated_at FROM investment_copilot_action_decision"
+                "SELECT action_id, status, user_note, decision_reason, updated_at FROM oltp.copilot_action_decision"
             ).fetchall()
         return {
             row["action_id"]: InvestmentCopilotActionDecisionResponse(
@@ -167,9 +102,9 @@ class InvestmentCopilotStore:
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO investment_copilot_action_decision
+                INSERT INTO oltp.copilot_action_decision
                     (action_id, status, user_note, decision_reason, snapshot_json, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 ON CONFLICT(action_id) DO UPDATE SET
                     status = excluded.status,
                     user_note = excluded.user_note,
@@ -182,7 +117,7 @@ class InvestmentCopilotStore:
                     status,
                     user_note,
                     decision_reason,
-                    _dumps(snapshot or {}),
+                    _jsonb(snapshot or {}),
                     updated_at,
                 ),
             )
@@ -200,22 +135,22 @@ class InvestmentCopilotStore:
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO investment_ledger_account (account_id, row_json, updated_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(account_id) DO UPDATE SET row_json = excluded.row_json, updated_at = excluded.updated_at
+                INSERT INTO oltp.ledger_account (account_id, payload, updated_at)
+                VALUES (%s, %s, %s)
+                ON CONFLICT(account_id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at
                 """,
-                (row.account_id, _dumps(row.model_dump()), updated_at),
+                (row.account_id, _jsonb(row.model_dump()), updated_at),
             )
         return row
 
     def list_accounts(self) -> list[InvestmentLedgerAccountRow]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT row_json, updated_at FROM investment_ledger_account ORDER BY updated_at DESC, account_id"
+                "SELECT payload, updated_at FROM oltp.ledger_account ORDER BY updated_at DESC, account_id"
             ).fetchall()
         accounts: list[InvestmentLedgerAccountRow] = []
         for row in rows:
-            payload = _loads(row["row_json"])
+            payload = _loads(row["payload"])
             payload["updated_at"] = row["updated_at"]
             accounts.append(InvestmentLedgerAccountRow.model_validate(payload))
         return accounts
@@ -226,17 +161,17 @@ class InvestmentCopilotStore:
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO investment_ledger_holding (account_id, symbol, asset_type, row_json, updated_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO oltp.ledger_holding (account_id, symbol, asset_type, payload, updated_at)
+                VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT(account_id, symbol, asset_type) DO UPDATE SET
-                    row_json = excluded.row_json,
+                    payload = excluded.payload,
                     updated_at = excluded.updated_at
                 """,
                 (
                     row.account_id,
                     row.symbol.upper(),
                     row.asset_type,
-                    _dumps(row.model_dump()),
+                    _jsonb(row.model_dump()),
                     updated_at,
                 ),
             )
@@ -246,16 +181,16 @@ class InvestmentCopilotStore:
         with self._connect() as conn:
             if account_id:
                 rows = conn.execute(
-                    "SELECT row_json, updated_at FROM investment_ledger_holding WHERE account_id = ? ORDER BY updated_at DESC, symbol",
+                    "SELECT payload, updated_at FROM oltp.ledger_holding WHERE account_id = %s ORDER BY updated_at DESC, symbol",
                     (account_id,),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT row_json, updated_at FROM investment_ledger_holding ORDER BY updated_at DESC, symbol"
+                    "SELECT payload, updated_at FROM oltp.ledger_holding ORDER BY updated_at DESC, symbol"
                 ).fetchall()
         holdings: list[InvestmentLedgerHoldingRow] = []
         for row in rows:
-            payload = _loads(row["row_json"])
+            payload = _loads(row["payload"])
             payload["updated_at"] = row["updated_at"]
             holdings.append(InvestmentLedgerHoldingRow.model_validate(payload))
         return holdings
@@ -272,10 +207,10 @@ class InvestmentCopilotStore:
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO investment_ledger_cashflow (event_id, account_id, event_date, row_json, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO oltp.ledger_cashflow (event_id, account_id, event_date, payload, created_at)
+                VALUES (%s, %s, %s, %s, %s)
                 """,
-                (row.event_id, row.account_id, row.event_date, _dumps(row.model_dump()), created_at),
+                (row.event_id, row.account_id, row.event_date, _jsonb(row.model_dump()), created_at),
             )
         return row
 
@@ -283,17 +218,17 @@ class InvestmentCopilotStore:
         with self._connect() as conn:
             if account_id:
                 rows = conn.execute(
-                    "SELECT row_json, created_at FROM investment_ledger_cashflow WHERE account_id = ? ORDER BY event_date DESC, created_at DESC LIMIT ?",
+                    "SELECT payload, created_at FROM oltp.ledger_cashflow WHERE account_id = %s ORDER BY event_date DESC, created_at DESC LIMIT %s",
                     (account_id, limit),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT row_json, created_at FROM investment_ledger_cashflow ORDER BY event_date DESC, created_at DESC LIMIT ?",
+                    "SELECT payload, created_at FROM oltp.ledger_cashflow ORDER BY event_date DESC, created_at DESC LIMIT %s",
                     (limit,),
                 ).fetchall()
         cashflows: list[InvestmentLedgerCashflowRow] = []
         for row in rows:
-            payload = _loads(row["row_json"])
+            payload = _loads(row["payload"])
             payload["created_at"] = row["created_at"]
             cashflows.append(InvestmentLedgerCashflowRow.model_validate(payload))
         return cashflows

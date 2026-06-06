@@ -6,6 +6,7 @@ from threading import Lock
 from typing import Any
 
 from vnpy.web.core import cb_backtest
+from vnpy.web.db import load_db_settings
 from vnpy.web.domain.cb_quant.history_store import CbHistoryStore
 
 
@@ -27,8 +28,8 @@ class CbBacktestService:
         project_root: Path = Path(__file__).resolve().parents[3]
         # 若调用方未显式传入数据目录，则使用项目内约定的输出目录。
         self.data_dir: Path = data_dir or (project_root / "out" / "cb_quant")
-        # 历史快照统一从 SQLite 文件中读取。
-        self._history_store: CbHistoryStore = CbHistoryStore(self.data_dir / "_cb_quant" / "cb_snapshots.db")
+        # 历史快照统一从 PostgreSQL 中读取。
+        self._history_store: CbHistoryStore = CbHistoryStore(load_db_settings())
         # 历史数据按进程做缓存，避免同一个 worker 内重复全量反序列化 SQLite 快照。
         self._market_data_lock: Lock = Lock()
         self._market_data_cache: list[tuple[str, Any]] | None = None

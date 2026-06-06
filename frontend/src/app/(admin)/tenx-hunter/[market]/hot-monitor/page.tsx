@@ -22,6 +22,7 @@ export default async function TenxHotMonitorMarketPage({ params }: { params: Pro
         title="TenX Hunter · 热门美股监控"
         subtitle="ApeWisdom 社交媒体热股榜，统计 Reddit 股票社区过去 24 小时提及和点赞。"
         marketLabel={marketLabel("US")}
+        pipelineStage="hot-monitor"
       >
         <TenxHotUsMonitorClient initialResponse={null} initialError={getSocialHotErrorMessage(error)} />
       </TenxPageShell>
@@ -34,6 +35,7 @@ export default async function TenxHotMonitorMarketPage({ params }: { params: Pro
       title="TenX Hunter · 热门美股监控"
       subtitle="把 Reddit 社区提及次数、24 小时变化和点赞数压缩成一个实时社交热榜。"
       marketLabel={`${marketLabel("US")} · Hot Monitor`}
+      pipelineStage="hot-monitor"
     >
       <TenxHotUsMonitorClient initialResponse={response} />
     </TenxPageShell>

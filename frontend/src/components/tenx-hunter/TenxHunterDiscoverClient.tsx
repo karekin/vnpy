@@ -7,12 +7,12 @@ import ScrollableDataTable from "@/components/cb-quant/ScrollableDataTable";
 import StatusTag from "@/components/cb-quant/StatusTag";
 import TablePaginationBar from "@/components/cb-quant/TablePaginationBar";
 import { createDiscoverCandidate, createWatchlistEntry, getTenxErrorMessage, uploadTenxResearchReport } from "@/components/tenx-hunter/api";
-import { CandidateFlowTag, TenxFlowRail, getFlowTone } from "@/components/tenx-hunter/TenxFlowStatus";
+import { CandidateFlowTag } from "@/components/tenx-hunter/TenxFlowStatus";
 import TenxPageShell from "@/components/tenx-hunter/TenxPageShell";
 import { getRiskTone, getStageTone, TenxSectionCard } from "@/components/tenx-hunter/TenxCards";
 import type { TenxFlowStatus, TenxWorkspaceSnapshot } from "@/components/tenx-hunter/types";
 import { TableCell, TableRow } from "@/components/ui/table";
-import { BellRing, Binoculars, BookOpen, CalendarClock, CheckCircle2, Circle, FileUp, Plus, Search } from "lucide-react";
+import { BellRing, Binoculars, BookOpen, CheckCircle2, Circle, FileUp, Plus, Search } from "lucide-react";
 
 const stageOptions = ["all", "discovery", "validation", "acceleration", "crowded", "falsified"] as const;
 const flowOptions: Array<"all" | TenxFlowStatus> = ["all", "candidate", "watch-ready", "watching", "alerting", "blocked"];
@@ -124,29 +124,8 @@ export default function TenxHunterDiscoverClient({ snapshot }: TenxHunterDiscove
       market={snapshot.market}
       title="TenX Hunter · Discover"
       subtitle={snapshot.market === "CN" ? "候选池只负责发现和验证，主题归因去 Themes，确认跟踪后再进入 Watchlist。" : "候选池只负责发现和验证，主题归因去 Themes，确认跟踪后再进入 Watchlist。"}
+      pipelineStage="discover"
     >
-      <TenxFlowRail snapshot={snapshot} />
-
-      <TenxSectionCard
-        title="Earnings Node"
-        description="财报日历已提升为独立主流程节点，Discover 只负责候选发现和验证。"
-        action={
-          <Link
-            href={`/tenx-hunter/${marketPath}/earnings`}
-            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-gray-200 px-3 text-sm font-medium text-gray-700 transition hover:border-brand-300 hover:text-brand-600 dark:border-gray-700 dark:text-gray-300 dark:hover:border-brand-400 dark:hover:text-brand-300"
-          >
-            <CalendarClock className="h-4 w-4" aria-hidden="true" />
-            打开财报节点
-          </Link>
-        }
-      >
-        <div className="grid grid-cols-1 gap-3 text-sm leading-6 text-gray-600 dark:text-gray-300 lg:grid-cols-3">
-          <div className="rounded-lg border border-gray-200 p-4 dark:border-gray-800">财报短线集中查看下一次财报日、EPS / Rev 预期和事件窗口。</div>
-          <div className="rounded-lg border border-gray-200 p-4 dark:border-gray-800">财报期权集中查看期权链摘要、流动性、结构评分和方向提示。</div>
-          <div className="rounded-lg border border-gray-200 p-4 dark:border-gray-800">通过财报事件验证后，再回到 Discover / Watchlist 做候选晋级和持续跟踪。</div>
-        </div>
-      </TenxSectionCard>
-
       <TenxSectionCard
         title="Candidate Pool"
         description="个股优先的研究入口。这里判断是否具备进入观察池的资格，不承载主题页的主线叙事。"
@@ -448,22 +427,6 @@ export default function TenxHunterDiscoverClient({ snapshot }: TenxHunterDiscove
         )}
       </TenxSectionCard>
 
-      <TenxSectionCard title="Flow Exceptions" description="不让页面概念互相覆盖。">
-        <div className="grid grid-cols-1 gap-3 text-sm leading-6 text-gray-600 dark:text-gray-300 lg:grid-cols-3">
-          <div className="rounded-lg border border-gray-200 p-4 dark:border-gray-800">
-            <StatusTag label="Hot Monitor" tone={getFlowTone("hot-lead")} />
-            <p className="mt-3">只负责捕捉社交热度线索，不能自动代表基本面候选。</p>
-          </div>
-          <div className="rounded-lg border border-gray-200 p-4 dark:border-gray-800">
-            <StatusTag label="Themes" tone="blue" />
-            <p className="mt-3">只负责主线归因和主题热度，不重复展示完整候选池。</p>
-          </div>
-          <div className="rounded-lg border border-gray-200 p-4 dark:border-gray-800">
-            <StatusTag label="Watchlist" tone={getFlowTone("watching")} />
-            <p className="mt-3">只显示已确认跟踪的股票，不再混入系统兜底候选。</p>
-          </div>
-        </div>
-      </TenxSectionCard>
     </TenxPageShell>
   );
 }
