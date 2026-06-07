@@ -856,7 +856,13 @@ def _yahoo_session() -> tuple[_requests_lib.Session, str | None]:
         "Accept-Language": "en-US,en;q=0.9",
     })
 
-    # Step 1: 访问首页获取 cookie
+    # Step 1: 访问 consent 页面获取 GUC cookie（关键：没有 GUC crumb 会返回 429）
+    try:
+        session.get("https://guce.yahoo.com/consent", timeout=15)
+    except Exception:
+        pass
+
+    # Step 2: 访问首页 / quote 页面建立完整 cookie
     try:
         session.get("https://finance.yahoo.com/", timeout=15)
     except Exception:
