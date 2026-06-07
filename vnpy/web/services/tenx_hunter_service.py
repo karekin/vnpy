@@ -2568,15 +2568,18 @@ class TenxHunterService:
             ).fetchall()
             price_history_30d = [{"trade_date": str(r["trade_date"]), "close": float(r["close"]), "volume": int(r["volume"] or 0)} for r in price_rows]
 
-            # 财报日历
-            ec_row = conn.execute(
-                "SELECT next_earnings_date, days_to_earnings "
-                "FROM dwd.security_earnings_calendar_current "
-                "WHERE market = %s AND symbol = %s LIMIT 1",
-                (market, symbol),
-            ).fetchone()
-            if ec_row:
-                earnings_calendar = dict(ec_row)
+            # 财报日历（优雅降级：表不存在时跳过）
+            try:
+                ec_row = conn.execute(
+                    "SELECT next_earnings_date, days_to_earnings "
+                    "FROM dwd.security_earnings_calendar_current "
+                    "WHERE market = %s AND symbol = %s LIMIT 1",
+                    (market, symbol),
+                ).fetchone()
+                if ec_row:
+                    earnings_calendar = dict(ec_row)
+            except Exception:
+                pass  # 财报日历表可能未初始化，不影响策略分析
 
         underlying_price = price_history_30d[0]["close"] if price_history_30d else 0
 
