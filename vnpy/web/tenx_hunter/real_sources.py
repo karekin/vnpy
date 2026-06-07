@@ -846,7 +846,7 @@ def _yahoo_session() -> tuple[_requests_lib.Session, str | None]:
         return _YAHOO_SESSION, _YAHOO_CRUMB
 
     browser_ua = (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
     )
     session = _requests_lib.Session()
