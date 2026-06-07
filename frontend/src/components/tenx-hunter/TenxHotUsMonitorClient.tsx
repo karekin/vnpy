@@ -8,9 +8,9 @@ import {
   formatSignedPercent,
   type TenxHotStockRow,
 } from "@/components/tenx-hunter/hotMonitor";
-import { createDiscoverCandidate, getTenxErrorMessage } from "@/components/tenx-hunter/api";
+import { createDiscoverCandidate, getTenxErrorMessage, loadTenxWorkspaceSnapshot } from "@/components/tenx-hunter/api";
 import { getSocialHotErrorMessage, loadSocialHotStocks, type SocialHotStocksResponse } from "@/components/tenx-hunter/socialHotApi";
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ExternalLink, Flame, GitBranch, Plus, RefreshCw, Search, TrendingDown, TrendingUp } from "lucide-react";
+import { Binoculars, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, CheckCircle2, ExternalLink, Flame, GitBranch, Plus, RefreshCw, Search, TrendingDown, TrendingUp, XCircle } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 
@@ -70,12 +70,17 @@ function HotRowActions({
   row,
   onAddCandidate,
   pendingSymbol,
+  isInSystem,
+  isWatching,
 }: {
   row: TenxHotStockRow;
   onAddCandidate: (row: TenxHotStockRow) => void;
   pendingSymbol: string | null;
+  isInSystem: boolean;
+  isWatching: boolean;
 }) {
   const isPending = pendingSymbol === row.symbol;
+  const isDisabled = isPending || isInSystem;
 
   return (
     <div className="inline-flex h-10 items-center overflow-hidden rounded-lg border border-gray-200 bg-white shadow-xs dark:border-gray-700 dark:bg-gray-900">
@@ -91,13 +96,25 @@ function HotRowActions({
       <button
         type="button"
         onClick={() => onAddCandidate(row)}
-        disabled={isPending}
-        aria-label={`${row.symbol} 加入发现池`}
-        title="加入发现池"
-        className="inline-flex h-10 min-w-[104px] items-center justify-center gap-1.5 border-x border-gray-200 bg-brand-500 px-3 text-sm font-semibold text-white transition hover:bg-brand-600 disabled:cursor-not-allowed disabled:bg-brand-300 dark:border-gray-700 dark:bg-brand-500 dark:hover:bg-brand-400 dark:disabled:bg-brand-500/45"
+        disabled={isDisabled}
+        aria-label={isInSystem ? `${row.symbol} 已在${isWatching ? "观察池" : "发现池"}中` : `${row.symbol} 加入发现池`}
+        title={isInSystem ? (isWatching ? "观察池中" : "已加入发现池") : "加入发现池"}
+        className={`inline-flex h-10 min-w-[104px] items-center justify-center gap-1.5 border-x px-3 text-sm font-semibold transition
+          ${isInSystem
+            ? "cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-500"
+            : "border-gray-200 bg-brand-500 text-white hover:bg-brand-600 disabled:cursor-not-allowed disabled:bg-brand-300 dark:border-gray-700 dark:bg-brand-500 dark:hover:bg-brand-400 dark:disabled:bg-brand-500/45"
+          }`}
       >
-        <Plus className="h-4 w-4" aria-hidden="true" />
-        <span className="whitespace-nowrap">{isPending ? "加入中" : "加入发现"}</span>
+        {isWatching ? (
+          <Binoculars className="h-4 w-4" aria-hidden="true" />
+        ) : isInSystem ? (
+          <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+        ) : (
+          <Plus className="h-4 w-4" aria-hidden="true" />
+        )}
+        <span className="whitespace-nowrap">
+          {isPending ? "加入中" : isWatching ? "观察中" : isInSystem ? "已加入发现" : "加入发现"}
+        </span>
       </button>
       <Link
         href={`/tenx-hunter/us/research/${row.symbol}`}
@@ -116,10 +133,12 @@ function DesktopHotTable({
   rows,
   onAddCandidate,
   pendingSymbol,
+  getSymbolStatus,
 }: {
   rows: TenxHotStockRow[];
   onAddCandidate: (row: TenxHotStockRow) => void;
   pendingSymbol: string | null;
+  getSymbolStatus: (symbol: string) => { isInSystem: boolean; isWatching: boolean };
 }) {
   return (
     <div className="hidden overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] xl:block">
@@ -167,7 +186,7 @@ function DesktopHotTable({
               </td>
               <td className="px-5 py-4">
                 <div className="flex justify-end">
-                  <HotRowActions row={row} onAddCandidate={onAddCandidate} pendingSymbol={pendingSymbol} />
+                  <HotRowActions row={row} onAddCandidate={onAddCandidate} pendingSymbol={pendingSymbol} {...getSymbolStatus(row.symbol)} />
                 </div>
               </td>
             </tr>
@@ -182,69 +201,87 @@ function MobileHotList({
   rows,
   onAddCandidate,
   pendingSymbol,
+  getSymbolStatus,
 }: {
   rows: TenxHotStockRow[];
   onAddCandidate: (row: TenxHotStockRow) => void;
   pendingSymbol: string | null;
+  getSymbolStatus: (symbol: string) => { isInSystem: boolean; isWatching: boolean };
 }) {
   return (
     <div className="space-y-3 xl:hidden">
-      {rows.map((row) => (
-        <div key={row.symbol} className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-white/[0.03]">
-          <div className="flex items-start gap-3">
-            <HotRankBadge rank={row.rank} />
-            <div className="min-w-0 flex-1">
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <Link href={`/tenx-hunter/us/research/${row.symbol}`} className="text-base font-semibold text-gray-900 hover:text-brand-600 dark:text-white dark:hover:text-brand-300">
-                  {row.symbol}
-                </Link>
-                <span className="min-w-0 text-sm text-gray-500 [overflow-wrap:anywhere] dark:text-gray-400">{row.name}</span>
+      {rows.map((row) => {
+        const { isInSystem, isWatching } = getSymbolStatus(row.symbol);
+        const isDisabled = pendingSymbol === row.symbol || isInSystem;
+        return (
+          <div key={row.symbol} className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-white/[0.03]">
+            <div className="flex items-start gap-3">
+              <HotRankBadge rank={row.rank} />
+              <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <Link href={`/tenx-hunter/us/research/${row.symbol}`} className="text-base font-semibold text-gray-900 hover:text-brand-600 dark:text-white dark:hover:text-brand-300">
+                    {row.symbol}
+                  </Link>
+                  <span className="min-w-0 text-sm text-gray-500 [overflow-wrap:anywhere] dark:text-gray-400">{row.name}</span>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <StatusTag label={`${row.mentions} mentions`} tone="blue" />
+                  <StatusTag label={`${row.upvotes} upvotes`} tone="slate" />
+                </div>
               </div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                <StatusTag label={`${row.mentions} mentions`} tone="blue" />
-                <StatusTag label={`${row.upvotes} upvotes`} tone="slate" />
+              <div className="text-right">
+                <div className="text-lg font-semibold text-gray-900 dark:text-white">{row.heatScore}</div>
+                <div className={`text-xs font-medium ${changeTone(row.mentionChange)}`}>{formatSignedNumber(row.mentionChange)}</div>
               </div>
             </div>
-            <div className="text-right">
-              <div className="text-lg font-semibold text-gray-900 dark:text-white">{row.heatScore}</div>
-              <div className={`text-xs font-medium ${changeTone(row.mentionChange)}`}>{formatSignedNumber(row.mentionChange)}</div>
+            <div className="mt-4 grid grid-cols-3 gap-3 text-sm">
+              <div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">24h 变化</div>
+                <div className={`mt-1 font-semibold ${changeTone(row.mentionChange)}`}>{formatSignedPercent(row.mentionChangePct)}</div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">{formatSignedNumber(row.mentionChange)}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">点赞数</div>
+                <div className="mt-1 font-semibold text-gray-900 dark:text-white">{formatCompactNumber(row.upvotes)}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">排名变化</div>
+                <div className={`mt-1 font-semibold ${changeTone(row.rankChange)}`}>{formatSignedNumber(row.rankChange)}</div>
+              </div>
+            </div>
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => onAddCandidate(row)}
+                disabled={isDisabled}
+                aria-label={isInSystem ? `${row.symbol} 已在${isWatching ? "观察池" : "发现池"}中` : `${row.symbol} 加入发现池`}
+                title={isInSystem ? (isWatching ? "观察池中" : "已加入发现池") : "加入发现池"}
+                className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition
+                  ${isInSystem
+                    ? "cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-500"
+                    : "border-gray-200 text-gray-700 hover:border-brand-300 hover:text-brand-600 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:border-brand-400 dark:hover:text-brand-300"
+                  }`}
+              >
+                {isWatching ? (
+                  <Binoculars className="h-4 w-4" aria-hidden="true" />
+                ) : isInSystem ? (
+                  <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+                ) : (
+                  <Plus className="h-4 w-4" aria-hidden="true" />
+                )}
+                {pendingSymbol === row.symbol ? "加入中" : isWatching ? "观察中" : isInSystem ? "已加入发现" : "加入发现"}
+              </button>
+              <Link
+                href={`/tenx-hunter/us/discover?symbol=${encodeURIComponent(row.symbol)}`}
+                className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 transition hover:border-brand-300 hover:text-brand-600 dark:border-gray-700 dark:text-gray-300 dark:hover:border-brand-400 dark:hover:text-brand-300"
+              >
+                <GitBranch className="h-4 w-4" aria-hidden="true" />
+                进入候选验证
+              </Link>
             </div>
           </div>
-          <div className="mt-4 grid grid-cols-3 gap-3 text-sm">
-            <div>
-              <div className="text-xs text-gray-500 dark:text-gray-400">24h 变化</div>
-              <div className={`mt-1 font-semibold ${changeTone(row.mentionChange)}`}>{formatSignedPercent(row.mentionChangePct)}</div>
-              <div className="text-xs text-gray-500 dark:text-gray-400">{formatSignedNumber(row.mentionChange)}</div>
-            </div>
-            <div>
-              <div className="text-xs text-gray-500 dark:text-gray-400">点赞数</div>
-              <div className="mt-1 font-semibold text-gray-900 dark:text-white">{formatCompactNumber(row.upvotes)}</div>
-            </div>
-            <div>
-              <div className="text-xs text-gray-500 dark:text-gray-400">排名变化</div>
-              <div className={`mt-1 font-semibold ${changeTone(row.rankChange)}`}>{formatSignedNumber(row.rankChange)}</div>
-            </div>
-          </div>
-          <div className="mt-4 flex flex-wrap justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => onAddCandidate(row)}
-              disabled={pendingSymbol === row.symbol}
-              className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 transition hover:border-brand-300 hover:text-brand-600 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:border-brand-400 dark:hover:text-brand-300"
-            >
-              <Plus className="h-4 w-4" aria-hidden="true" />
-              {pendingSymbol === row.symbol ? "加入中" : "加入发现"}
-            </button>
-            <Link
-              href={`/tenx-hunter/us/discover?symbol=${encodeURIComponent(row.symbol)}`}
-              className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 transition hover:border-brand-300 hover:text-brand-600 dark:border-gray-700 dark:text-gray-300 dark:hover:border-brand-400 dark:hover:text-brand-300"
-            >
-              <GitBranch className="h-4 w-4" aria-hidden="true" />
-              进入候选验证
-            </Link>
-          </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -384,7 +421,9 @@ export default function TenxHotUsMonitorClient({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(initialError);
   const [pendingCandidateSymbol, setPendingCandidateSymbol] = useState<string | null>(null);
-  const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [discoverSymbols, setDiscoverSymbols] = useState<Set<string>>(new Set());
+  const [watchlistSymbols, setWatchlistSymbols] = useState<Set<string>>(new Set());
+  const [toast, setToast] = useState<{ variant: "success" | "error"; title: string; description?: string } | null>(null);
   const rows = useMemo(() => (response ? buildHotStockRows(response) : []), [response]);
   const topRow = rows[0];
   const risingCount = rows.filter((row) => (row.mentionChange ?? 0) > 0).length;
@@ -417,9 +456,38 @@ export default function TenxHotUsMonitorClient({
     void loadPage(1, pageSize);
   }, [loadPage]);
 
+  // ── Toast 通知 ──────────────────────────────────────────
+  const showToast = useCallback((variant: "success" | "error", title: string, description?: string) => {
+    setToast({ variant, title, description });
+    window.setTimeout(() => setToast(null), 3000);
+  }, []);
+
+  // ── 加载已知 symbol（候选池 + 观察池）────────────────────
+  useEffect(() => {
+    let cancelled = false;
+    async function loadKnownSymbols() {
+      try {
+        const snapshot = await loadTenxWorkspaceSnapshot("US");
+        if (!cancelled) {
+          setDiscoverSymbols(new Set(snapshot.candidates.map((c) => c.symbol.toUpperCase())));
+          setWatchlistSymbols(new Set(snapshot.watchlist.map((w) => w.symbol.toUpperCase())));
+        }
+      } catch {
+        // 静默降级：按钮不显示"已加入"状态
+      }
+    }
+    void loadKnownSymbols();
+    return () => { cancelled = true; };
+  }, []);
+
+  // ── 判断标的在系统中的状态 ────────────────────────────────
+  const getSymbolStatus = useCallback((symbol: string) => ({
+    isInSystem: discoverSymbols.has(symbol.toUpperCase()),
+    isWatching: watchlistSymbols.has(symbol.toUpperCase()),
+  }), [discoverSymbols, watchlistSymbols]);
+
   const addToDiscover = useCallback(async (row: TenxHotStockRow) => {
     setPendingCandidateSymbol(row.symbol);
-    setActionMessage(null);
     try {
       const result = await createDiscoverCandidate("US", {
         symbol: row.symbol,
@@ -440,13 +508,14 @@ export default function TenxHotUsMonitorClient({
           heatScore: row.heatScore,
         },
       });
-      setActionMessage(result.message);
+      showToast("success", "已加入发现池", result.message);
+      setDiscoverSymbols((prev) => new Set(prev).add(row.symbol.toUpperCase()));
     } catch (candidateError) {
-      setActionMessage(getTenxErrorMessage(candidateError));
+      showToast("error", "加入失败", getTenxErrorMessage(candidateError));
     } finally {
       setPendingCandidateSymbol(null);
     }
-  }, []);
+  }, [showToast]);
 
   useEffect(() => {
     const intervalMs = Math.max(60, response?.refreshSeconds ?? 300) * 1000;
@@ -528,18 +597,13 @@ export default function TenxHotUsMonitorClient({
               刷新失败：{error}
             </div>
           ) : null}
-          {actionMessage ? (
-            <div className="mt-4 rounded-xl border border-brand-100 bg-brand-50 px-4 py-3 text-sm text-brand-700 dark:border-brand-500/20 dark:bg-brand-500/10 dark:text-brand-200">
-              {actionMessage}
-            </div>
-          ) : null}
         </div>
 
         <div className="p-5 xl:p-6">
           {rows.length ? (
             <>
-              <DesktopHotTable rows={rows} onAddCandidate={(row) => void addToDiscover(row)} pendingSymbol={pendingCandidateSymbol} />
-              <MobileHotList rows={rows} onAddCandidate={(row) => void addToDiscover(row)} pendingSymbol={pendingCandidateSymbol} />
+              <DesktopHotTable rows={rows} onAddCandidate={(row) => void addToDiscover(row)} pendingSymbol={pendingCandidateSymbol} getSymbolStatus={getSymbolStatus} />
+              <MobileHotList rows={rows} onAddCandidate={(row) => void addToDiscover(row)} pendingSymbol={pendingCandidateSymbol} getSymbolStatus={getSymbolStatus} />
               {response ? (
                 <HotPaginationBar
                   response={response}
@@ -609,6 +673,27 @@ export default function TenxHotUsMonitorClient({
           </div>
         </div>
       </section>
+
+      {/* ── Toast 通知浮层 ────────────────────────────────── */}
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-50 animate-in fade-in slide-in-from-bottom-4 duration-300">
+          <div className={`flex items-center gap-3 rounded-lg border-b-4 bg-white px-4 py-3 shadow-lg dark:bg-[#1E2634] ${
+            toast.variant === "success" ? "border-success-500" : "border-error-500"
+          }`}>
+            <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
+              toast.variant === "success" ? "bg-success-50 text-success-500" : "bg-error-50 text-error-500"
+            }`}>
+              {toast.variant === "success" ? <CheckCircle2 className="h-5 w-5" /> : <XCircle className="h-5 w-5" />}
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-gray-800 dark:text-white/90">{toast.title}</p>
+              {toast.description && (
+                <p className="mt-0.5 text-xs text-gray-600 dark:text-white/70">{toast.description}</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

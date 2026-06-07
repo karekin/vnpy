@@ -493,6 +493,49 @@ export type TenxEarningsLens = {
   notes: string[];
 };
 
+/* ── Earnings Event Desk（市场维度全量） ── */
+
+export type TenxEarningsDeskMetrics = {
+  totalEvents: number;
+  p1Count: number;
+  optionReadableCount: number;
+  avgExpectedMove: number | null;
+};
+
+export type TenxEarningsDeskEvent = {
+  market: TenxMarket;
+  symbol: string;
+  name: string;
+  sector: string;
+  nextEarningsDate: string | null;
+  daysToEarnings: number | null;
+  fiscalPeriod: string;
+  timeOfDay: string;
+  epsEstimate: number | null;
+  revenueEstimate: number | null;
+  currency: string;
+  dataQualityFlag: string;
+  sourceVendor: string;
+  avgImpliedVolatility: number | null;
+  maxPainStrike: number | null;
+  liquidityScore: number | null;
+  flowScore: number | null;
+  optionSelectionScore: number | null;
+  flowSentiment: string;
+  optionSignal: string;
+  priority: TenxAlertSeverity;
+  actionLabel: string;
+};
+
+export type TenxEarningsDeskData = {
+  market: TenxMarket;
+  snapshotAt: string;
+  freshness: TenxFreshness;
+  metrics: TenxEarningsDeskMetrics;
+  events: TenxEarningsDeskEvent[];
+  notes: string[];
+};
+
 export type TenxAlertItem = {
   id: string;
   market: TenxMarket;

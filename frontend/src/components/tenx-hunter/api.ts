@@ -3,6 +3,9 @@ import type {
   TenxAlertItem,
   TenxAlertSeverity,
   TenxCandidate,
+  TenxEarningsDeskData,
+  TenxEarningsDeskEvent,
+  TenxEarningsDeskMetrics,
   TenxEarningsLens,
   TenxEventMonitor,
   TenxFreshness,
@@ -408,6 +411,47 @@ type TenxEarningsLensApi = {
   freshness: TenxApiFreshness;
   shortline: TenxEarningsShortlineApi[];
   options: TenxEarningsOptionApi[];
+  notes: string[];
+};
+
+type TenxEarningsDeskEventApi = {
+  market: TenxMarket;
+  symbol: string;
+  name: string;
+  sector: string;
+  next_earnings_date: string | null;
+  days_to_earnings: number | null;
+  fiscal_period: string;
+  time_of_day: string;
+  eps_estimate: number | null;
+  revenue_estimate: number | null;
+  currency: string;
+  data_quality_flag: string;
+  source_vendor: string;
+  avg_implied_volatility: number | null;
+  max_pain_strike: number | null;
+  liquidity_score: number | null;
+  flow_score: number | null;
+  option_selection_score: number | null;
+  flow_sentiment: string;
+  option_signal: string;
+  priority: TenxAlertSeverity;
+  action_label: string;
+};
+
+type TenxEarningsDeskMetricsApi = {
+  total_events: number;
+  p1_count: number;
+  option_readable_count: number;
+  avg_expected_move: number | null;
+};
+
+type TenxEarningsDeskApi = {
+  market: TenxMarket;
+  snapshot_at: string;
+  freshness: TenxApiFreshness;
+  metrics: TenxEarningsDeskMetricsApi;
+  events: TenxEarningsDeskEventApi[];
   notes: string[];
 };
 
@@ -1087,6 +1131,56 @@ export async function loadTenxEarningsLens(market: TenxMarket): Promise<TenxEarn
     buildUrl(`/api/v1/tenx-hunter/earnings-lens?market=${encodeURIComponent(toMarketParam(market))}`),
   );
   return mapEarningsLens(payload);
+}
+
+function mapEarningsDeskMetrics(payload: TenxEarningsDeskMetricsApi): TenxEarningsDeskMetrics {
+  return {
+    totalEvents: payload.total_events,
+    p1Count: payload.p1_count,
+    optionReadableCount: payload.option_readable_count,
+    avgExpectedMove: payload.avg_expected_move,
+  };
+}
+
+function mapEarningsDeskEvent(payload: TenxEarningsDeskEventApi): TenxEarningsDeskEvent {
+  return {
+    market: payload.market,
+    symbol: payload.symbol,
+    name: payload.name,
+    sector: payload.sector,
+    nextEarningsDate: payload.next_earnings_date,
+    daysToEarnings: payload.days_to_earnings,
+    fiscalPeriod: payload.fiscal_period,
+    timeOfDay: payload.time_of_day,
+    epsEstimate: payload.eps_estimate,
+    revenueEstimate: payload.revenue_estimate,
+    currency: payload.currency,
+    dataQualityFlag: payload.data_quality_flag,
+    sourceVendor: payload.source_vendor,
+    avgImpliedVolatility: payload.avg_implied_volatility,
+    maxPainStrike: payload.max_pain_strike,
+    liquidityScore: payload.liquidity_score,
+    flowScore: payload.flow_score,
+    optionSelectionScore: payload.option_selection_score,
+    flowSentiment: payload.flow_sentiment,
+    optionSignal: payload.option_signal,
+    priority: payload.priority,
+    actionLabel: payload.action_label,
+  };
+}
+
+export async function loadTenxEarningsDesk(market: TenxMarket, horizon = 45): Promise<TenxEarningsDeskData> {
+  const payload = await requestJson<TenxEarningsDeskApi>(
+    buildUrl(`/api/v1/tenx-hunter/earnings-desk?market=${encodeURIComponent(toMarketParam(market))}&horizon=${horizon}`),
+  );
+  return {
+    market: payload.market,
+    snapshotAt: payload.snapshot_at,
+    freshness: mapFreshness(payload.freshness),
+    metrics: mapEarningsDeskMetrics(payload.metrics),
+    events: payload.events.map(mapEarningsDeskEvent),
+    notes: payload.notes,
+  };
 }
 
 export async function loadTenxMarketSentiment(market: TenxMarket): Promise<TenxMarketSentiment> {

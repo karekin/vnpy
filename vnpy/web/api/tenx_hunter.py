@@ -12,6 +12,7 @@ from vnpy.web.contracts.tenx_hunter import (
     TenxDeerFlowHistoryRequest,
     TenxDeerFlowSearchRequest,
     TenxDiscoverCandidateCreateRequest,
+    TenxEarningsDeskResponse,
     TenxEarningsLensResponse,
     TenxEventMonitorResponse,
     TenxMarketSentimentResponse,
@@ -94,6 +95,11 @@ def get_event_monitor(market: str = Query("US")) -> TenxEventMonitorResponse:
 @router.get("/earnings-lens", response_model=TenxEarningsLensResponse)
 def get_earnings_lens(market: str = Query("US")) -> TenxEarningsLensResponse:
     return services.tenx_service.get_earnings_lens(market)
+
+
+@router.get("/earnings-desk", response_model=TenxEarningsDeskResponse)
+def get_earnings_desk(market: str = Query("US"), horizon: int = Query(45)) -> TenxEarningsDeskResponse:
+    return services.tenx_service.get_earnings_desk(market, horizon_days=horizon)
 
 
 @router.post("/event-monitor/refresh", response_model=TenxEventMonitorResponse)

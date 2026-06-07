@@ -14,6 +14,9 @@ from vnpy.web.contracts.tenx_hunter import (
     TenxAlertItemRow,
     TenxCandidateRow,
     TenxDiscoverCandidateCreateRequest,
+    TenxEarningsDeskEventRow,
+    TenxEarningsDeskMetrics,
+    TenxEarningsDeskResponse,
     TenxEarningsLensResponse,
     TenxEarningsOptionRow,
     TenxEarningsShortlineRow,
@@ -1229,6 +1232,175 @@ class TenxHunterService:
             options=option_items,
             notes=notes,
         )
+
+    # ── Earnings Event Desk（市场维度全量，不依赖用户持仓） ────────────
+
+    def get_earnings_desk(self, market: str | None = None, horizon_days: int = 45) -> TenxEarningsDeskResponse:
+        """ADS 层：聚合全市场即将到来的财报事件，LEFT JOIN 期权摘要。"""
+        market = self._normalize_market(market, self._settings)
+        settings = self._settings
+        notes: list[str] = []
+
+        if market != "US":
+            notes.append("财报事件看板当前仅支持 US 市场。")
+            freshness = self._build_freshness(market, settings)
+            return TenxEarningsDeskResponse(
+                market="US" if market == "US" else "CN",
+                snapshot_at=datetime.now(timezone.utc).isoformat(),
+                freshness=freshness,
+                metrics=TenxEarningsDeskMetrics(),
+                events=[],
+                notes=notes,
+            )
+
+        today = date.today()
+        horizon = today + timedelta(days=horizon_days)
+        snapshot_at = datetime.now(timezone.utc).isoformat()
+        freshness = self._build_freshness(market, settings)
+
+        with connect(settings) as conn:
+            # 检查表是否存在
+            earnings_check = conn.execute(
+                "SELECT to_regclass('olap.security_earnings_calendar_current') AS t"
+            ).fetchone()
+            if not earnings_check or not earnings_check["t"]:
+                notes.append("财报日历表尚未初始化，请先运行 pipeline bootstrap。")
+                return TenxEarningsDeskResponse(
+                    market="US", snapshot_at=snapshot_at, freshness=freshness,
+                    metrics=TenxEarningsDeskMetrics(), events=[], notes=notes,
+                )
+
+            # 查询全市场财报事件 + LEFT JOIN dim.security + 期权摘要
+            rows = conn.execute(
+                """
+                SELECT
+                    e.market,
+                    e.symbol,
+                    e.next_earnings_date,
+                    e.days_to_earnings,
+                    e.fiscal_period,
+                    e.time_of_day,
+                    e.eps_estimate,
+                    e.revenue_estimate,
+                    COALESCE(e.currency, 'USD') AS currency,
+                    e.data_quality_flag,
+                    e.source_vendor,
+                    s.company_name,
+                    s.sector,
+                    o.avg_implied_volatility,
+                    o.max_pain_strike,
+                    o.liquidity_score,
+                    o.flow_score,
+                    o.selection_score,
+                    o.flow_sentiment,
+                    o.data_quality_flag AS option_quality
+                FROM olap.security_earnings_calendar_current e
+                LEFT JOIN dim.security s
+                  ON s.symbol = e.symbol AND s.market = e.market
+                LEFT JOIN LATERAL (
+                    SELECT
+                        s2.avg_implied_volatility,
+                        s2.max_pain_strike,
+                        s2.liquidity_score,
+                        s2.flow_score,
+                        s2.selection_score,
+                        s2.flow_sentiment,
+                        s2.data_quality_flag
+                    FROM olap.security_option_chain_summary_daily s2
+                    WHERE s2.symbol = e.symbol AND s2.market = e.market
+                    ORDER BY s2.trade_date DESC
+                    LIMIT 1
+                ) o ON TRUE
+                WHERE e.market = %s
+                  AND e.next_earnings_date >= %s
+                  AND e.next_earnings_date <= %s
+                  AND e.data_quality_flag IN ('ok', 'partial')
+                ORDER BY e.days_to_earnings ASC, e.symbol
+                """,
+                (market, today, horizon),
+            ).fetchall()
+
+        events: list[TenxEarningsDeskEventRow] = []
+        for row in rows:
+            days_to = self._as_int(row.get("days_to_earnings"))
+            priority: str = "P1" if days_to is not None and days_to <= 3 else "P2"
+            option_signal, action = self._earnings_desk_option_signal(row)
+            events.append(TenxEarningsDeskEventRow(
+                market="US",
+                symbol=str(row["symbol"]),
+                name=str(row.get("company_name") or ""),
+                sector=str(row.get("sector") or ""),
+                next_earnings_date=self._format_date(row.get("next_earnings_date")) or None,
+                days_to_earnings=days_to,
+                fiscal_period=str(row.get("fiscal_period") or ""),
+                time_of_day=str(row.get("time_of_day") or ""),
+                eps_estimate=self._as_float(row.get("eps_estimate")),
+                revenue_estimate=self._as_float(row.get("revenue_estimate")),
+                currency=str(row.get("currency") or "USD"),
+                data_quality_flag=str(row.get("data_quality_flag") or "unavailable"),
+                source_vendor=str(row.get("source_vendor") or ""),
+                avg_implied_volatility=self._as_float(row.get("avg_implied_volatility")),
+                max_pain_strike=self._as_float(row.get("max_pain_strike")),
+                liquidity_score=self._as_float(row.get("liquidity_score")),
+                flow_score=self._as_float(row.get("flow_score")),
+                option_selection_score=self._as_float(row.get("selection_score")),
+                flow_sentiment=str(row.get("flow_sentiment") or "unknown"),
+                option_signal=option_signal,
+                priority=priority,
+                action_label=action,
+            ))
+
+        # 统计指标
+        p1_count = sum(1 for ev in events if ev.priority == "P1")
+        option_readable = sum(1 for ev in events if ev.avg_implied_volatility is not None)
+        ivs = [ev.avg_implied_volatility for ev in events if ev.avg_implied_volatility is not None]
+        avg_move: float | None = None
+        if ivs:
+            avg_move = sum(ivs) / len(ivs)
+
+        metrics = TenxEarningsDeskMetrics(
+            total_events=len(events),
+            p1_count=p1_count,
+            option_readable_count=option_readable,
+            avg_expected_move=avg_move,
+        )
+
+        return TenxEarningsDeskResponse(
+            market="US",
+            snapshot_at=snapshot_at,
+            freshness=freshness,
+            metrics=metrics,
+            events=events,
+            notes=notes,
+        )
+
+    @staticmethod
+    def _earnings_desk_option_signal(row: dict[str, Any]) -> tuple[str, str]:
+        """根据期权数据生成信号和行动标签。"""
+        sel = row.get("selection_score")
+        flow = row.get("flow_sentiment")
+        quality = row.get("option_quality")
+
+        if quality != "ok" or sel is None:
+            return "期权数据缺失", "补期权链"
+
+        sel_val = float(sel)
+        if flow == "bullish":
+            signal = "偏多，资金流看涨"
+            action = "关注看涨价差"
+        elif flow == "bearish":
+            signal = "偏空，资金流看跌"
+            action = "关注看跌价差"
+        else:
+            signal = "波动预期，方向不明"
+            action = "关注跨式/宽跨式"
+
+        if sel_val >= 80:
+            action = f"高分 {action}"
+        elif sel_val < 50:
+            signal += "，期权分偏低"
+
+        return signal, action
 
     def _earnings_shortline_row(
         self,

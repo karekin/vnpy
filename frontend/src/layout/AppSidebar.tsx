@@ -31,7 +31,6 @@ const navItems: NavItem[] = [
     subItems: [
       { name: "Hot Monitor", path: "/tenx-hunter/us/hot-monitor" },
       { name: "Discover", path: "/tenx-hunter/us/discover" },
-      { name: "Earnings", path: "/tenx-hunter/us/earnings" },
       { name: "Watchlist", path: "/tenx-hunter/us/watchlist" },
       { name: "Alerts", path: "/tenx-hunter/us/alerts" },
       { name: "Themes", path: "/tenx-hunter/us/themes" },

@@ -449,6 +449,50 @@ class TenxEarningsLensResponse(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class TenxEarningsDeskMetrics(BaseModel):
+    """Earnings Event Desk 顶部指标卡片"""
+    total_events: int = 0
+    p1_count: int = 0
+    option_readable_count: int = 0
+    avg_expected_move: float | None = None
+
+
+class TenxEarningsDeskEventRow(BaseModel):
+    """Earnings Event Desk 单条财报事件（ADS 层产出，不依赖用户持仓）"""
+    market: TenxMarket
+    symbol: str
+    name: str = ""
+    sector: str = ""
+    next_earnings_date: str | None = None
+    days_to_earnings: int | None = None
+    fiscal_period: str = ""
+    time_of_day: str = ""
+    eps_estimate: float | None = None
+    revenue_estimate: float | None = None
+    currency: str = "USD"
+    data_quality_flag: str = "unavailable"
+    source_vendor: str = ""
+    avg_implied_volatility: float | None = None
+    max_pain_strike: float | None = None
+    liquidity_score: float | None = None
+    flow_score: float | None = None
+    option_selection_score: float | None = None
+    flow_sentiment: str = "unknown"
+    option_signal: str = ""
+    priority: TenxAlertSeverity = "P2"
+    action_label: str = ""
+
+
+class TenxEarningsDeskResponse(BaseModel):
+    """Earnings Event Desk 看板响应（市场维度全量财报事件）"""
+    market: TenxMarket
+    snapshot_at: str
+    freshness: TenxFreshnessRow
+    metrics: TenxEarningsDeskMetrics
+    events: list[TenxEarningsDeskEventRow]
+    notes: list[str] = Field(default_factory=list)
+
+
 class TenxEvidenceItemRow(BaseModel):
     id: str
     source: str

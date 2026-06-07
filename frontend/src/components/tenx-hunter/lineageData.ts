@@ -79,25 +79,31 @@ const hotMonitor: LineageStage = {
   ],
 };
 
-/* ────────────────────── Discover ────────────────────── */
+/* ────────────────────── Discover（含 Earnings）────────────────────── */
 
 const discover: LineageStage = {
   title: "Discover",
-  summary: "候选池核心：对纳入的标的进行多因子评分、生命周期管理和晋级门槛检查。",
+  summary: "候选池核心：多因子评分、生命周期管理、晋级门槛检查，以及财报窗口和期权链事件验证。",
   upstream: [
     { label: "Hot Monitor 线索", desc: "从热榜手动引入，写入 oltp.user_discover_candidate_current。", store: "oltp.social_hot_stock_snapshot" },
     { label: "手动纳入", desc: "用户提交 symbol + thesis + 可选投研报告，source=manual。" },
     { label: "Universe Buckets", desc: "预定义股票池（AI Infra、Cloud、Cybersecurity、Semiconductors）。" },
     { label: "行情与基本面", desc: "每日价格写入 olap.us_equity_price_daily_raw，财务数据写入 olap.security_financial_statement_raw。", store: "olap.us_equity_price_daily_raw" },
+    { label: "财报日历", desc: "原始数据入 olap.us_earnings_calendar_raw，清洗后写 olap.security_earnings_calendar_current。", store: "olap.us_earnings_calendar_raw" },
+    { label: "期权链数据", desc: "原始合约数据入 olap.us_option_chain_raw，聚合摘要写 olap.security_option_chain_summary_daily。", store: "olap.security_option_chain_summary_daily" },
+    { label: "分析师预期", desc: "EPS/Revenue 预期写入 olap.us_analyst_estimate_raw，汇总到 olap.security_estimate_current。", store: "olap.security_estimate_current" },
   ],
   processing: {
-    summary: "ODS → DWD → DWS → ADS 四层管道，多因子评分 + 晋级门槛检查。",
+    summary: "ODS → DWD → DWS → ADS 四层管道，多因子评分 + 晋级门槛检查 + 财报期权事件验证。",
     steps: [
       "ODS 层：原始行情 (olap.us_equity_price_daily_raw) 和财报 (olap.security_financial_statement_raw) 入库",
       "DWD 层：生成 olap.security_market_daily（日收益率、市值）和 olap.security_price_technical_daily（MA/ATR/波动率）",
       "DWS 层：计算 olap.security_feature_daily（因子特征）和 olap.security_score_component_daily（8 因子评分）",
       "ADS 层：产出 olap.candidate_pool_daily（排序候选）和 olap.research_card_current（研究卡片）",
       "OLTP 层：用户操作写入 oltp.user_discover_candidate_current，晋级检查结果更新 flowStatus",
+      "财报清洗：olap.us_earnings_calendar_raw → olap.security_earnings_calendar_current，按 daysToEarnings 生成 shortlineSignal",
+      "期权聚合：olap.us_option_chain_raw → olap.security_option_chain_summary_daily，计算流动性、资金流和结构评分",
+      "综合 optionSelectionScore 输出期权交易信号",
     ],
   },
   outputs: [
@@ -106,56 +112,29 @@ const discover: LineageStage = {
     { label: "研究卡片", desc: "olap.research_card_current 存储论文、证据和风险条目。", store: "olap.research_card_current", to: "research" },
     { label: "主题热度", desc: "olap.theme_heat_daily 按主题聚合热度和龙头标的。", store: "olap.theme_heat_daily", to: "themes" },
     { label: "可晋级标的", desc: "oltp.user_discover_candidate_current 中 flowStatus=watch-ready 的候选。", store: "oltp.user_discover_candidate_current", to: "watchlist" },
+    { label: "财报短线", desc: "基于 olap.security_earnings_calendar_current 生成的日程和行动建议。", store: "olap.security_earnings_calendar_current", to: "watchlist" },
+    { label: "期权摘要", desc: "olap.security_option_chain_summary_daily 提供流动性、资金流和信号评分。", store: "olap.security_option_chain_summary_daily", to: "watchlist" },
   ],
   models: [
     { name: "dim.security", schema: "dim", fields: ["security_id", "symbol", "company_name", "sector", "industry"] },
     { name: "olap.security_score_component_daily", schema: "olap", fields: ["security_id", "trade_date", "growth_score", "quality_score", "total_score", "stage"] },
     { name: "olap.candidate_pool_daily", schema: "olap", fields: ["security_id", "trade_date", "rank_no", "total_score", "stage", "risk_tags"] },
     { name: "oltp.user_discover_candidate_current", schema: "oltp", fields: ["user_id", "symbol", "source", "stage", "theme", "thesis", "score"] },
-  ],
-  apis: [
-    { method: "GET", path: "/api/v1/tenx-hunter/workspace", desc: "加载完整工作区快照（候选+主题+观察+时间线）" },
-    { method: "POST", path: "/api/v1/tenx-hunter/discover", desc: "手动新增候选标的" },
-    { method: "GET", path: "/api/v1/tenx-hunter/research/:symbol", desc: "获取单个标的的深度研究卡片" },
-  ],
-};
-
-/* ────────────────────── Earnings ────────────────────── */
-
-const earnings: LineageStage = {
-  title: "Earnings",
-  summary: "财报日历与期权链分析，作为进入观察池前的事件验证层。",
-  upstream: [
-    { label: "候选池标的", desc: "来自 olap.candidate_pool_daily 的候选 symbol，按财报临近程度排序。", store: "olap.candidate_pool_daily" },
-    { label: "财报日历", desc: "原始数据入 olap.us_earnings_calendar_raw，清洗后写 olap.security_earnings_calendar_current。", store: "olap.us_earnings_calendar_raw" },
-    { label: "期权链数据", desc: "原始合约数据入 olap.us_option_chain_raw，聚合摘要写 olap.security_option_chain_summary_daily。", store: "olap.security_option_chain_summary_daily" },
-    { label: "分析师预期", desc: "EPS/Revenue 预期写入 olap.us_analyst_estimate_raw，汇总到 olap.security_estimate_current。", store: "olap.security_estimate_current" },
-  ],
-  processing: {
-    summary: "财报时间窗口评分 + 期权结构分析，数据全链路在 olap 层流转。",
-    steps: [
-      "olap.us_earnings_calendar_raw → olap.security_earnings_calendar_current：清洗财报日期和预期",
-      "按 daysToEarnings 排序，生成 shortlineSignal：优先复核 → 准备清单 → 观察 → 低频跟踪",
-      "olap.us_option_chain_raw → olap.security_option_chain_summary_daily：聚合流动性、资金流和结构评分",
-      "C/P Volume & OI 比率、maxPain、impliedVolatility 汇总",
-      "综合 optionSelectionScore 输出期权交易信号",
-    ],
-  },
-  outputs: [
-    { label: "财报短线", desc: "基于 olap.security_earnings_calendar_current 生成的日程和行动建议。", store: "olap.security_earnings_calendar_current", to: "watchlist" },
-    { label: "期权摘要", desc: "olap.security_option_chain_summary_daily 提供流动性、资金流和信号评分。", store: "olap.security_option_chain_summary_daily", to: "watchlist" },
-  ],
-  models: [
     { name: "olap.us_earnings_calendar_raw", schema: "olap", fields: ["event_id", "symbol", "earnings_date", "eps_estimate", "revenue_estimate"] },
     { name: "olap.security_earnings_calendar_current", schema: "olap", fields: ["security_id", "next_earnings_date", "days_to_earnings", "eps_estimate"] },
     { name: "olap.security_option_chain_summary_daily", schema: "olap", fields: ["symbol", "trade_date", "liquidity_score", "flow_score", "selection_score"] },
   ],
   apis: [
+    { method: "GET", path: "/api/v1/tenx-hunter/workspace", desc: "加载完整工作区快照（候选+主题+观察+时间线）" },
+    { method: "POST", path: "/api/v1/tenx-hunter/discover", desc: "手动新增候选标的" },
+    { method: "GET", path: "/api/v1/tenx-hunter/research/:symbol", desc: "获取单个标的的深度研究卡片" },
     { method: "GET", path: "/api/v1/tenx-hunter/earnings-lens", desc: "加载财报日历和期权分析数据" },
   ],
 };
 
 /* ────────────────────── Watchlist ────────────────────── */
+
+/* 注意：Earnings 已合并到 Discover 节点，财报/期权的血缘数据统一在 Discover 中展示。 */
 
 const watchlist: LineageStage = {
   title: "Watchlist",
@@ -230,14 +209,50 @@ const alerts: LineageStage = {
   ],
 };
 
+/* ────────────────────── Earnings Event Desk ────────────────────── */
+
+const earningsDesk: LineageStage = {
+  title: "Earnings Event Desk",
+  summary: "市场维度全量财报事件看板：ADS 层聚合财报日历、期权摘要和公司维度信息，不依赖用户持仓。",
+  upstream: [
+    { label: "财报日历（DWD）", desc: "olap.security_earnings_calendar_current 已清洗的财报日程，含 EPS/Revenue 预期和天数。", store: "olap.security_earnings_calendar_current" },
+    { label: "期权摘要（DWD）", desc: "olap.security_option_chain_summary_daily 最新一次期权链摘要，含 IV、流动性、资金流评分。", store: "olap.security_option_chain_summary_daily" },
+    { label: "公司维度（DIM）", desc: "dim.security 提供公司名称、行业分类。", store: "dim.security" },
+  ],
+  processing: {
+    summary: "ADS 层聚合：财报日历 LEFT JOIN 期权摘要 + 公司维度，按时间窗口过滤，计算优先级和行动建议。",
+    steps: [
+      "从 olap.security_earnings_calendar_current 读取指定时间窗口内的所有未来财报事件",
+      "LEFT JOIN dim.security 补充公司名称和行业",
+      "LEFT JOIN LATERAL olap.security_option_chain_summary_daily（最新一条）补充期权数据",
+      "过滤 data_quality_flag IN ('ok', 'partial')，排除无效数据",
+      "按 days_to_earnings 计算优先级：≤3 天为 P1，其余为 P2",
+      "根据期权 flow_sentiment 和 selection_score 生成 option_signal 和 action_label",
+      "聚合统计指标：总事件数、P1 数、期权可读数、平均 IV",
+    ],
+  },
+  outputs: [
+    { label: "财报事件看板", desc: "GET /earnings-desk 返回全量事件 + 统计指标，前端独立渲染。", store: "API /earnings-desk" },
+    { label: "导航入口", desc: "信号看板中的 Earnings 入口，指向 /tenx-hunter/us/earnings。", to: "earnings" },
+  ],
+  models: [
+    { name: "security_earnings_calendar_current", schema: "olap", fields: ["security_id", "symbol", "next_earnings_date", "days_to_earnings", "eps_estimate", "revenue_estimate", "data_quality_flag"] },
+    { name: "security_option_chain_summary_daily", schema: "olap", fields: ["symbol", "trade_date", "avg_implied_volatility", "liquidity_score", "flow_score", "selection_score", "flow_sentiment"] },
+    { name: "security", schema: "dim", fields: ["security_id", "symbol", "company_name", "sector", "industry"] },
+  ],
+  apis: [
+    { method: "GET", path: "/api/v1/tenx-hunter/earnings-desk?market=US&horizon=45", desc: "加载市场全量财报事件看板" },
+  ],
+};
+
 /* ────────────────────── Export ────────────────────── */
 
 export const lineageByStage: Record<string, LineageStage> = {
   "hot-monitor": hotMonitor,
   discover,
-  earnings,
   watchlist,
   alerts,
+  earnings: earningsDesk,
 };
 
-export const stageKeys = ["hot-monitor", "discover", "earnings", "watchlist", "alerts"] as const;
+export const stageKeys = ["hot-monitor", "discover", "watchlist", "alerts", "earnings"] as const;

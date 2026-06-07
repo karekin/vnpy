@@ -5,7 +5,7 @@ import { fromMarketSlug } from "@/components/tenx-hunter/api";
 import clsx from "clsx";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BellRing, Binoculars, CalendarClock, ChartNoAxesColumnIncreasing, ChevronRight, Compass, Flame, Gauge, GitBranch, Info, ListChecks, Radar, X } from "lucide-react";
+import { BellRing, Binoculars, CalendarDays, ChartNoAxesColumnIncreasing, ChevronRight, Compass, Flame, Gauge, GitBranch, Info, ListChecks, Radar, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 type Props = {
@@ -65,9 +65,8 @@ export function TenxMarketViewSwitch({ market }: Props) {
 
 const flowStages = [
   { id: "hot-lead", label: "Hot Monitor", icon: Flame, detail: "社交热度只进入线索层，不能直接进观察池。", tone: "blue" as const },
-  { id: "candidate", label: "Discover", icon: GitBranch, detail: "候选池按评分、证据和阶段排序。", tone: "slate" as const },
+  { id: "candidate", label: "Discover", icon: GitBranch, detail: "候选池评分排序，财报窗口和期权链作为晋级前的事件验证层。", tone: "slate" as const },
   { id: "watch-ready", label: "晋级门槛", icon: ListChecks, detail: "阶段、证据、风险和动量全部通过后才可晋级。", tone: "green" as const },
-  { id: "earnings", label: "Earnings", icon: CalendarClock, detail: "财报窗口和期权链作为进入观察池前的事件验证层。", tone: "blue" as const },
   { id: "watching", label: "Watchlist", icon: Binoculars, detail: "只展示已确认持续跟踪的股票。", tone: "green" as const },
   { id: "alerting", label: "Alerts", icon: BellRing, detail: "进入观察池后自动挂接事件追踪。", tone: "red" as const },
 ];
@@ -154,7 +153,7 @@ function FlowDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
 
           <div className="rounded-lg border border-brand-200 bg-brand-50/50 p-3 dark:border-brand-500/20 dark:bg-brand-500/5">
             <p className="text-xs font-medium text-brand-700 dark:text-brand-300">
-              流转路径：Hot Monitor → Discover → Earnings → Watchlist → Alerts
+              流转路径：Hot Monitor → Discover → Watchlist → Alerts
             </p>
           </div>
         </div>
@@ -172,7 +171,7 @@ export default function TenxNavigation({ market }: Props) {
   const marketRootPath = `/tenx-hunter/${normalizedMarket.toLowerCase()}`;
   const pipelineItems = items.filter((item) => item.group === "pipeline");
   const contextItems = items.filter((item) => item.group === "context");
-  const contextIcons = [Radar, Gauge, ChartNoAxesColumnIncreasing];
+  const contextIcons = [Radar, Gauge, ChartNoAxesColumnIncreasing, CalendarDays];
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const openDrawer = useCallback(() => setDrawerOpen(true), []);

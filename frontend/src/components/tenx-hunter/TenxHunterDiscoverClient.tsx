@@ -7,10 +7,11 @@ import ScrollableDataTable from "@/components/cb-quant/ScrollableDataTable";
 import StatusTag from "@/components/cb-quant/StatusTag";
 import TablePaginationBar from "@/components/cb-quant/TablePaginationBar";
 import { createDiscoverCandidate, createWatchlistEntry, getTenxErrorMessage, uploadTenxResearchReport } from "@/components/tenx-hunter/api";
+import TenxDiscoverEarningsDesk from "@/components/tenx-hunter/TenxDiscoverEarningsDesk";
 import { CandidateFlowTag } from "@/components/tenx-hunter/TenxFlowStatus";
 import TenxPageShell from "@/components/tenx-hunter/TenxPageShell";
 import { getRiskTone, getStageTone, TenxSectionCard } from "@/components/tenx-hunter/TenxCards";
-import type { TenxFlowStatus, TenxWorkspaceSnapshot } from "@/components/tenx-hunter/types";
+import type { TenxEarningsLens, TenxEarningsOptionItem, TenxEarningsShortlineItem, TenxFlowStatus, TenxWorkspaceSnapshot } from "@/components/tenx-hunter/types";
 import { TableCell, TableRow } from "@/components/ui/table";
 import { BellRing, Binoculars, BookOpen, CheckCircle2, Circle, FileUp, Plus, Search } from "lucide-react";
 
@@ -20,9 +21,11 @@ const pageSizeOptions = [5, 10];
 
 type TenxHunterDiscoverClientProps = {
   snapshot: TenxWorkspaceSnapshot;
+  earningsLens?: TenxEarningsLens | null;
+  earningsLensError?: string | null;
 };
 
-export default function TenxHunterDiscoverClient({ snapshot }: TenxHunterDiscoverClientProps) {
+export default function TenxHunterDiscoverClient({ snapshot, earningsLens, earningsLensError }: TenxHunterDiscoverClientProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const marketPath = snapshot.market.toLowerCase();
@@ -68,6 +71,11 @@ export default function TenxHunterDiscoverClient({ snapshot }: TenxHunterDiscove
   const totalPages = Math.max(1, Math.ceil(filteredCandidates.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pagedCandidates = filteredCandidates.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const earningsBySymbol = useMemo(() => {
+    const shortline = new Map((earningsLens?.shortline ?? []).map((item) => [item.symbol.toUpperCase(), item]));
+    const options = new Map((earningsLens?.options ?? []).map((item) => [item.symbol.toUpperCase(), item]));
+    return { shortline, options };
+  }, [earningsLens]);
 
   async function promoteToWatchlist(symbol: string) {
     setPendingSymbol(symbol);
@@ -126,6 +134,8 @@ export default function TenxHunterDiscoverClient({ snapshot }: TenxHunterDiscove
       subtitle={snapshot.market === "CN" ? "候选池只负责发现和验证，主题归因去 Themes，确认跟踪后再进入 Watchlist。" : "候选池只负责发现和验证，主题归因去 Themes，确认跟踪后再进入 Watchlist。"}
       pipelineStage="discover"
     >
+      <TenxDiscoverEarningsDesk lens={earningsLens} error={earningsLensError} marketPath={marketPath} />
+
       <TenxSectionCard
         title="Candidate Pool"
         description="个股优先的研究入口。这里判断是否具备进入观察池的资格，不承载主题页的主线叙事。"
@@ -298,9 +308,9 @@ export default function TenxHunterDiscoverClient({ snapshot }: TenxHunterDiscove
         {!showTimeline ? (
           <>
             <ScrollableDataTable
-              headers={["Symbol", "Flow", "Stage", "Score", "Risk", "Promotion Gate", "Next", "Action"]}
-              minTableWidthClass="min-w-[1180px]"
-              colSpan={8}
+              headers={["Symbol", "Earnings", "Flow", "Stage", "Score", "Risk", "Promotion Gate", "Next", "Action"]}
+              minTableWidthClass="min-w-[1380px]"
+              colSpan={9}
               isEmpty={!pagedCandidates.length}
             >
               {pagedCandidates.map((row) => {
@@ -320,6 +330,12 @@ export default function TenxHunterDiscoverClient({ snapshot }: TenxHunterDiscove
                         <StatusTag label={row.theme} tone="blue" />
                         <StatusTag label={`${row.evidenceCount} 证据`} tone="slate" />
                       </div>
+                    </TableCell>
+                    <TableCell className="px-4 py-3 align-top">
+                      <CandidateEarningsCell
+                        shortline={earningsBySymbol.shortline.get(row.symbol.toUpperCase())}
+                        option={earningsBySymbol.options.get(row.symbol.toUpperCase())}
+                      />
                     </TableCell>
                     <TableCell className="px-4 py-3 align-top">
                       <CandidateFlowTag candidate={row} />
@@ -428,5 +444,80 @@ export default function TenxHunterDiscoverClient({ snapshot }: TenxHunterDiscove
       </TenxSectionCard>
 
     </TenxPageShell>
+  );
+}
+
+function formatCompactNumber(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "N/A";
+  if (Math.abs(value) >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`;
+  if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (Math.abs(value) >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  return value.toLocaleString(undefined, { maximumFractionDigits: 1 });
+}
+
+function formatPercent(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "N/A";
+  const normalized = Math.abs(value) > 2 ? value / 100 : value;
+  return `${(normalized * 100).toFixed(1)}%`;
+}
+
+function estimateExpectedMove(shortline?: TenxEarningsShortlineItem, option?: TenxEarningsOptionItem) {
+  if (!option?.avgImpliedVolatility) return null;
+  const iv = Math.abs(option.avgImpliedVolatility) > 2 ? option.avgImpliedVolatility / 100 : option.avgImpliedVolatility;
+  const horizonDays = Math.min(30, Math.max(1, shortline?.daysToEarnings ?? 7));
+  return iv * Math.sqrt(horizonDays / 365);
+}
+
+function optionDirection(option?: TenxEarningsOptionItem) {
+  if (!option || option.dataQualityFlag !== "ok") return { label: "期权待补", tone: "slate" as const };
+  if (option.flowSentiment === "bullish" || (option.callPutVolumeRatio ?? 1) >= 1.25) {
+    return { label: "偏多", tone: "green" as const };
+  }
+  if (option.flowSentiment === "bearish" || (option.callPutVolumeRatio ?? 1) <= 0.8) {
+    return { label: "偏空", tone: "red" as const };
+  }
+  return { label: "波动", tone: "yellow" as const };
+}
+
+function dayLabel(days?: number | null) {
+  if (days === null || days === undefined) return "财报日未知";
+  if (days < 0) return "财报已过";
+  if (days === 0) return "今天财报";
+  return `T-${days} 财报`;
+}
+
+function CandidateEarningsCell({
+  shortline,
+  option,
+}: {
+  shortline?: TenxEarningsShortlineItem;
+  option?: TenxEarningsOptionItem;
+}) {
+  if (!shortline) {
+    return (
+      <div className="max-w-[220px] text-sm leading-6 text-gray-500 dark:text-gray-400">
+        暂无财报日历，先补 earnings lens。
+      </div>
+    );
+  }
+
+  const direction = optionDirection(option);
+  const expectedMove = estimateExpectedMove(shortline, option);
+
+  return (
+    <div className="max-w-[240px]">
+      <div className="flex flex-wrap gap-1.5">
+        <StatusTag label={dayLabel(shortline.daysToEarnings)} tone={shortline.daysToEarnings !== null && shortline.daysToEarnings !== undefined && shortline.daysToEarnings <= 3 && shortline.daysToEarnings >= 0 ? "red" : "blue"} />
+        <StatusTag label={direction.label} tone={direction.tone} />
+      </div>
+      <div className="mt-2 text-xs leading-5 text-gray-500 dark:text-gray-400">
+        EPS {shortline.epsEstimate === null || shortline.epsEstimate === undefined ? "N/A" : shortline.epsEstimate.toFixed(2)}
+        {" · "}
+        Rev {formatCompactNumber(shortline.revenueEstimate)}
+      </div>
+      <div className="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+        预期波动 {formatPercent(expectedMove)} · 期权分 {formatCompactNumber(option?.optionSelectionScore)}
+      </div>
+    </div>
   );
 }
