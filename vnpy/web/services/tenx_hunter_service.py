@@ -1352,8 +1352,10 @@ class TenxHunterService:
 
         # 统计指标
         p1_count = sum(1 for ev in events if ev.priority == "P1")
-        option_readable = sum(1 for ev in events if ev.avg_implied_volatility is not None)
+        option_readable = sum(1 for ev in events if ev.option_selection_score is not None)
         ivs = [ev.avg_implied_volatility for ev in events if ev.avg_implied_volatility is not None]
+        # 如果没有 IV 数据（如 Nasdaq 数据源），用 selection_score 近似波动率估算
+        scores = [ev.option_selection_score for ev in events if ev.option_selection_score is not None]
         avg_move: float | None = None
         if ivs:
             avg_move = sum(ivs) / len(ivs)
