@@ -5,10 +5,13 @@ from datetime import date, datetime, timedelta, timezone
 import gzip
 import json
 import re
+import time
 from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from xml.etree import ElementTree
+
+import requests as _requests_lib
 
 
 SEC_TICKER_MAP_URL = "https://www.sec.gov/files/company_tickers.json"
@@ -829,6 +832,55 @@ def _normalize_yfinance_timestamp(value: Any) -> str:
     return _iso_datetime(value)
 
 
+_YAHOO_SESSION: requests.Session | None = None
+_YAHOO_CRUMB: str | None = None
+_YAHOO_CRUMB_FETCHED_AT: float = 0
+
+
+def _yahoo_session() -> tuple[_requests_lib.Session, str | None]:
+    """返回带 cookie 的 session 和 crumb；crumb 获取失败时返回 None（降级为无认证）。"""
+    global _YAHOO_SESSION, _YAHOO_CRUMB, _YAHOO_CRUMB_FETCHED_AT
+
+    # crumb 有效期约 10 分钟，提前 2 分钟刷新
+    if _YAHOO_SESSION and _YAHOO_CRUMB and (time.time() - _YAHOO_CRUMB_FETCHED_AT) < 480:
+        return _YAHOO_SESSION, _YAHOO_CRUMB
+
+    browser_ua = (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
+    )
+    session = _requests_lib.Session()
+    session.headers.update({
+        "User-Agent": browser_ua,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    })
+
+    # Step 1: 访问首页获取 cookie
+    try:
+        session.get("https://finance.yahoo.com/", timeout=15)
+    except Exception:
+        pass
+
+    # Step 2: 获取 crumb
+    crumb = None
+    try:
+        crumb_resp = session.get(
+            "https://query1.finance.yahoo.com/v1/test/getcrumb",
+            headers={"Accept": "*/*"},
+            timeout=10,
+        )
+        if crumb_resp.status_code == 200 and crumb_resp.text.strip():
+            crumb = crumb_resp.text.strip()
+    except Exception:
+        pass
+
+    _YAHOO_SESSION = session
+    _YAHOO_CRUMB = crumb
+    _YAHOO_CRUMB_FETCHED_AT = time.time()
+    return session, crumb
+
+
 def _yahoo_headers() -> dict[str, str]:
     return {
         "User-Agent": "Mozilla/5.0 (TenX Hunter Demo)",
@@ -1006,24 +1058,34 @@ def fetch_yfinance_bundle(
     end_dt = ((_parse_datetime(end_date) or _now_utc()).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1))
     headers = _yahoo_headers()
 
+    # 尝试获取带 crumb 认证的 session
+    yf_session, yf_crumb = _yahoo_session()
+    use_session = yf_session is not None
+
+    def _yf_get(url: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        """用 session + crumb 发起 Yahoo API 请求，失败时降级为无认证。"""
+        p = dict(params or {})
+        if yf_crumb:
+            p["crumb"] = yf_crumb
+        if use_session:
+            resp = yf_session.get(url, params=p, headers=headers, timeout=20)
+            resp.raise_for_status()
+            return json.loads(_decode_payload(resp.content))
+        return request_json(url, headers=headers, params=p)
+
     for symbol in symbols:
         quote_result: dict[str, Any] = {}
         try:
-            quote_payload = request_json(
-                YAHOO_QUOTE_URL,
-                params={"symbols": symbol},
-                headers=headers,
-            )
+            quote_payload = _yf_get(YAHOO_QUOTE_URL, {"symbols": symbol})
             quote_result = ((quote_payload.get("quoteResponse") or {}).get("result") or [{}])[0]
         except Exception:
             quote_result = {}
 
         summary_result: dict[str, Any] = {}
         try:
-            summary_payload = request_json(
+            summary_payload = _yf_get(
                 YAHOO_QUOTE_SUMMARY_URL.format(symbol=symbol),
-                params={"modules": "assetProfile,price,defaultKeyStatistics,financialData,earningsTrend,calendarEvents"},
-                headers=headers,
+                {"modules": "assetProfile,price,defaultKeyStatistics,financialData,earningsTrend,calendarEvents"},
             )
             summary_result = ((summary_payload.get("quoteSummary") or {}).get("result") or [{}])[0]
         except Exception:
@@ -1049,27 +1111,25 @@ def fetch_yfinance_bundle(
         asset_profile = summary_result.get("assetProfile") or summary_result.get("summaryProfile") or {}
         price_module = summary_result.get("price") or {}
         default_stats = summary_result.get("defaultKeyStatistics") or {}
-        chart_payload = request_json(
-            YAHOO_CHART_URL.format(symbol=symbol),
-            params={
-                "period1": int(start_dt.timestamp()),
-                "period2": int(end_dt.timestamp()),
-                "interval": "1d",
-                "includeAdjustedClose": "true",
-                "events": "div,splits",
-            },
-            headers=headers,
-        )
+        try:
+            chart_payload = _yf_get(
+                YAHOO_CHART_URL.format(symbol=symbol),
+                {
+                    "period1": int(start_dt.timestamp()),
+                    "period2": int(end_dt.timestamp()),
+                    "interval": "1d",
+                    "includeAdjustedClose": "true",
+                    "events": "div,splits",
+                },
+            )
+        except Exception:
+            chart_payload = {}
         chart_result = ((chart_payload.get("chart") or {}).get("result") or [{}])[0]
         meta = chart_result.get("meta") or {}
 
         search_payload: dict[str, Any] = {}
         try:
-            search_payload = request_json(
-                YAHOO_SEARCH_URL,
-                params={"q": symbol, "newsCount": 3, "quotesCount": 1},
-                headers=headers,
-            )
+            search_payload = _yf_get(YAHOO_SEARCH_URL, {"q": symbol, "newsCount": 3, "quotesCount": 1})
         except Exception:
             search_payload = {}
 
