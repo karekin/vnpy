@@ -16,7 +16,7 @@ from typing import Any
 
 
 def extract_strategy_json(text: str) -> dict[str, Any]:
-    """从 DeerFlow 响应中提取 JSON object，兼容 markdown code fence。"""
+    """从 DeerFlow 响应中提取 JSON object，兼容 markdown code fence 和常见格式问题。"""
     stripped = text.strip()
     if not stripped:
         raise ValueError("empty DeerFlow option strategy response")
@@ -30,12 +30,29 @@ def extract_strategy_json(text: str) -> dict[str, Any]:
             raise ValueError("DeerFlow response does not contain a JSON object")
         candidate = candidate[start:end + 1]
 
+    # 尝试直接解析
     try:
         payload = json.loads(candidate)
+        if isinstance(payload, dict):
+            return payload
     except JSONDecodeError:
-        # 简单修复：尾部逗号
-        repaired = re.sub(r",\s*([}\]])", r"\1", candidate)
+        pass
+
+    # 尝试逐步修复常见问题
+    repaired = candidate
+    # 1. 尾部逗号
+    repaired = re.sub(r",\s*([}\]])", r"\1", repaired)
+    # 2. 单引号 → 双引号
+    repaired = repaired.replace("'", '"')
+    # 3. 未加引号的 key（如 posture: → "posture":）
+    repaired = re.sub(r'(?<=[{,])\s*(\w+)\s*:', r' "\1":', repaired)
+    # 4. 多余的换行/空格在值中间
+    repaired = re.sub(r'\n', ' ', repaired)
+
+    try:
         payload = json.loads(repaired)
+    except JSONDecodeError as exc:
+        raise ValueError(f"DeerFlow JSON parse failed after repair: {exc}") from exc
     if not isinstance(payload, dict):
         raise ValueError("DeerFlow option strategy JSON must be an object")
     return payload
