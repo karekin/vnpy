@@ -5,7 +5,7 @@ import { fromMarketSlug } from "@/components/tenx-hunter/api";
 import clsx from "clsx";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BellRing, Binoculars, CalendarDays, ChartNoAxesColumnIncreasing, ChevronRight, Compass, Flame, Gauge, GitBranch, Info, ListChecks, Radar, X } from "lucide-react";
+import { BellRing, Binoculars, ChartNoAxesColumnIncreasing, ChevronRight, Compass, Flame, Gauge, GitBranch, Info, ListChecks, Radar, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 type Props = {
@@ -171,7 +171,7 @@ export default function TenxNavigation({ market }: Props) {
   const marketRootPath = `/tenx-hunter/${normalizedMarket.toLowerCase()}`;
   const pipelineItems = items.filter((item) => item.group === "pipeline");
   const contextItems = items.filter((item) => item.group === "context");
-  const contextIcons = [Radar, Gauge, ChartNoAxesColumnIncreasing, CalendarDays];
+  const contextIcons = [Radar, Gauge, ChartNoAxesColumnIncreasing];
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const openDrawer = useCallback(() => setDrawerOpen(true), []);

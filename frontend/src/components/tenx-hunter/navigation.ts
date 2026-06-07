@@ -18,7 +18,6 @@ export function tenxNavItems(market: string): TenxNavItem[] {
       { name: "Alerts", path: `${base}/alerts`, group: "pipeline", step: "04", stageLabel: "提醒" },
       { name: "Themes", path: `${base}/themes`, group: "context", stageLabel: "主题" },
       { name: "Sentiment", path: `${base}/sentiment`, group: "context", stageLabel: "情绪" },
-      { name: "Earnings", path: `${base}/earnings`, group: "context", stageLabel: "财报" },
       { name: "Political Signals", path: `${base}/political-signals`, group: "context", stageLabel: "政治" },
     ];
   }
