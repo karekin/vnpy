@@ -17,6 +17,8 @@ from .db import connect
 STRATEGY_META: dict[str, dict[str, str]] = {
     "bull_call_spread":   {"name": "看涨价差",   "name_en": "Bull Call Spread", "direction": "偏多"},
     "bear_put_spread":    {"name": "看跌价差",   "name_en": "Bear Put Spread",  "direction": "偏空"},
+    "long_call":          {"name": "买入看涨",   "name_en": "Long Call",        "direction": "看多"},
+    "long_put":           {"name": "买入看跌",   "name_en": "Long Put",         "direction": "看空"},
     "long_straddle":      {"name": "买入跨式",   "name_en": "Long Straddle",    "direction": "波动"},
     "short_straddle":     {"name": "卖出跨式",   "name_en": "Short Straddle",   "direction": "中性"},
     "long_strangle":      {"name": "买入宽跨式", "name_en": "Long Strangle",    "direction": "突破"},
@@ -314,6 +316,14 @@ def _determine_pnl(
     elif strategy_key == "bear_put_spread":
         net_debit = premiums["put_atm"] - premiums["put_otm"]
         pnl = max(-net_debit, min(strikes["atm"] - strikes["otm_put"] - net_debit, strikes["atm"] - exit_price - net_debit))
+
+    elif strategy_key == "long_call":
+        premium = premiums["call_atm"]
+        pnl = max(-premium, exit_price - strikes["atm"] - premium)
+
+    elif strategy_key == "long_put":
+        premium = premiums["put_atm"]
+        pnl = max(-premium, strikes["atm"] - exit_price - premium)
 
     elif strategy_key == "long_straddle":
         cost = premiums["call_atm"] + premiums["put_atm"]

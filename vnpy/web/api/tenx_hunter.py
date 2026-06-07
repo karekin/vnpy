@@ -109,10 +109,12 @@ def get_strategy_backtest(
     market: str = Query("US"),
     lookback_days: int = Query(90, description="回测回溯天数"),
     horizon_days: int = Query(30, description="模拟持仓天数"),
+    use_llm: bool = Query(False, description="是否调用 DeerFlow LLM 增强分析"),
 ) -> TenxStrategyBacktestResponse:
-    """对单只股票运行 8 种期权策略的历史回测，返回逐策略胜率。"""
+    """对单只股票运行期权策略的历史回测，可选 LLM 增强分析。"""
     return services.tenx_service.get_strategy_backtest(
         market, symbol, lookback_days=lookback_days, horizon_days=horizon_days,
+        use_llm=use_llm,
     )
 
 

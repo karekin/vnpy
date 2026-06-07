@@ -599,6 +599,19 @@ export type TenxBacktestStrategyResult = {
   worstTradePct: number;
   backtestLogic: string;
   sampleTrades: TenxBacktestTrade[];
+  /* LLM 增强分析 */
+  llmRecommendation?: string | null;
+  llmConfidence?: string | null;
+  llmLogic?: string | null;
+  llmKeyRisks?: string[] | null;
+  llmEntryCondition?: string | null;
+  llmExitCondition?: string | null;
+};
+
+export type TenxOptionStrategyAssessment = {
+  posture: string;
+  bestStrategy: string;
+  summary: string;
 };
 
 export type TenxStrategyBacktestData = {
@@ -610,4 +623,6 @@ export type TenxStrategyBacktestData = {
   snapshotAt: string;
   strategies: TenxBacktestStrategyResult[];
   notes: string[];
+  overallAssessment?: TenxOptionStrategyAssessment | null;
+  deerflowThreadId?: string | null;
 };

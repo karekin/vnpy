@@ -444,6 +444,18 @@ type TenxBacktestStrategyApi = {
   worst_trade_pct: number;
   backtest_logic: string;
   sample_trades: TenxBacktestTradeApi[];
+  llm_recommendation?: string | null;
+  llm_confidence?: string | null;
+  llm_logic?: string | null;
+  llm_key_risks?: string[] | null;
+  llm_entry_condition?: string | null;
+  llm_exit_condition?: string | null;
+};
+
+type TenxOptionStrategyAssessmentApi = {
+  posture: string;
+  best_strategy: string;
+  summary: string;
 };
 
 type TenxStrategyBacktestApi = {
@@ -455,6 +467,8 @@ type TenxStrategyBacktestApi = {
   snapshot_at: string;
   strategies: TenxBacktestStrategyApi[];
   notes: string[];
+  overall_assessment?: TenxOptionStrategyAssessmentApi | null;
+  deerflow_thread_id?: string | null;
 };
 
 type TenxEarningsDeskEventApi = {
@@ -1254,6 +1268,12 @@ function mapBacktestStrategy(s: TenxBacktestStrategyApi): TenxBacktestStrategyRe
     worstTradePct: s.worst_trade_pct,
     backtestLogic: s.backtest_logic,
     sampleTrades: s.sample_trades.map(mapBacktestTrade),
+    llmRecommendation: s.llm_recommendation ?? null,
+    llmConfidence: s.llm_confidence ?? null,
+    llmLogic: s.llm_logic ?? null,
+    llmKeyRisks: s.llm_key_risks ?? null,
+    llmEntryCondition: s.llm_entry_condition ?? null,
+    llmExitCondition: s.llm_exit_condition ?? null,
   };
 }
 
@@ -1262,12 +1282,14 @@ export async function loadTenxStrategyBacktest(
   symbol: string,
   lookbackDays = 90,
   horizonDays = 30,
+  useLlm = false,
 ): Promise<TenxStrategyBacktestData> {
   const payload = await requestJson<TenxStrategyBacktestApi>(
     buildUrl(
       `/api/v1/tenx-hunter/strategy-backtest?market=${encodeURIComponent(toMarketParam(market))}` +
       `&symbol=${encodeURIComponent(symbol)}` +
-      `&lookback_days=${lookbackDays}&horizon_days=${horizonDays}`,
+      `&lookback_days=${lookbackDays}&horizon_days=${horizonDays}` +
+      `&use_llm=${useLlm}`,
     ),
   );
   return {
@@ -1279,6 +1301,12 @@ export async function loadTenxStrategyBacktest(
     snapshotAt: payload.snapshot_at,
     strategies: payload.strategies.map(mapBacktestStrategy),
     notes: payload.notes,
+    overallAssessment: payload.overall_assessment ? {
+      posture: payload.overall_assessment.posture,
+      bestStrategy: payload.overall_assessment.best_strategy,
+      summary: payload.overall_assessment.summary,
+    } : null,
+    deerflowThreadId: payload.deerflow_thread_id ?? null,
   };
 }
 

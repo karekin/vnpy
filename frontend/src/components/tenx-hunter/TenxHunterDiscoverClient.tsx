@@ -192,6 +192,11 @@ type OptionStrategy = {
   backtestLogic?: string | null;
   backtestProfitFactor?: number | null;
   backtestStreak?: string | null;
+  /* LLM 增强分析 */
+  llmRecommendation?: string | null;
+  llmConfidence?: string | null;
+  llmLogic?: string | null;
+  llmKeyRisks?: string[] | null;
 };
 
 /** 正态分布累积函数近似（Abramowitz & Stegun） */
@@ -297,7 +302,45 @@ function buildStrategies(opt: TenxEarningsOptionItem | undefined): OptionStrateg
     });
   }
 
-  // ── 3. 买入跨式 Long Straddle ──
+  // ── 3. 买入看涨 Long Call ──
+  {
+    const cost = callATM;
+    const be = atm + cost;
+    let wp = Math.round((1 - normalCDF((be - S) / sigma1)) * 100);
+    const bullish = flow === "bullish" || cpRatio >= 1.2;
+    const rank = bullish ? 2 : 5;
+    wp = Math.min(80, Math.max(25, wp + (bullish ? 5 : -3) + selBonus));
+    strategies.push({
+      key: "long_call", name: "买入看涨", nameEn: "Long Call",
+      direction: "看多", directionTone: "green", winProb: wp, rank,
+      maxProfit: `理论无限`, maxLoss: `有限 (-${fmtCurrency(cost, currency)})`,
+      breakeven: fmtStrike(be, currency),
+      strikes: `Buy ${fmtStrike(atm, currency)}C`,
+      premium: `净支出 ${fmtCurrency(cost, currency)}`,
+      logic: `买入 ATM Call 做多，理论收益无限，风险仅限权利金${bullish ? `。资金流偏多(${flow})支持看多判断` : ""}。${ivLow ? "IV 偏低权利金便宜" : ivHigh ? "IV 偏高注意时间衰减" : "IV 适中"}。`,
+    });
+  }
+
+  // ── 4. 买入看跌 Long Put ──
+  {
+    const cost = putATM;
+    const be = atm - cost;
+    let wp = Math.round(normalCDF((be - S) / sigma1) * 100);
+    const bearish = flow === "bearish" || cpRatio <= 0.85;
+    const rank = bearish ? 2 : 5;
+    wp = Math.min(80, Math.max(25, wp + (bearish ? 5 : -3) + selBonus));
+    strategies.push({
+      key: "long_put", name: "买入看跌", nameEn: "Long Put",
+      direction: "看空", directionTone: "red", winProb: wp, rank,
+      maxProfit: `有限 (标的归零时 +${fmtCurrency(atm - cost, currency)})`, maxLoss: `有限 (-${fmtCurrency(cost, currency)})`,
+      breakeven: fmtStrike(be, currency),
+      strikes: `Buy ${fmtStrike(atm, currency)}P`,
+      premium: `净支出 ${fmtCurrency(cost, currency)}`,
+      logic: `买入 ATM Put 做空，收益在标的归零时最大，风险仅限权利金${bearish ? `。资金流偏空(${flow})支持看空判断` : ""}。${ivLow ? "IV 偏低权利金便宜" : ivHigh ? "IV 偏高注意时间衰减" : "IV 适中"}。`,
+    });
+  }
+
+  // ── 5. 买入跨式 Long Straddle ──
   {
     const cost = callATM + putATM;
     const be_up = atm + cost;
@@ -318,7 +361,7 @@ function buildStrategies(opt: TenxEarningsOptionItem | undefined): OptionStrateg
     });
   }
 
-  // ── 4. 卖出跨式 Short Straddle ──
+  // ── 6. 卖出跨式 Short Straddle ──
   {
     const credit = callATM + putATM;
     const be_up = atm + credit;
@@ -339,7 +382,7 @@ function buildStrategies(opt: TenxEarningsOptionItem | undefined): OptionStrateg
     });
   }
 
-  // ── 5. 买入宽跨式 Long Strangle ──
+  // ── 7. 买入宽跨式 Long Strangle ──
   {
     const cost = callOTM + putOTM;
     const be_up = otm_call + cost;
@@ -360,7 +403,7 @@ function buildStrategies(opt: TenxEarningsOptionItem | undefined): OptionStrateg
     });
   }
 
-  // ── 6. 铁鹰 Iron Condor ──
+  // ── 8. 铁鹰 Iron Condor ──
   {
     const credit = putOTM + callOTM - putOTM2 - callOTM2;
     const be_put = otm_put - credit;
@@ -379,7 +422,7 @@ function buildStrategies(opt: TenxEarningsOptionItem | undefined): OptionStrateg
     });
   }
 
-  // ── 7. 蝴蝶 Call Butterfly ──
+  // ── 9. 蝴蝶 Call Butterfly ──
   {
     const midStrike = roundStrike(mid);
     const lower = roundStrike(midStrike - sigma1 * 0.5);
@@ -402,7 +445,7 @@ function buildStrategies(opt: TenxEarningsOptionItem | undefined): OptionStrateg
     });
   }
 
-  // ── 8. 备兑看涨 Covered Call ──
+  // ── 10. 备兑看涨 Covered Call ──
   {
     const strike_cc = roundStrike(otm_call);
     const credit_cc = callOTM;
@@ -488,6 +531,29 @@ function StrategyCard({ s }: { s: OptionStrategy }) {
       <p className="mt-2 text-xs leading-5 text-gray-600 dark:text-gray-300">{s.logic}</p>
       {s.backtestLogic && (
         <p className="mt-1 text-xs leading-5 text-indigo-600 dark:text-indigo-400">{s.backtestLogic}</p>
+      )}
+
+      {/* LLM AI 分析 */}
+      {s.llmLogic && (
+        <div className="mt-2 rounded-md border border-purple-200 bg-purple-50/50 p-2 dark:border-purple-800/50 dark:bg-purple-950/20">
+          <div className="flex items-center gap-2">
+            {s.llmRecommendation && (() => {
+              const rec = s.llmRecommendation!;
+              const tone = rec === "strong_buy" ? "text-emerald-700 dark:text-emerald-400" : rec === "buy" ? "text-green-600 dark:text-green-400" : rec === "hold" ? "text-amber-600 dark:text-amber-400" : "text-red-500 dark:text-red-400";
+              const label = rec === "strong_buy" ? "强烈看多" : rec === "buy" ? "看多" : rec === "hold" ? "观望" : rec === "avoid" ? "回避" : "强烈回避";
+              return <span className={`text-xs font-bold ${tone}`}>{label}</span>;
+            })()}
+            {s.llmConfidence && <span className="text-xs text-gray-400">置信度 {s.llmConfidence}</span>}
+          </div>
+          <p className="mt-1 text-xs leading-5 text-purple-700 dark:text-purple-300">{s.llmLogic}</p>
+          {s.llmKeyRisks && s.llmKeyRisks.length > 0 && (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {s.llmKeyRisks.map((r, i) => (
+                <span key={i} className="rounded bg-red-100 px-1.5 py-0.5 text-[10px] text-red-600 dark:bg-red-900/30 dark:text-red-400">{r}</span>
+              ))}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -783,6 +849,10 @@ export default function TenxHunterDiscoverClient({ snapshot, earningsLens, earni
                           backtestLogic: bt.backtestLogic,
                           backtestProfitFactor: bt.profitFactor,
                           backtestStreak: bt.currentStreak,
+                          llmRecommendation: bt.llmRecommendation ?? null,
+                          llmConfidence: bt.llmConfidence ?? null,
+                          llmLogic: bt.llmLogic ?? null,
+                          llmKeyRisks: bt.llmKeyRisks ?? null,
                         };
                       });
                       return (

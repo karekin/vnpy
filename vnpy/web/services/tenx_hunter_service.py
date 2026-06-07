@@ -2439,17 +2439,79 @@ class TenxHunterService:
         symbol: str,
         lookback_days: int = 90,
         horizon_days: int = 30,
+        use_llm: bool = False,
     ) -> TenxStrategyBacktestResponse:
-        """对单只股票运行 8 种期权策略的历史回测。"""
+        """对单只股票运行期权策略的历史回测，可选 LLM 增强分析。"""
         market = self._normalize_market(market, self._settings)
+        symbol = symbol.upper()
         from vnpy.web.tenx_hunter.strategy_backtest import run_strategy_backtest
         raw = run_strategy_backtest(
-            symbol.upper(),
+            symbol,
             market=market,
             lookback_days=lookback_days,
             horizon_days=horizon_days,
             settings=self._settings,
         )
+
+        # LLM 增强分析
+        llm_result = None
+        deerflow_thread_id = None
+        if use_llm and raw["total_backtest_days"] > 0:
+            try:
+                llm_result, deerflow_thread_id = self._run_llm_analysis(
+                    symbol, market, raw, lookback_days,
+                )
+            except Exception as exc:
+                raw["notes"].append(f"DeerFlow 分析失败: {exc}")
+
+        strategy_rows = []
+        for s in raw["strategies"]:
+            row = TenxBacktestStrategyRow(
+                key=s["key"],
+                name=s["name"],
+                name_en=s["name_en"],
+                direction=s["direction"],
+                total_trades=s["total_trades"],
+                wins=s["wins"],
+                losses=s["losses"],
+                win_rate=s["win_rate"],
+                avg_profit_pct=s["avg_profit_pct"],
+                avg_loss_pct=s["avg_loss_pct"],
+                profit_factor=s["profit_factor"],
+                current_streak=s["current_streak"],
+                best_trade_pct=s["best_trade_pct"],
+                worst_trade_pct=s["worst_trade_pct"],
+                backtest_logic=s["backtest_logic"],
+                sample_trades=[
+                    TenxBacktestTradeRow(**t) for t in s["sample_trades"]
+                ],
+            )
+            # 合并 LLM 结果
+            if llm_result:
+                llm_strat = next(
+                    (ls for ls in llm_result.get("strategies", []) if ls.get("key") == s["key"]),
+                    None,
+                )
+                if llm_strat:
+                    row.llm_recommendation = llm_strat.get("recommendation")
+                    row.llm_confidence = llm_strat.get("confidence")
+                    row.llm_logic = llm_strat.get("logic")
+                    row.llm_key_risks = llm_strat.get("key_risks")
+                    row.llm_entry_condition = llm_strat.get("entry_condition")
+                    row.llm_exit_condition = llm_strat.get("exit_condition")
+            strategy_rows.append(row)
+
+        # overall_assessment
+        overall = None
+        if llm_result and "overall_assessment" in llm_result:
+            from vnpy.web.contracts.tenx_hunter import TenxOptionStrategyAssessment
+            oa = llm_result["overall_assessment"]
+            overall = TenxOptionStrategyAssessment(
+                posture=oa.get("posture", "range_bound"),
+                best_strategy=oa.get("best_strategy", ""),
+                summary=oa.get("summary", ""),
+            )
+
         return TenxStrategyBacktestResponse(
             market=raw["market"],
             symbol=raw["symbol"],
@@ -2457,28 +2519,84 @@ class TenxHunterService:
             horizon_days=raw["horizon_days"],
             total_backtest_days=raw["total_backtest_days"],
             snapshot_at=raw["snapshot_at"],
-            strategies=[
-                TenxBacktestStrategyRow(
-                    key=s["key"],
-                    name=s["name"],
-                    name_en=s["name_en"],
-                    direction=s["direction"],
-                    total_trades=s["total_trades"],
-                    wins=s["wins"],
-                    losses=s["losses"],
-                    win_rate=s["win_rate"],
-                    avg_profit_pct=s["avg_profit_pct"],
-                    avg_loss_pct=s["avg_loss_pct"],
-                    profit_factor=s["profit_factor"],
-                    current_streak=s["current_streak"],
-                    best_trade_pct=s["best_trade_pct"],
-                    worst_trade_pct=s["worst_trade_pct"],
-                    backtest_logic=s["backtest_logic"],
-                    sample_trades=[
-                        TenxBacktestTradeRow(**t) for t in s["sample_trades"]
-                    ],
-                )
-                for s in raw["strategies"]
-            ],
+            strategies=strategy_rows,
             notes=raw["notes"],
+            overall_assessment=overall,
+            deerflow_thread_id=deerflow_thread_id,
         )
+
+    def _run_llm_analysis(
+        self,
+        symbol: str,
+        market: str,
+        backtest_raw: dict[str, Any],
+        lookback_days: int,
+    ) -> tuple[dict[str, Any], str | None]:
+        """收集上下文并调用 DeerFlow 进行期权策略 LLM 分析。"""
+        from vnpy.web.tenx_hunter.option_strategy_deerflow import (
+            build_option_strategy_prompt,
+            extract_strategy_json,
+            parse_option_strategy_response,
+        )
+        from vnpy.web.services.deerflow_service import DeerFlowService
+
+        # 收集上下文数据
+        option_summary = None
+        price_history_30d: list[dict[str, Any]] = []
+        earnings_calendar: dict[str, Any] | None = None
+        score_row: dict[str, Any] | None = None
+        current_iv: float | None = None
+
+        with connect(self._settings) as conn:
+            # 期权摘要
+            opt_row = conn.execute(
+                "SELECT * FROM olap.security_option_chain_summary_daily "
+                "WHERE market = %s AND symbol = %s "
+                "ORDER BY trade_date DESC LIMIT 1",
+                (market, symbol),
+            ).fetchone()
+            if opt_row:
+                option_summary = dict(opt_row)
+                current_iv = float(opt_row["avg_implied_volatility"]) if opt_row["avg_implied_volatility"] else None
+
+            # 近 30 天价格
+            price_rows = conn.execute(
+                "SELECT trade_date, close, volume FROM olap.security_market_daily "
+                "WHERE market = %s AND symbol = %s "
+                "ORDER BY trade_date DESC LIMIT 30",
+                (market, symbol),
+            ).fetchall()
+            price_history_30d = [{"trade_date": str(r["trade_date"]), "close": float(r["close"]), "volume": int(r["volume"] or 0)} for r in price_rows]
+
+            # 财报日历
+            ec_row = conn.execute(
+                "SELECT next_earnings_date, days_to_earnings "
+                "FROM dwd.security_earnings_calendar_current "
+                "WHERE market = %s AND symbol = %s LIMIT 1",
+                (market, symbol),
+            ).fetchone()
+            if ec_row:
+                earnings_calendar = dict(ec_row)
+
+        underlying_price = price_history_30d[0]["close"] if price_history_30d else 0
+
+        prompt = build_option_strategy_prompt(
+            symbol=symbol,
+            market=market,
+            underlying_price=underlying_price,
+            option_summary=option_summary,
+            price_history_30d=price_history_30d,
+            earnings_calendar=earnings_calendar,
+            score_row=score_row,
+            backtest_results=backtest_raw["strategies"],
+            current_iv=current_iv,
+        )
+
+        thread_id = f"tenx-option-strategy-{market.lower()}-{symbol.lower()}"
+        deerflow = DeerFlowService()
+        result = deerflow.chat(prompt, thread_id=thread_id)
+        if not result.ok:
+            raise RuntimeError(f"DeerFlow analysis failed: {result.error}")
+
+        payload = extract_strategy_json(result.content)
+        return parse_option_strategy_response(payload), result.thread_id

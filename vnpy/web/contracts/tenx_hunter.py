@@ -690,6 +690,20 @@ class TenxBacktestStrategyRow(BaseModel):
     worst_trade_pct: float
     backtest_logic: str          # 人类可读的策略推理段落
     sample_trades: list[TenxBacktestTradeRow]
+    # LLM 增强分析（use_llm=true 时填充）
+    llm_recommendation: str | None = None    # strong_buy/buy/hold/avoid/strong_avoid
+    llm_confidence: str | None = None        # high/medium/low
+    llm_logic: str | None = None             # LLM 生成的详细分析（中文）
+    llm_key_risks: list[str] | None = None   # 风险列表
+    llm_entry_condition: str | None = None
+    llm_exit_condition: str | None = None
+
+
+class TenxOptionStrategyAssessment(BaseModel):
+    """LLM 整体评估"""
+    posture: str = "range_bound"
+    best_strategy: str = ""
+    summary: str = ""
 
 
 class TenxStrategyBacktestResponse(BaseModel):
@@ -702,3 +716,6 @@ class TenxStrategyBacktestResponse(BaseModel):
     snapshot_at: str
     strategies: list[TenxBacktestStrategyRow]
     notes: list[str]
+    # LLM 整体评估（use_llm=true 时填充）
+    overall_assessment: TenxOptionStrategyAssessment | None = None
+    deerflow_thread_id: str | None = None
