@@ -1,8 +1,12 @@
 "use client";
 
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo, useState, type FormEvent } from "react";
+import type { ApexOptions } from "apexcharts";
+
+const ReactApexChart = dynamic(() => import("react-apexcharts"), { ssr: false });
 import StatusTag from "@/components/cb-quant/StatusTag";
 import TablePaginationBar from "@/components/cb-quant/TablePaginationBar";
 import { createDiscoverCandidate, createWatchlistEntry, getTenxErrorMessage, loadTenxStrategyBacktest, uploadTenxResearchReport } from "@/components/tenx-hunter/api";
@@ -172,6 +176,24 @@ function ForecastCell({ label, value, tone = "slate" }: { label: string; value: 
 
 /* ── 期权策略引擎 ── */
 
+/* ── 期权策略 Payoff 参数（纯数值，用于到期盈亏图计算） ── */
+
+type StrategyPayoffParams = {
+  S: number;           // 标的现价
+  iv: number;          // 隐含波动率（年化，如 0.40）
+  days: number;        // 到期天数
+  sigma1: number;      // 1σ 价格变动 = S * iv * sqrt(days/365)
+  legs: Array<{
+    type: "call" | "put" | "stock";
+    strike: number;     // 行权价（stock 时为入场价）
+    premium: number;    // 权利金（买入为正，卖出为负净值）
+    qty: number;        // +1=long, -1=short
+  }>;
+  breakevenPoints: number[];
+  maxProfitValue: number | null;  // null=无限
+  maxLossValue: number | null;
+};
+
 type OptionStrategy = {
   key: string;
   name: string;
@@ -197,6 +219,8 @@ type OptionStrategy = {
   llmConfidence?: string | null;
   llmLogic?: string | null;
   llmKeyRisks?: string[] | null;
+  /* Payoff 参数（用于到期盈亏图） */
+  payoffParams: StrategyPayoffParams;
 };
 
 /** 正态分布累积函数近似（Abramowitz & Stegun） */
@@ -279,6 +303,10 @@ function buildStrategies(opt: TenxEarningsOptionItem | undefined): OptionStrateg
       strikes: `Buy ${fmtStrike(atm, currency)}C / Sell ${fmtStrike(otm_call, currency)}C`,
       premium: `净支出 ${fmtCurrency(callATM - callOTM, currency)}`,
       logic: `资金流偏多(${flow})且 Call/Put ${cpRatio.toFixed(2)}，看涨价差限定风险${ivMid ? "，IV 适中定价合理" : ivHigh ? "，但 IV 偏高注意时间衰减" : "，IV 偏低权利金便宜"}。`,
+      payoffParams: { S, iv, days, sigma1, legs: [
+        { type: "call", strike: atm, premium: callATM, qty: 1 },
+        { type: "call", strike: otm_call, premium: callOTM, qty: -1 },
+      ], breakevenPoints: [be], maxProfitValue: maxP, maxLossValue: -maxL },
     });
   }
 
@@ -299,6 +327,10 @@ function buildStrategies(opt: TenxEarningsOptionItem | undefined): OptionStrateg
       strikes: `Buy ${fmtStrike(atm, currency)}P / Sell ${fmtStrike(otm_put, currency)}P`,
       premium: `净支出 ${fmtCurrency(putATM - putOTM, currency)}`,
       logic: `资金流偏空(${flow})且 Call/Put ${cpRatio.toFixed(2)}，看跌价差限定下行风险${ivMid ? "，IV 适中" : ""}。`,
+      payoffParams: { S, iv, days, sigma1, legs: [
+        { type: "put", strike: atm, premium: putATM, qty: 1 },
+        { type: "put", strike: otm_put, premium: putOTM, qty: -1 },
+      ], breakevenPoints: [be], maxProfitValue: maxP, maxLossValue: -maxL },
     });
   }
 
@@ -318,6 +350,9 @@ function buildStrategies(opt: TenxEarningsOptionItem | undefined): OptionStrateg
       strikes: `Buy ${fmtStrike(atm, currency)}C`,
       premium: `净支出 ${fmtCurrency(cost, currency)}`,
       logic: `买入 ATM Call 做多，理论收益无限，风险仅限权利金${bullish ? `。资金流偏多(${flow})支持看多判断` : ""}。${ivLow ? "IV 偏低权利金便宜" : ivHigh ? "IV 偏高注意时间衰减" : "IV 适中"}。`,
+      payoffParams: { S, iv, days, sigma1, legs: [
+        { type: "call", strike: atm, premium: callATM, qty: 1 },
+      ], breakevenPoints: [be], maxProfitValue: null, maxLossValue: -cost },
     });
   }
 
@@ -337,6 +372,9 @@ function buildStrategies(opt: TenxEarningsOptionItem | undefined): OptionStrateg
       strikes: `Buy ${fmtStrike(atm, currency)}P`,
       premium: `净支出 ${fmtCurrency(cost, currency)}`,
       logic: `买入 ATM Put 做空，收益在标的归零时最大，风险仅限权利金${bearish ? `。资金流偏空(${flow})支持看空判断` : ""}。${ivLow ? "IV 偏低权利金便宜" : ivHigh ? "IV 偏高注意时间衰减" : "IV 适中"}。`,
+      payoffParams: { S, iv, days, sigma1, legs: [
+        { type: "put", strike: atm, premium: putATM, qty: 1 },
+      ], breakevenPoints: [be], maxProfitValue: atm - cost, maxLossValue: -cost },
     });
   }
 
@@ -358,6 +396,10 @@ function buildStrategies(opt: TenxEarningsOptionItem | undefined): OptionStrateg
       strikes: `Buy ${fmtStrike(atm, currency)}C + Buy ${fmtStrike(atm, currency)}P`,
       premium: `净支出 ${fmtCurrency(cost, currency)}`,
       logic: `买入同价 Call+Put，押注大幅突破${ivLow ? "。IV 偏低(${(iv * 100).toFixed(0)}%)，权利金便宜，波动性价比高" : "。IV ${(iv * 100).toFixed(0)}%，需要足够大的方向性突破才能盈利"}。`,
+      payoffParams: { S, iv, days, sigma1, legs: [
+        { type: "call", strike: atm, premium: callATM, qty: 1 },
+        { type: "put", strike: atm, premium: putATM, qty: 1 },
+      ], breakevenPoints: [be_dn, be_up], maxProfitValue: null, maxLossValue: -cost },
     });
   }
 
@@ -379,6 +421,10 @@ function buildStrategies(opt: TenxEarningsOptionItem | undefined): OptionStrateg
       strikes: `Sell ${fmtStrike(atm, currency)}C + Sell ${fmtStrike(atm, currency)}P`,
       premium: `净收入 ${fmtCurrency(credit, currency)}`,
       logic: `卖出同价 Call+Put 收权利金，押注横盘${ivHigh ? "。IV 偏高(${(iv * 100).toFixed(0)}%)，权利金丰厚，卖方优势明显" : "。IV 适中，需确信短期无大幅波动"}。风险无限需严格止损。`,
+      payoffParams: { S, iv, days, sigma1, legs: [
+        { type: "call", strike: atm, premium: callATM, qty: -1 },
+        { type: "put", strike: atm, premium: putATM, qty: -1 },
+      ], breakevenPoints: [be_dn, be_up], maxProfitValue: credit, maxLossValue: null },
     });
   }
 
@@ -400,6 +446,10 @@ function buildStrategies(opt: TenxEarningsOptionItem | undefined): OptionStrateg
       strikes: `Buy ${fmtStrike(otm_call, currency)}C + Buy ${fmtStrike(otm_put, currency)}P`,
       premium: `净支出 ${fmtCurrency(cost, currency)}`,
       logic: `虚值 Call+Put 成本更低(${fmtCurrency(cost, currency)})，需要更大的突破幅度。${ivLow ? "IV 偏低，买入波动率性价比好" : "IV 偏高，买入成本较大"}。`,
+      payoffParams: { S, iv, days, sigma1, legs: [
+        { type: "call", strike: otm_call, premium: callOTM, qty: 1 },
+        { type: "put", strike: otm_put, premium: putOTM, qty: 1 },
+      ], breakevenPoints: [be_dn, be_up], maxProfitValue: null, maxLossValue: -cost },
     });
   }
 
@@ -419,6 +469,12 @@ function buildStrategies(opt: TenxEarningsOptionItem | undefined): OptionStrateg
       strikes: `Sell ${fmtStrike(otm_put, currency)}P/${fmtStrike(otm_put2, currency)}P + Sell ${fmtStrike(otm_call, currency)}C/${fmtStrike(otm_call2, currency)}C`,
       premium: `净收入 ${fmtCurrency(Math.max(0, credit), currency)}`,
       logic: `四腿组合卖 Put价差+Call价差收权利金，押注区间震荡${ivHigh ? "。IV 偏高，卖方优势大" : ""}${flow === "neutral" ? "。资金流中性，方向不明" : ""}。盈亏比有限但胜率高。`,
+      payoffParams: { S, iv, days, sigma1, legs: [
+        { type: "put", strike: otm_put, premium: putOTM, qty: -1 },
+        { type: "put", strike: otm_put2, premium: putOTM2, qty: 1 },
+        { type: "call", strike: otm_call, premium: callOTM, qty: -1 },
+        { type: "call", strike: otm_call2, premium: callOTM2, qty: 1 },
+      ], breakevenPoints: [be_put, be_call], maxProfitValue: Math.max(0, credit), maxLossValue: -(Math.abs(otm_put - otm_put2 - credit)) },
     });
   }
 
@@ -442,6 +498,11 @@ function buildStrategies(opt: TenxEarningsOptionItem | undefined): OptionStrateg
       strikes: `Buy ${fmtStrike(lower, currency)}C / Sell 2×${fmtStrike(midStrike, currency)}C / Buy ${fmtStrike(upper, currency)}C`,
       premium: `净支出 ${fmtCurrency(cost_bf, currency)}`,
       logic: `三腿组合押注价格收敛到中点(${fmtStrike(midStrike, currency)})${flow === "neutral" ? "，资金流中性支持收敛判断" : ""}。低成本有限风险，适合高确信度的区间判断。`,
+      payoffParams: { S, iv, days, sigma1, legs: [
+        { type: "call", strike: lower, premium: callOTM * 0.3, qty: 1 },
+        { type: "call", strike: midStrike, premium: callOTM * 0.3, qty: -2 },
+        { type: "call", strike: upper, premium: callOTM * 0.3, qty: 1 },
+      ], breakevenPoints: [be_low, be_high], maxProfitValue: Math.max(0, maxP_bf), maxLossValue: -cost_bf },
     });
   }
 
@@ -461,6 +522,10 @@ function buildStrategies(opt: TenxEarningsOptionItem | undefined): OptionStrateg
       strikes: `持有股票 + Sell ${fmtStrike(strike_cc, currency)}C`,
       premium: `收入 ${fmtCurrency(credit_cc, currency)}`,
       logic: `持有标的卖 OTM Call 增强收益，降低持仓成本${liq >= 80 ? "。流动性充足，滑点风险小" : ""}。适合看好标的但认为短期涨幅有限的情况。`,
+      payoffParams: { S, iv, days, sigma1, legs: [
+        { type: "stock", strike: S, premium: 0, qty: 1 },
+        { type: "call", strike: strike_cc, premium: credit_cc, qty: -1 },
+      ], breakevenPoints: [be_cc], maxProfitValue: strike_cc - S + credit_cc, maxLossValue: -(S - credit_cc) },
     });
   }
 
@@ -469,17 +534,228 @@ function buildStrategies(opt: TenxEarningsOptionItem | undefined): OptionStrateg
   return strategies;
 }
 
+/* ── Payoff 计算函数 ── */
+
+/** 单腿到期收益计算 */
+function legPayoff(
+  legType: "call" | "put" | "stock",
+  strike: number,
+  premium: number,
+  qty: number,
+  ST: number,
+): number {
+  if (legType === "stock") {
+    // stock: profit = qty * (ST - entryPrice)，entryPrice 存在 strike 中
+    return qty * (ST - strike);
+  }
+  const intrinsic = legType === "call"
+    ? Math.max(0, ST - strike)
+    : Math.max(0, strike - ST);
+  return qty * intrinsic - qty * premium;
+}
+
+/** 生成 Payoff 曲线数据点（S ± 2σ 范围） */
+function generatePayoffData(
+  params: StrategyPayoffParams,
+  numPoints = 200,
+): { prices: number[]; payoffs: number[] } {
+  const { S, sigma1, legs } = params;
+  const xMin = S - 2 * sigma1;
+  const xMax = S + 2 * sigma1;
+  const step = (xMax - xMin) / (numPoints - 1);
+  const prices: number[] = [];
+  const payoffs: number[] = [];
+  for (let i = 0; i < numPoints; i++) {
+    const ST = xMin + i * step;
+    let total = 0;
+    for (const leg of legs) {
+      total += legPayoff(leg.type, leg.strike, leg.premium, leg.qty, ST);
+    }
+    prices.push(ST);
+    payoffs.push(total);
+  }
+  return { prices, payoffs };
+}
+
+/** 特定价格点的 P&L */
+function scenarioPayoff(params: StrategyPayoffParams, targetPrice: number): number {
+  let total = 0;
+  for (const leg of params.legs) {
+    total += legPayoff(leg.type, leg.strike, leg.premium, leg.qty, targetPrice);
+  }
+  return total;
+}
+
+/* ── 场景分析小单元格 ── */
+
+function ScenarioCell({ label, price, pnl }: { label: string; price: number; pnl: number }) {
+  const tone = pnl >= 0 ? "text-green-600 dark:text-green-400" : "text-red-500 dark:text-red-400";
+  return (
+    <div className="rounded-lg bg-gray-50 px-3 py-2 text-center dark:bg-gray-900/60">
+      <div className="text-[10px] text-gray-500 dark:text-gray-400">{label}</div>
+      <div className="text-xs text-gray-400">${price.toFixed(1)}</div>
+      <div className={`text-sm font-bold ${tone}`}>
+        {pnl >= 0 ? "+" : ""}{pnl.toFixed(2)}
+      </div>
+    </div>
+  );
+}
+
+/* ── 策略 Payoff 详情面板 ── */
+
+function StrategyPayoffPanel({ params }: { params: StrategyPayoffParams }) {
+  const { S, sigma1, legs, breakevenPoints } = params;
+
+  const chartData = useMemo(() => generatePayoffData(params), [params]);
+
+  // 场景分析
+  const pnlAtS = scenarioPayoff(params, S);
+  const pnlAtPlus1S = scenarioPayoff(params, S + sigma1);
+  const pnlAtMinus1S = scenarioPayoff(params, S - sigma1);
+
+  // 双系列：盈利线 + 亏损线（实现绿涨红跌视觉效果）
+  const profitData = chartData.payoffs.map((v) => (v >= 0 ? v : null));
+  const lossData = chartData.payoffs.map((v) => (v < 0 ? v : null));
+
+  const xaxisLabels = chartData.prices.map((p) => +p.toFixed(2));
+
+  // 标注：当前价格 + 盈亏平衡点
+  const xAnnotations: Array<{ x: number; strokeDashArray: number; borderColor: string; label: { text: string; style: { background: string; color: string; fontSize: string } } }> = [
+    {
+      x: S,
+      strokeDashArray: 4,
+      borderColor: "#6366f1",
+      label: { text: `现价 $${S.toFixed(1)}`, style: { background: "#6366f1", color: "#fff", fontSize: "10px" } },
+    },
+    ...breakevenPoints.map((be) => ({
+      x: be,
+      strokeDashArray: 2,
+      borderColor: "#eab308",
+      label: { text: `BE $${be.toFixed(1)}`, style: { background: "#eab308", color: "#000", fontSize: "10px" } },
+    })),
+  ];
+
+  const options: ApexOptions = {
+    chart: {
+      fontFamily: "Outfit, sans-serif",
+      type: "area",
+      height: 280,
+      toolbar: { show: false },
+      background: "transparent",
+      animations: { enabled: true, speed: 300 },
+    },
+    stroke: { width: [2, 2], curve: "straight" },
+    colors: ["#10b981", "#ef4444"],
+    fill: {
+      type: "gradient",
+      gradient: { shadeIntensity: 1, opacityFrom: 0.35, opacityTo: 0.02, type: "vertical" },
+    },
+    series: [
+      { name: "盈利", data: profitData },
+      { name: "亏损", data: lossData },
+    ],
+    annotations: {
+      xaxis: xAnnotations,
+      yaxis: [
+        { y: 0, strokeDashArray: 0, borderColor: "#6b7280", borderWidth: 1 },
+      ],
+    },
+    xaxis: {
+      categories: xaxisLabels,
+      tickAmount: 8,
+      axisBorder: { show: false },
+      axisTicks: { show: false },
+      labels: {
+        style: { fontSize: "9px", colors: "#9ca3af" },
+        formatter: (val: string) => {
+          const num = parseFloat(val);
+          const pct = ((num - S) / S * 100);
+          if (Math.abs(num - S) < sigma1 * 0.05) return `$${num.toFixed(0)}`;
+          if (Math.abs(num - (S + sigma1)) < sigma1 * 0.05) return `+${pct.toFixed(0)}%`;
+          if (Math.abs(num - (S - sigma1)) < sigma1 * 0.05) return `${pct.toFixed(0)}%`;
+          return "";
+        },
+        rotate: 0,
+        hideOverlappingLabels: true,
+      },
+      title: { text: "到期标的价格", style: { fontSize: "10px", color: "#6b7280" } },
+    },
+    yaxis: {
+      labels: {
+        style: { fontSize: "9px", colors: "#9ca3af" },
+        formatter: (val: number) => `$${val.toFixed(1)}`,
+      },
+      title: { text: "P&L", style: { fontSize: "10px", color: "#6b7280" } },
+    },
+    grid: {
+      borderColor: "#e5e7eb30",
+      strokeDashArray: 3,
+      xaxis: { lines: { show: false } },
+      yaxis: { lines: { show: true } },
+    },
+    dataLabels: { enabled: false },
+    legend: { show: false },
+    tooltip: {
+      enabled: true,
+      x: { formatter: (val: number) => `价格: $${val.toFixed(2)}` },
+      y: {
+        formatter: (val: number | null) => val !== null ? `${val >= 0 ? "+" : ""}$${val.toFixed(2)}` : "-",
+      },
+    },
+    theme: { mode: "light" },
+  };
+
+  return (
+    <div className="mt-3 space-y-3">
+      {/* Payoff 曲线 */}
+      <div className="rounded-lg border border-gray-200 bg-white p-2 dark:border-gray-700 dark:bg-gray-800/50">
+        <ReactApexChart options={options} series={options.series!} type="area" height={280} />
+      </div>
+
+      {/* 场景分析 */}
+      <div className="grid grid-cols-3 gap-2">
+        <ScenarioCell label={`-1σ (${((S - sigma1 - S) / S * 100).toFixed(0)}%)`} price={S - sigma1} pnl={pnlAtMinus1S} />
+        <ScenarioCell label="当前价" price={S} pnl={pnlAtS} />
+        <ScenarioCell label={`+1σ (+${((S + sigma1 - S) / S * 100).toFixed(0)}%)`} price={S + sigma1} pnl={pnlAtPlus1S} />
+      </div>
+
+      {/* 持仓明细 */}
+      <div className="rounded-lg border border-gray-200 bg-gray-50 p-2 dark:border-gray-700 dark:bg-gray-900/40">
+        <div className="mb-1 text-[10px] font-medium text-gray-500 dark:text-gray-400">持仓明细</div>
+        <div className="space-y-0.5">
+          {legs.map((leg, i) => (
+            <div key={i} className="flex items-center justify-between text-[11px]">
+              <span className={leg.qty > 0 ? "text-green-600 dark:text-green-400" : "text-red-500 dark:text-red-400"}>
+                {leg.qty > 0 ? "Buy" : "Sell"} {leg.type === "stock" ? "股票" : leg.type === "call" ? "Call" : "Put"} ${leg.strike.toFixed(1)}
+              </span>
+              <span className="text-gray-500 dark:text-gray-400">
+                权利金 ${leg.premium.toFixed(2)} × {Math.abs(leg.qty)}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── 策略卡片组件 ── */
 
-function StrategyCard({ s }: { s: OptionStrategy }) {
+function StrategyCard({ s, isExpanded, onToggleExpand }: { s: OptionStrategy; isExpanded: boolean; onToggleExpand: () => void }) {
   const hasBacktest = s.backtestWinRate != null && s.backtestTotalTrades != null && s.backtestTotalTrades > 0;
   return (
     <div className="rounded-lg border border-gray-200 bg-gray-50/50 p-3 dark:border-gray-800 dark:bg-gray-900/40">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-bold text-gray-900 dark:text-white">{s.name}</span>
+        <button
+          type="button"
+          onClick={onToggleExpand}
+          className="flex items-center gap-1.5 group cursor-pointer"
+          title="点击查看 Payoff 详情"
+        >
+          <span className="text-sm font-bold text-gray-900 group-hover:text-brand-600 dark:text-white dark:group-hover:text-brand-300 transition-colors">{s.name}</span>
           <span className="text-xs text-gray-400 dark:text-gray-500">{s.nameEn}</span>
-        </div>
+          <ChevronRight className={`h-3.5 w-3.5 text-gray-400 transition-transform duration-200 ${isExpanded ? "rotate-90" : ""}`} />
+        </button>
         <StatusTag label={s.direction} tone={s.directionTone} />
       </div>
 
@@ -555,6 +831,9 @@ function StrategyCard({ s }: { s: OptionStrategy }) {
           )}
         </div>
       )}
+
+      {/* Payoff 详情面板（点击展开） */}
+      {isExpanded && <StrategyPayoffPanel params={s.payoffParams} />}
     </div>
   );
 }
@@ -582,6 +861,7 @@ export default function TenxHunterDiscoverClient({ snapshot, earningsLens, earni
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [backtestCache, setBacktestCache] = useState<Map<string, TenxStrategyBacktestData>>(new Map());
   const [backtestLoading, setBacktestLoading] = useState<string | null>(null);
+  const [expandedStrategy, setExpandedStrategy] = useState<string | null>(null);
 
   const keyword = search.trim().toLowerCase();
 
@@ -873,7 +1153,17 @@ export default function TenxHunterDiscoverClient({ snapshot, earningsLens, earni
                             )}
                           </div>
                           <div className="grid grid-cols-1 gap-2 xl:grid-cols-2">
-                            {merged.map((s) => <StrategyCard key={s.key} s={s} />)}
+                            {merged.map((s) => (
+                              <StrategyCard
+                                key={s.key}
+                                s={s}
+                                isExpanded={expandedStrategy === `${symbol}::${s.key}`}
+                                onToggleExpand={() => {
+                                  const k = `${symbol}::${s.key}`;
+                                  setExpandedStrategy((prev) => prev === k ? null : k);
+                                }}
+                              />
+                            ))}
                           </div>
                         </div>
                       );
