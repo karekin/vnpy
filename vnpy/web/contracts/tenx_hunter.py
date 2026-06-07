@@ -658,3 +658,47 @@ class TenxDeerFlowSearchRequest(BaseModel):
 class TenxMutationResponse(BaseModel):
     ok: bool = True
     message: str
+
+
+# ── 期权策略回测 ──────────────────────────────────────────────
+
+
+class TenxBacktestTradeRow(BaseModel):
+    """单笔回测交易明细"""
+    trade_date: str
+    entry_price: float
+    exit_price: float | None = None
+    iv_on_entry: float | None = None
+    flow_sentiment: str = "unknown"
+
+
+class TenxBacktestStrategyRow(BaseModel):
+    """单个策略的回测统计结果"""
+    key: str
+    name: str
+    name_en: str
+    direction: str
+    total_trades: int
+    wins: int
+    losses: int
+    win_rate: float              # 0.0-1.0
+    avg_profit_pct: float
+    avg_loss_pct: float
+    profit_factor: float
+    current_streak: str          # e.g. "W3" / "L2"
+    best_trade_pct: float
+    worst_trade_pct: float
+    backtest_logic: str          # 人类可读的策略推理段落
+    sample_trades: list[TenxBacktestTradeRow]
+
+
+class TenxStrategyBacktestResponse(BaseModel):
+    """期权策略历史回测响应"""
+    market: str
+    symbol: str
+    lookback_days: int
+    horizon_days: int
+    total_backtest_days: int
+    snapshot_at: str
+    strategies: list[TenxBacktestStrategyRow]
+    notes: list[str]

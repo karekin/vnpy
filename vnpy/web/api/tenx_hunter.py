@@ -14,6 +14,7 @@ from vnpy.web.contracts.tenx_hunter import (
     TenxDiscoverCandidateCreateRequest,
     TenxEarningsDeskResponse,
     TenxEarningsLensResponse,
+    TenxStrategyBacktestResponse,
     TenxEventMonitorResponse,
     TenxMarketSentimentResponse,
     TenxMutationResponse,
@@ -100,6 +101,19 @@ def get_earnings_lens(market: str = Query("US")) -> TenxEarningsLensResponse:
 @router.get("/earnings-desk", response_model=TenxEarningsDeskResponse)
 def get_earnings_desk(market: str = Query("US"), horizon: int = Query(45)) -> TenxEarningsDeskResponse:
     return services.tenx_service.get_earnings_desk(market, horizon_days=horizon)
+
+
+@router.get("/strategy-backtest", response_model=TenxStrategyBacktestResponse)
+def get_strategy_backtest(
+    symbol: str = Query(..., description="股票代码"),
+    market: str = Query("US"),
+    lookback_days: int = Query(90, description="回测回溯天数"),
+    horizon_days: int = Query(30, description="模拟持仓天数"),
+) -> TenxStrategyBacktestResponse:
+    """对单只股票运行 8 种期权策略的历史回测，返回逐策略胜率。"""
+    return services.tenx_service.get_strategy_backtest(
+        market, symbol, lookback_days=lookback_days, horizon_days=horizon_days,
+    )
 
 
 @router.post("/event-monitor/refresh", response_model=TenxEventMonitorResponse)

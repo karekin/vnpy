@@ -571,3 +571,43 @@ export type TenxOverviewMetric = {
   delta: string;
   tone: "green" | "yellow" | "blue" | "slate";
 };
+
+/* ── 期权策略历史回测 ── */
+
+export type TenxBacktestTrade = {
+  tradeDate: string;
+  entryPrice: number;
+  exitPrice: number | null;
+  ivOnEntry: number | null;
+  flowSentiment: string;
+};
+
+export type TenxBacktestStrategyResult = {
+  key: string;
+  name: string;
+  nameEn: string;
+  direction: string;
+  totalTrades: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  avgProfitPct: number;
+  avgLossPct: number;
+  profitFactor: number;
+  currentStreak: string;
+  bestTradePct: number;
+  worstTradePct: number;
+  backtestLogic: string;
+  sampleTrades: TenxBacktestTrade[];
+};
+
+export type TenxStrategyBacktestData = {
+  market: string;
+  symbol: string;
+  lookbackDays: number;
+  horizonDays: number;
+  totalBacktestDays: number;
+  snapshotAt: string;
+  strategies: TenxBacktestStrategyResult[];
+  notes: string[];
+};

@@ -45,6 +45,9 @@ from vnpy.web.contracts.tenx_hunter import (
     TenxWatchlistUpdateRequest,
     TenxWhySelectedRow,
     TenxWorkspaceSnapshotResponse,
+    TenxBacktestStrategyRow,
+    TenxBacktestTradeRow,
+    TenxStrategyBacktestResponse,
 )
 from vnpy.web.services.political_signal_service import PoliticalSignalService
 from vnpy.web.tenx_hunter.config import Settings, load_settings
@@ -2426,3 +2429,56 @@ class TenxHunterService:
                 ),
             )
         return TenxMutationResponse(message=f"{payload.symbol.upper()} 的提醒草稿已保存。")
+
+
+    # ── 期权策略历史回测 ──────────────────────────────────────
+
+    def get_strategy_backtest(
+        self,
+        market: str | None,
+        symbol: str,
+        lookback_days: int = 90,
+        horizon_days: int = 30,
+    ) -> TenxStrategyBacktestResponse:
+        """对单只股票运行 8 种期权策略的历史回测。"""
+        market = self._normalize_market(market, self._settings)
+        from vnpy.web.tenx_hunter.strategy_backtest import run_strategy_backtest
+        raw = run_strategy_backtest(
+            symbol.upper(),
+            market=market,
+            lookback_days=lookback_days,
+            horizon_days=horizon_days,
+            settings=self._settings,
+        )
+        return TenxStrategyBacktestResponse(
+            market=raw["market"],
+            symbol=raw["symbol"],
+            lookback_days=raw["lookback_days"],
+            horizon_days=raw["horizon_days"],
+            total_backtest_days=raw["total_backtest_days"],
+            snapshot_at=raw["snapshot_at"],
+            strategies=[
+                TenxBacktestStrategyRow(
+                    key=s["key"],
+                    name=s["name"],
+                    name_en=s["name_en"],
+                    direction=s["direction"],
+                    total_trades=s["total_trades"],
+                    wins=s["wins"],
+                    losses=s["losses"],
+                    win_rate=s["win_rate"],
+                    avg_profit_pct=s["avg_profit_pct"],
+                    avg_loss_pct=s["avg_loss_pct"],
+                    profit_factor=s["profit_factor"],
+                    current_streak=s["current_streak"],
+                    best_trade_pct=s["best_trade_pct"],
+                    worst_trade_pct=s["worst_trade_pct"],
+                    backtest_logic=s["backtest_logic"],
+                    sample_trades=[
+                        TenxBacktestTradeRow(**t) for t in s["sample_trades"]
+                    ],
+                )
+                for s in raw["strategies"]
+            ],
+            notes=raw["notes"],
+        )

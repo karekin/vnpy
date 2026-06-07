@@ -5,11 +5,11 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo, useState, type FormEvent } from "react";
 import StatusTag from "@/components/cb-quant/StatusTag";
 import TablePaginationBar from "@/components/cb-quant/TablePaginationBar";
-import { createDiscoverCandidate, createWatchlistEntry, getTenxErrorMessage, uploadTenxResearchReport } from "@/components/tenx-hunter/api";
+import { createDiscoverCandidate, createWatchlistEntry, getTenxErrorMessage, loadTenxStrategyBacktest, uploadTenxResearchReport } from "@/components/tenx-hunter/api";
 import { CandidateFlowTag } from "@/components/tenx-hunter/TenxFlowStatus";
 import TenxPageShell from "@/components/tenx-hunter/TenxPageShell";
 import { getRiskTone, getStageTone, TenxSectionCard } from "@/components/tenx-hunter/TenxCards";
-import type { TenxEarningsLens, TenxEarningsOptionItem, TenxEarningsShortlineItem, TenxFlowStatus, TenxWorkspaceSnapshot } from "@/components/tenx-hunter/types";
+import type { TenxEarningsLens, TenxEarningsOptionItem, TenxEarningsShortlineItem, TenxFlowStatus, TenxStrategyBacktestData, TenxWorkspaceSnapshot } from "@/components/tenx-hunter/types";
 import { BellRing, Binoculars, BookOpen, ChevronDown, ChevronRight, FileUp, Plus, Search } from "lucide-react";
 
 const stageOptions = ["all", "discovery", "validation", "acceleration", "crowded", "falsified"] as const;
@@ -170,6 +170,329 @@ function ForecastCell({ label, value, tone = "slate" }: { label: string; value: 
   );
 }
 
+/* ── 期权策略引擎 ── */
+
+type OptionStrategy = {
+  key: string;
+  name: string;
+  nameEn: string;
+  direction: string;
+  directionTone: ForecastTone;
+  winProb: number;
+  maxProfit: string;
+  maxLoss: string;
+  breakeven: string;
+  strikes: string;
+  premium: string;
+  logic: string;
+  rank: number;
+  /* 回测数据（懒加载） */
+  backtestWinRate?: number | null;
+  backtestTotalTrades?: number | null;
+  backtestLogic?: string | null;
+  backtestProfitFactor?: number | null;
+  backtestStreak?: string | null;
+};
+
+/** 正态分布累积函数近似（Abramowitz & Stegun） */
+function normalCDF(x: number): number {
+  const a1 = 0.254829592, a2 = -0.284496736, a3 = 1.421413741, a4 = -1.453152027, a5 = 1.061405429, p = 0.3275911;
+  const sign = x < 0 ? -1 : 1;
+  const t = 1 / (1 + p * Math.abs(x));
+  const y = 1 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-x * x / 2);
+  return 0.5 * (1 + sign * y);
+}
+
+/** 估算策略胜率：P(价格落在盈利区间) */
+function estWinProb(S: number, K_be: number, profitable_above: boolean, iv: number, days: number): number {
+  if (iv <= 0 || days <= 0) return 50;
+  const sigma = S * iv * Math.sqrt(days / 365);
+  if (sigma <= 0) return 50;
+  const d = (K_be - S) / sigma;
+  return profitable_above
+    ? Math.round((1 - normalCDF(d)) * 100)
+    : Math.round(normalCDF(d) * 100);
+}
+
+function buildStrategies(opt: TenxEarningsOptionItem | undefined): OptionStrategy[] {
+  // 无期权数据时返回空
+  if (!opt || opt.dataQualityFlag !== "ok" || !opt.underlyingPrice) return [];
+
+  const S = opt.underlyingPrice;
+  const iv = normalizeVol(opt.avgImpliedVolatility) ?? 0.40; // 默认 40% IV
+  const cpRatio = opt.callPutVolumeRatio ?? 1;
+  const cpOI = opt.callPutOpenInterestRatio ?? 1;
+  const flow = opt.flowSentiment ?? "unknown";
+  const sel = opt.optionSelectionScore ?? 50;
+  const liq = opt.liquidityScore ?? 50;
+  const days = 30; // 默认 30 天到期
+  const currency = "USD";
+  const sigma1 = S * iv * Math.sqrt(days / 365); // 1σ 价格变动
+
+  // 经验修正：selectionScore 高 → 方向性策略胜率 +3~5%
+  const selBonus = sel >= 80 ? 5 : sel >= 70 ? 3 : 0;
+  // 资金流方向修正
+  const flowBonus = flow === "bullish" ? 3 : flow === "bearish" ? 3 : 0;
+
+  // Strike 辅助函数
+  const atm = S;
+  const otm_call = S + sigma1 * 0.5;    // ATM + 0.5σ
+  const otm_call2 = S + sigma1;          // ATM + 1σ
+  const otm_put = S - sigma1 * 0.5;      // ATM - 0.5σ
+  const otm_put2 = S - sigma1;           // ATM - 1σ
+  const mid = (S + (opt.maxPainStrike || S)) / 2; // 蝴蝶中点
+
+  // Premium 估算（BSM 简化）
+  const callATM = S * iv * Math.sqrt(days / 365) * 0.4;  // ATM call ≈ 0.4 × S × σ√T
+  const putATM = callATM * (cpRatio < 0.9 ? 1.1 : 0.95);
+  const callOTM = callATM * 0.45;
+  const putOTM = putATM * 0.45;
+  const callOTM2 = callATM * 0.18;
+  const putOTM2 = putATM * 0.18;
+
+  // IV 水平判断
+  const ivHigh = iv > 0.45;
+  const ivLow = iv < 0.25;
+  const ivMid = !ivHigh && !ivLow;
+
+  const strategies: OptionStrategy[] = [];
+
+  // ── 1. 看涨价差 Bull Call Spread ──
+  {
+    const be = atm + (callATM - callOTM);
+    const maxP = otm_call - atm - (callATM - callOTM);
+    const maxL = callATM - callOTM;
+    let wp = estWinProb(S, be, true, iv, days) + selBonus + flowBonus;
+    const bullish = flow === "bullish" || cpRatio >= 1.2;
+    const rank = (bullish && ivMid) ? 1 : (bullish ? 3 : 6);
+    wp = Math.min(85, Math.max(30, wp + (bullish ? 5 : -3)));
+    strategies.push({
+      key: "bull_call_spread", name: "看涨价差", nameEn: "Bull Call Spread",
+      direction: "偏多", directionTone: "green", winProb: wp, rank,
+      maxProfit: `有限 (+${fmtCurrency(maxP, currency)})`, maxLoss: `有限 (-${fmtCurrency(maxL, currency)})`,
+      breakeven: fmtStrike(be, currency),
+      strikes: `Buy ${fmtStrike(atm, currency)}C / Sell ${fmtStrike(otm_call, currency)}C`,
+      premium: `净支出 ${fmtCurrency(callATM - callOTM, currency)}`,
+      logic: `资金流偏多(${flow})且 Call/Put ${cpRatio.toFixed(2)}，看涨价差限定风险${ivMid ? "，IV 适中定价合理" : ivHigh ? "，但 IV 偏高注意时间衰减" : "，IV 偏低权利金便宜"}。`,
+    });
+  }
+
+  // ── 2. 看跌价差 Bear Put Spread ──
+  {
+    const be = atm - (putATM - putOTM);
+    const maxP = atm - otm_put - (putATM - putOTM);
+    const maxL = putATM - putOTM;
+    let wp = estWinProb(S, be, false, iv, days) + selBonus + flowBonus;
+    const bearish = flow === "bearish" || cpRatio <= 0.85;
+    const rank = (bearish && ivMid) ? 1 : (bearish ? 3 : 7);
+    wp = Math.min(85, Math.max(30, wp + (bearish ? 5 : -3)));
+    strategies.push({
+      key: "bear_put_spread", name: "看跌价差", nameEn: "Bear Put Spread",
+      direction: "偏空", directionTone: "red", winProb: wp, rank,
+      maxProfit: `有限 (+${fmtCurrency(maxP, currency)})`, maxLoss: `有限 (-${fmtCurrency(maxL, currency)})`,
+      breakeven: fmtStrike(be, currency),
+      strikes: `Buy ${fmtStrike(atm, currency)}P / Sell ${fmtStrike(otm_put, currency)}P`,
+      premium: `净支出 ${fmtCurrency(putATM - putOTM, currency)}`,
+      logic: `资金流偏空(${flow})且 Call/Put ${cpRatio.toFixed(2)}，看跌价差限定下行风险${ivMid ? "，IV 适中" : ""}。`,
+    });
+  }
+
+  // ── 3. 买入跨式 Long Straddle ──
+  {
+    const cost = callATM + putATM;
+    const be_up = atm + cost;
+    const be_dn = atm - cost;
+    const wp_up = (1 - normalCDF((be_up - S) / sigma1)) * 100;
+    const wp_dn = normalCDF((be_dn - S) / sigma1) * 100;
+    let wp = Math.round(wp_up + wp_dn);
+    const rank = ivLow ? 2 : (ivHigh ? 7 : 5);
+    wp = Math.min(70, Math.max(20, wp + (ivLow ? 8 : -5)));
+    strategies.push({
+      key: "long_straddle", name: "买入跨式", nameEn: "Long Straddle",
+      direction: "波动", directionTone: "yellow", winProb: wp, rank,
+      maxProfit: `理论无限`, maxLoss: `有限 (-${fmtCurrency(cost, currency)})`,
+      breakeven: `${fmtStrike(be_dn, currency)} / ${fmtStrike(be_up, currency)}`,
+      strikes: `Buy ${fmtStrike(atm, currency)}C + Buy ${fmtStrike(atm, currency)}P`,
+      premium: `净支出 ${fmtCurrency(cost, currency)}`,
+      logic: `买入同价 Call+Put，押注大幅突破${ivLow ? "。IV 偏低(${(iv * 100).toFixed(0)}%)，权利金便宜，波动性价比高" : "。IV ${(iv * 100).toFixed(0)}%，需要足够大的方向性突破才能盈利"}。`,
+    });
+  }
+
+  // ── 4. 卖出跨式 Short Straddle ──
+  {
+    const credit = callATM + putATM;
+    const be_up = atm + credit;
+    const be_dn = atm - credit;
+    const wp_up = (1 - normalCDF((be_up - S) / sigma1)) * 100;
+    const wp_dn = normalCDF((be_dn - S) / sigma1) * 100;
+    let wp = Math.round(100 - wp_up - wp_dn);
+    const rank = ivHigh ? 1 : (ivMid ? 4 : 8);
+    wp = Math.min(80, Math.max(35, wp + (ivHigh ? 8 : -5)));
+    strategies.push({
+      key: "short_straddle", name: "卖出跨式", nameEn: "Short Straddle",
+      direction: "中性", directionTone: "blue", winProb: wp, rank,
+      maxProfit: `有限 (+${fmtCurrency(credit, currency)})`, maxLoss: `理论无限`,
+      breakeven: `${fmtStrike(be_dn, currency)} / ${fmtStrike(be_up, currency)}`,
+      strikes: `Sell ${fmtStrike(atm, currency)}C + Sell ${fmtStrike(atm, currency)}P`,
+      premium: `净收入 ${fmtCurrency(credit, currency)}`,
+      logic: `卖出同价 Call+Put 收权利金，押注横盘${ivHigh ? "。IV 偏高(${(iv * 100).toFixed(0)}%)，权利金丰厚，卖方优势明显" : "。IV 适中，需确信短期无大幅波动"}。风险无限需严格止损。`,
+    });
+  }
+
+  // ── 5. 买入宽跨式 Long Strangle ──
+  {
+    const cost = callOTM + putOTM;
+    const be_up = otm_call + cost;
+    const be_dn = otm_put - cost;
+    const wp_up = (1 - normalCDF((be_up - S) / sigma1)) * 100;
+    const wp_dn = normalCDF((be_dn - S) / sigma1) * 100;
+    let wp = Math.round(wp_up + wp_dn);
+    const rank = ivLow ? 3 : (ivMid ? 6 : 8);
+    wp = Math.min(60, Math.max(15, wp + (ivLow ? 5 : -3)));
+    strategies.push({
+      key: "long_strangle", name: "买入宽跨式", nameEn: "Long Strangle",
+      direction: "突破", directionTone: "yellow", winProb: wp, rank,
+      maxProfit: `理论无限`, maxLoss: `有限 (-${fmtCurrency(cost, currency)})`,
+      breakeven: `${fmtStrike(be_dn, currency)} / ${fmtStrike(be_up, currency)}`,
+      strikes: `Buy ${fmtStrike(otm_call, currency)}C + Buy ${fmtStrike(otm_put, currency)}P`,
+      premium: `净支出 ${fmtCurrency(cost, currency)}`,
+      logic: `虚值 Call+Put 成本更低(${fmtCurrency(cost, currency)})，需要更大的突破幅度。${ivLow ? "IV 偏低，买入波动率性价比好" : "IV 偏高，买入成本较大"}。`,
+    });
+  }
+
+  // ── 6. 铁鹰 Iron Condor ──
+  {
+    const credit = putOTM + callOTM - putOTM2 - callOTM2;
+    const be_put = otm_put - credit;
+    const be_call = otm_call + credit;
+    let wp = Math.round(normalCDF((otm_put - be_put) / (sigma1 * 0.5)) * 50 + normalCDF((be_call - otm_call) / (sigma1 * 0.5)) * 50);
+    const rank = (ivHigh || flow === "neutral") ? 2 : (ivMid ? 4 : 7);
+    wp = Math.min(78, Math.max(40, wp + (ivHigh ? 6 : 0) + (flow === "neutral" ? 4 : 0)));
+    strategies.push({
+      key: "iron_condor", name: "铁鹰", nameEn: "Iron Condor",
+      direction: "中性", directionTone: "blue", winProb: wp, rank,
+      maxProfit: `有限 (+${fmtCurrency(Math.max(0, credit), currency)})`, maxLoss: `有限 (-${fmtCurrency(Math.abs(otm_put - otm_put2 - credit), currency)})`,
+      breakeven: `${fmtStrike(be_put, currency)} / ${fmtStrike(be_call, currency)}`,
+      strikes: `Sell ${fmtStrike(otm_put, currency)}P/${fmtStrike(otm_put2, currency)}P + Sell ${fmtStrike(otm_call, currency)}C/${fmtStrike(otm_call2, currency)}C`,
+      premium: `净收入 ${fmtCurrency(Math.max(0, credit), currency)}`,
+      logic: `四腿组合卖 Put价差+Call价差收权利金，押注区间震荡${ivHigh ? "。IV 偏高，卖方优势大" : ""}${flow === "neutral" ? "。资金流中性，方向不明" : ""}。盈亏比有限但胜率高。`,
+    });
+  }
+
+  // ── 7. 蝴蝶 Call Butterfly ──
+  {
+    const midStrike = roundStrike(mid);
+    const lower = roundStrike(midStrike - sigma1 * 0.5);
+    const upper = roundStrike(midStrike + sigma1 * 0.5);
+    const cost_bf = callOTM * 0.3; // 简化估算
+    const maxP_bf = upper - midStrike - cost_bf;
+    const be_low = lower + cost_bf;
+    const be_high = upper - cost_bf;
+    let wp = Math.round(normalCDF((midStrike - be_low) / (sigma1 * 0.3)) * 100 * 0.6);
+    const rank = (flow === "neutral" && ivMid) ? 3 : 5;
+    wp = Math.min(55, Math.max(20, wp + (flow === "neutral" ? 5 : 0)));
+    strategies.push({
+      key: "call_butterfly", name: "蝴蝶", nameEn: "Call Butterfly",
+      direction: "收敛", directionTone: "blue", winProb: wp, rank,
+      maxProfit: `有限 (+${fmtCurrency(Math.max(0, maxP_bf), currency)})`, maxLoss: `有限 (-${fmtCurrency(cost_bf, currency)})`,
+      breakeven: `${fmtStrike(be_low, currency)} / ${fmtStrike(be_high, currency)}`,
+      strikes: `Buy ${fmtStrike(lower, currency)}C / Sell 2×${fmtStrike(midStrike, currency)}C / Buy ${fmtStrike(upper, currency)}C`,
+      premium: `净支出 ${fmtCurrency(cost_bf, currency)}`,
+      logic: `三腿组合押注价格收敛到中点(${fmtStrike(midStrike, currency)})${flow === "neutral" ? "，资金流中性支持收敛判断" : ""}。低成本有限风险，适合高确信度的区间判断。`,
+    });
+  }
+
+  // ── 8. 备兑看涨 Covered Call ──
+  {
+    const strike_cc = roundStrike(otm_call);
+    const credit_cc = callOTM;
+    const be_cc = S - credit_cc;
+    let wp = Math.round(normalCDF((strike_cc - S) / sigma1) * 100);
+    const rank = (flow === "bullish" || flow === "neutral") ? 4 : 6;
+    wp = Math.min(75, Math.max(50, wp + 10)); // 备兑天然胜率高
+    strategies.push({
+      key: "covered_call", name: "备兑看涨", nameEn: "Covered Call",
+      direction: "偏多", directionTone: "green", winProb: wp, rank,
+      maxProfit: `有限 (+${fmtCurrency(strike_cc - S + credit_cc, currency)})`, maxLoss: `${fmtCurrency(S - credit_cc, currency)} (标的大跌)`,
+      breakeven: fmtStrike(be_cc, currency),
+      strikes: `持有股票 + Sell ${fmtStrike(strike_cc, currency)}C`,
+      premium: `收入 ${fmtCurrency(credit_cc, currency)}`,
+      logic: `持有标的卖 OTM Call 增强收益，降低持仓成本${liq >= 80 ? "。流动性充足，滑点风险小" : ""}。适合看好标的但认为短期涨幅有限的情况。`,
+    });
+  }
+
+  // 按 rank 排序
+  strategies.sort((a, b) => a.rank - b.rank || b.winProb - a.winProb);
+  return strategies;
+}
+
+/* ── 策略卡片组件 ── */
+
+function StrategyCard({ s }: { s: OptionStrategy }) {
+  const hasBacktest = s.backtestWinRate != null && s.backtestTotalTrades != null && s.backtestTotalTrades > 0;
+  return (
+    <div className="rounded-lg border border-gray-200 bg-gray-50/50 p-3 dark:border-gray-800 dark:bg-gray-900/40">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-bold text-gray-900 dark:text-white">{s.name}</span>
+          <span className="text-xs text-gray-400 dark:text-gray-500">{s.nameEn}</span>
+        </div>
+        <StatusTag label={s.direction} tone={s.directionTone} />
+      </div>
+
+      {/* 理论胜率条 */}
+      <div className="mt-2 flex items-center gap-2">
+        <span className="w-12 shrink-0 text-xs text-gray-500 dark:text-gray-400">理论</span>
+        <div className="h-2 flex-1 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
+          <div
+            className={`h-full rounded-full transition-all ${s.winProb >= 60 ? "bg-green-500" : s.winProb >= 45 ? "bg-yellow-500" : "bg-red-400"}`}
+            style={{ width: `${Math.min(100, s.winProb)}%` }}
+          />
+        </div>
+        <span className={`text-xs font-bold ${s.winProb >= 60 ? "text-green-600 dark:text-green-400" : s.winProb >= 45 ? "text-yellow-600 dark:text-yellow-400" : "text-red-500"}`}>
+          {s.winProb}%
+        </span>
+      </div>
+
+      {/* 回测胜率条 */}
+      {hasBacktest && (() => {
+        const btWin = s.backtestWinRate!;
+        const btTotal = s.backtestTotalTrades!;
+        return (
+          <div className="mt-1 flex items-center gap-2">
+            <span className="w-12 shrink-0 text-xs text-indigo-500 dark:text-indigo-400">回测</span>
+            <div className="h-2 flex-1 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
+              <div
+                className={`h-full rounded-full transition-all ${btWin >= 60 ? "bg-indigo-500" : btWin >= 45 ? "bg-amber-500" : "bg-rose-400"}`}
+                style={{ width: `${Math.min(100, btWin)}%` }}
+              />
+            </div>
+            <span className={`text-xs font-bold ${btWin >= 60 ? "text-indigo-600 dark:text-indigo-400" : btWin >= 45 ? "text-amber-600 dark:text-amber-400" : "text-rose-500"}`}>
+              {btWin}%<span className="font-normal text-gray-400 dark:text-gray-500"> ({btTotal}笔)</span>
+            </span>
+          </div>
+        );
+      })()}
+
+      {/* 关键指标 */}
+      <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+        <div><span className="text-gray-400 dark:text-gray-500">最大盈利 </span><span className="font-medium text-gray-700 dark:text-gray-200">{s.maxProfit}</span></div>
+        <div><span className="text-gray-400 dark:text-gray-500">最大亏损 </span><span className="font-medium text-gray-700 dark:text-gray-200">{s.maxLoss}</span></div>
+        <div><span className="text-gray-400 dark:text-gray-500">盈亏平衡 </span><span className="font-medium text-gray-700 dark:text-gray-200">{s.breakeven}</span></div>
+        <div><span className="text-gray-400 dark:text-gray-500">权利金 </span><span className="font-medium text-gray-700 dark:text-gray-200">{s.premium}</span></div>
+      </div>
+
+      <div className="mt-1.5 text-xs text-gray-500 dark:text-gray-400">{s.strikes}</div>
+
+      {/* 逻辑 */}
+      <p className="mt-2 text-xs leading-5 text-gray-600 dark:text-gray-300">{s.logic}</p>
+      {s.backtestLogic && (
+        <p className="mt-1 text-xs leading-5 text-indigo-600 dark:text-indigo-400">{s.backtestLogic}</p>
+      )}
+    </div>
+  );
+}
+
 /* ── 主组件 ── */
 
 export default function TenxHunterDiscoverClient({ snapshot, earningsLens, earningsLensError }: Props) {
@@ -191,6 +514,8 @@ export default function TenxHunterDiscoverClient({ snapshot, earningsLens, earni
   const [manualNote, setManualNote] = useState("");
   const [manualReport, setManualReport] = useState<File | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [backtestCache, setBacktestCache] = useState<Map<string, TenxStrategyBacktestData>>(new Map());
+  const [backtestLoading, setBacktestLoading] = useState<string | null>(null);
 
   const keyword = search.trim().toLowerCase();
 
@@ -263,7 +588,18 @@ export default function TenxHunterDiscoverClient({ snapshot, earningsLens, earni
   }
 
   function toggleExpand(symbol: string) {
-    setExpandedSymbol((prev) => (prev === symbol ? null : symbol));
+    const nextExpanded = expandedSymbol === symbol ? null : symbol;
+    setExpandedSymbol(nextExpanded);
+    // 展开时懒加载回测数据
+    if (nextExpanded && !backtestCache.has(nextExpanded) && snapshot.market === "US") {
+      setBacktestLoading(nextExpanded);
+      loadTenxStrategyBacktest(snapshot.market, nextExpanded)
+        .then((data) => {
+          setBacktestCache((prev) => new Map(prev).set(nextExpanded, data));
+        })
+        .catch(() => { /* 静默降级，策略卡片只显示理论胜率 */ })
+        .finally(() => setBacktestLoading(null));
+    }
   }
 
   return (
@@ -398,7 +734,7 @@ export default function TenxHunterDiscoverClient({ snapshot, earningsLens, earni
                   </div>
                 </button>
 
-                {/* 展开详情：财报 + 期权策略 */}
+                {/* 展开详情：晋级检查 + 财报 + 期权策略 */}
                 {expanded && (
                   <div className="border-t border-gray-100 px-4 py-4 dark:border-gray-800">
                     {/* 晋级检查 */}
@@ -414,52 +750,64 @@ export default function TenxHunterDiscoverClient({ snapshot, earningsLens, earni
                       </div>
                     </div>
 
-                    {sl ? (
-                      <>
-                        {/* 财报指标 */}
-                        <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    {/* 财报数据（如有） */}
+                    {sl && (
+                      <div className="mb-4">
+                        <div className="text-xs font-semibold text-gray-500 dark:text-gray-400">财报预期</div>
+                        <div className="mt-1.5 grid grid-cols-2 gap-2 sm:grid-cols-4">
                           <ForecastCell label="营收预期" value={fmtCurrency(sl.revenueEstimate, currency)} />
                           <ForecastCell label="EPS 预期" value={sl.epsEstimate !== null && sl.epsEstimate !== undefined ? `$${sl.epsEstimate.toFixed(2)}` : "N/A"} />
-                          <ForecastCell label="预期波动" value={fmtPercent(forecast?.expectedMove ?? null)} tone="red" />
-                          <ForecastCell label="模型胜率" value={forecast?.winProbability === null ? "N/A" : `${forecast?.winProbability?.toFixed(0)}%`} tone={forecast?.directionTone} />
+                          <ForecastCell label="财报日" value={sl.nextEarningsDate || "N/A"} tone={dayTone(sl.daysToEarnings)} />
+                          <ForecastCell label="倒计时" value={sl.daysToEarnings !== null && sl.daysToEarnings !== undefined ? dayLabel(sl.daysToEarnings) : "N/A"} tone={dayTone(sl.daysToEarnings)} />
                         </div>
-
-                        {/* 期权策略 */}
-                        <div className="mb-3 overflow-hidden rounded-lg border border-gray-200 dark:border-gray-800">
-                          <StrategyRow
-                            label="单腿期权"
-                            values={optionReady && forecast ? [
-                              forecast.optionSide,
-                              opt?.nearestExpiration ?? "N/A",
-                              fmtStrike(forecast.strike, currency),
-                              fmtCurrency(forecast.premium, currency),
-                              forecast.optionSide === "PUT" ? "下行保护" : forecast.optionSide === "CALL" ? "上行弹性" : "双向波动",
-                            ] : ["待补链", "N/A", "N/A", "N/A", "刷新期权链"]}
-                          />
-                          <StrategyRow
-                            label="垂直价差"
-                            values={optionReady && forecast ? [
-                              forecast.optionSide === "PUT" ? "PUT spread" : forecast.optionSide === "CALL" ? "CALL spread" : "VOL spread",
-                              `${fmtStrike(forecast.strike, currency)} / ${fmtStrike(forecast.sellStrike, currency)}`,
-                              fmtCurrency(forecast.spreadDebit, currency),
-                              fmtSignedPercent(forecast.expectedMove ? forecast.expectedMove * 0.85 : null),
-                              fmtSignedPercent(forecast.spreadDebit && opt?.underlyingPrice ? -(forecast.spreadDebit / opt.underlyingPrice) : null),
-                            ] : ["待补链", "N/A", "N/A", "N/A", "刷新期权链"]}
-                            muted
-                          />
-                        </div>
-
-                        {/* 辅助指标 + 信号 */}
-                        <div className="flex flex-wrap gap-2 text-xs text-gray-500 dark:text-gray-400">
-                          <span>IV {fmtPercent(normalizeVol(opt?.avgImpliedVolatility))}</span>
-                          <span>Call/Put {fmtNum(opt?.callPutVolumeRatio)}</span>
-                          <span>Max pain {fmtStrike(opt?.maxPainStrike, currency)}</span>
-                          {sl.shortlineSignal && <span className="text-gray-600 dark:text-gray-300">· {sl.shortlineSignal}</span>}
-                        </div>
-                      </>
-                    ) : (
-                      <div className="text-sm text-gray-400 dark:text-gray-500">暂无财报日历数据，先补 earnings lens。</div>
+                        {sl.shortlineSignal && <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">{sl.shortlineSignal}</p>}
+                      </div>
                     )}
+
+                    {/* 期权策略（不依赖财报） */}
+                    {(() => {
+                      const strats = buildStrategies(opt);
+                      if (strats.length === 0) {
+                        return <div className="text-sm text-gray-400 dark:text-gray-500">期权数据待补，运行 refresh-options 后查看策略分析。</div>;
+                      }
+                      // 合并回测数据
+                      const btData = backtestCache.get(symbol);
+                      const merged = strats.map((s) => {
+                        if (!btData) return s;
+                        const bt = btData.strategies.find((b) => b.key === s.key);
+                        if (!bt || bt.totalTrades === 0) return s;
+                        return {
+                          ...s,
+                          backtestWinRate: Math.round(bt.winRate * 100),
+                          backtestTotalTrades: bt.totalTrades,
+                          backtestLogic: bt.backtestLogic,
+                          backtestProfitFactor: bt.profitFactor,
+                          backtestStreak: bt.currentStreak,
+                        };
+                      });
+                      return (
+                        <div>
+                          <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-gray-500 dark:text-gray-400">
+                            <span>期权策略分析</span>
+                            <span className="text-gray-300 dark:text-gray-600">·</span>
+                            <span>IV {fmtPercent(normalizeVol(opt?.avgImpliedVolatility))}</span>
+                            <span className="text-gray-300 dark:text-gray-600">·</span>
+                            <span>Call/Put {fmtNum(opt?.callPutVolumeRatio)}</span>
+                            <span className="text-gray-300 dark:text-gray-600">·</span>
+                            <span>Max pain {fmtStrike(opt?.maxPainStrike, currency)}</span>
+                            {backtestLoading === symbol && (
+                              <>
+                                <span className="text-gray-300 dark:text-gray-600">·</span>
+                                <span className="animate-pulse text-indigo-400">回测加载中…</span>
+                              </>
+                            )}
+                          </div>
+                          <div className="grid grid-cols-1 gap-2 xl:grid-cols-2">
+                            {merged.map((s) => <StrategyCard key={s.key} s={s} />)}
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
               </div>

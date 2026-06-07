@@ -2,6 +2,8 @@ import type {
   TenxAlertCenter,
   TenxAlertItem,
   TenxAlertSeverity,
+  TenxBacktestStrategyResult,
+  TenxBacktestTrade,
   TenxCandidate,
   TenxEarningsDeskData,
   TenxEarningsDeskEvent,
@@ -17,6 +19,7 @@ import type {
   TenxPriceSnapshot,
   TenxResearchCard,
   TenxResearchReport,
+  TenxStrategyBacktestData,
   TenxTheme,
   TenxTimelineEvent,
   TenxWatchlistItem,
@@ -411,6 +414,46 @@ type TenxEarningsLensApi = {
   freshness: TenxApiFreshness;
   shortline: TenxEarningsShortlineApi[];
   options: TenxEarningsOptionApi[];
+  notes: string[];
+};
+
+/* ── 期权策略回测 ── */
+
+type TenxBacktestTradeApi = {
+  trade_date: string;
+  entry_price: number;
+  exit_price: number | null;
+  iv_on_entry: number | null;
+  flow_sentiment: string;
+};
+
+type TenxBacktestStrategyApi = {
+  key: string;
+  name: string;
+  name_en: string;
+  direction: string;
+  total_trades: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+  avg_profit_pct: number;
+  avg_loss_pct: number;
+  profit_factor: number;
+  current_streak: string;
+  best_trade_pct: number;
+  worst_trade_pct: number;
+  backtest_logic: string;
+  sample_trades: TenxBacktestTradeApi[];
+};
+
+type TenxStrategyBacktestApi = {
+  market: string;
+  symbol: string;
+  lookback_days: number;
+  horizon_days: number;
+  total_backtest_days: number;
+  snapshot_at: string;
+  strategies: TenxBacktestStrategyApi[];
   notes: string[];
 };
 
@@ -1179,6 +1222,62 @@ export async function loadTenxEarningsDesk(market: TenxMarket, horizon = 90): Pr
     freshness: mapFreshness(payload.freshness),
     metrics: mapEarningsDeskMetrics(payload.metrics),
     events: payload.events.map(mapEarningsDeskEvent),
+    notes: payload.notes,
+  };
+}
+
+function mapBacktestTrade(t: TenxBacktestTradeApi): TenxBacktestTrade {
+  return {
+    tradeDate: t.trade_date,
+    entryPrice: t.entry_price,
+    exitPrice: t.exit_price,
+    ivOnEntry: t.iv_on_entry,
+    flowSentiment: t.flow_sentiment,
+  };
+}
+
+function mapBacktestStrategy(s: TenxBacktestStrategyApi): TenxBacktestStrategyResult {
+  return {
+    key: s.key,
+    name: s.name,
+    nameEn: s.name_en,
+    direction: s.direction,
+    totalTrades: s.total_trades,
+    wins: s.wins,
+    losses: s.losses,
+    winRate: s.win_rate,
+    avgProfitPct: s.avg_profit_pct,
+    avgLossPct: s.avg_loss_pct,
+    profitFactor: s.profit_factor,
+    currentStreak: s.current_streak,
+    bestTradePct: s.best_trade_pct,
+    worstTradePct: s.worst_trade_pct,
+    backtestLogic: s.backtest_logic,
+    sampleTrades: s.sample_trades.map(mapBacktestTrade),
+  };
+}
+
+export async function loadTenxStrategyBacktest(
+  market: TenxMarket,
+  symbol: string,
+  lookbackDays = 90,
+  horizonDays = 30,
+): Promise<TenxStrategyBacktestData> {
+  const payload = await requestJson<TenxStrategyBacktestApi>(
+    buildUrl(
+      `/api/v1/tenx-hunter/strategy-backtest?market=${encodeURIComponent(toMarketParam(market))}` +
+      `&symbol=${encodeURIComponent(symbol)}` +
+      `&lookback_days=${lookbackDays}&horizon_days=${horizonDays}`,
+    ),
+  );
+  return {
+    market: payload.market,
+    symbol: payload.symbol,
+    lookbackDays: payload.lookback_days,
+    horizonDays: payload.horizon_days,
+    totalBacktestDays: payload.total_backtest_days,
+    snapshotAt: payload.snapshot_at,
+    strategies: payload.strategies.map(mapBacktestStrategy),
     notes: payload.notes,
   };
 }
