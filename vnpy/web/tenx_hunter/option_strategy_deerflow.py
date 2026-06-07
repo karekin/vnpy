@@ -51,8 +51,26 @@ def extract_strategy_json(text: str) -> dict[str, Any]:
 
     try:
         payload = json.loads(repaired)
-    except JSONDecodeError as exc:
-        raise ValueError(f"DeerFlow JSON parse failed after repair: {exc}") from exc
+    except JSONDecodeError:
+        # 5. 截断修复：尝试在最后一个完整的 } 处截断并补全
+        last_brace = repaired.rfind("}")
+        if last_brace > 0:
+            # 逐层向上找有效的 JSON 对象
+            for pos in range(last_brace, 0, -1):
+                if repaired[pos] != "}":
+                    continue
+                candidate = repaired[:pos + 1]
+                # 补全未闭合的括号
+                open_braces = candidate.count("{") - candidate.count("}")
+                open_brackets = candidate.count("[") - candidate.count("]")
+                candidate += "]" * max(0, open_brackets) + "}" * max(0, open_braces)
+                try:
+                    payload = json.loads(candidate)
+                    if isinstance(payload, dict):
+                        return payload
+                except json.JSONDecodeError:
+                    continue
+        raise ValueError("DeerFlow JSON parse failed after repair: truncated response could not be recovered")
     if not isinstance(payload, dict):
         raise ValueError("DeerFlow option strategy JSON must be an object")
     return payload

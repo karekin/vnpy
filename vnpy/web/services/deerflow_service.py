@@ -49,6 +49,18 @@ class DeerFlowService:
         self.timeout = float(os.getenv("TENX_DEERFLOW_TIMEOUT_SECONDS", "180"))
         self.stream_mode = os.getenv("TENX_DEERFLOW_STREAM_MODE", "values,messages,updates")
         self._ocr_script_path = Path(__file__).resolve().parents[1] / "scripts" / "macos_vision_ocr.swift"
+        # DeerFlow 2.0 internal auth
+        self._internal_auth_token = os.getenv("DEER_FLOW_INTERNAL_AUTH_TOKEN", "")
+        self._internal_headers = {}
+        if self._internal_auth_token:
+            self._internal_headers = {"X-DeerFlow-Internal-Token": self._internal_auth_token}
+
+    def _headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
+        """合并内部 auth header 和额外 header。"""
+        h = dict(self._internal_headers)
+        if extra:
+            h.update(extra)
+        return h
 
     @staticmethod
     def _normalize_thread_id(thread_id: str | None) -> str | None:
@@ -225,6 +237,7 @@ class DeerFlowService:
                     "source": "vnpy",
                 },
             },
+            headers=self._headers(),
             timeout=self.timeout,
         )
         response.raise_for_status()
@@ -239,6 +252,7 @@ class DeerFlowService:
                     "thinking_enabled": True,
                 },
             },
+            headers=self._headers(),
             timeout=self.timeout,
         )
         response.raise_for_status()
@@ -251,6 +265,7 @@ class DeerFlowService:
         resolved_thread_id = self._normalize_thread_id(thread_id) or thread_id
         response = requests.get(
             f"{self.base_url}/api/threads/{resolved_thread_id}/state",
+            headers=self._headers(),
             timeout=self.timeout,
         )
         response.raise_for_status()
@@ -264,6 +279,7 @@ class DeerFlowService:
         response = requests.post(
             f"{self.base_url}/api/threads/{resolved_thread_id}/history",
             json={"limit": limit},
+            headers=self._headers(),
             timeout=self.timeout,
         )
         response.raise_for_status()
@@ -279,6 +295,7 @@ class DeerFlowService:
                 "limit": limit,
                 "metadata": metadata or {},
             },
+            headers=self._headers(),
             timeout=self.timeout,
         )
         response.raise_for_status()
@@ -291,6 +308,7 @@ class DeerFlowService:
         resolved_thread_id = self._normalize_thread_id(thread_id) or thread_id
         response = requests.get(
             f"{self.base_url}/api/threads/{resolved_thread_id}/uploads/list",
+            headers=self._headers(),
             timeout=self.timeout,
         )
         response.raise_for_status()
@@ -321,6 +339,7 @@ class DeerFlowService:
             response = requests.post(
                 f"{self.base_url}/api/threads/{resolved_thread_id}/uploads",
                 files=multipart,
+                headers=self._headers(),
                 timeout=self.timeout,
             )
             response.raise_for_status()
@@ -340,6 +359,7 @@ class DeerFlowService:
         response = requests.get(
             f"{self.base_url}/api/threads/{resolved_thread_id}/artifacts/{path}",
             params={"download": str(download).lower()},
+            headers=self._headers(),
             timeout=self.timeout,
             stream=True,
         )
@@ -363,6 +383,7 @@ class DeerFlowService:
                 },
                 "stream_mode": [item.strip() for item in self.stream_mode.split(",") if item.strip()],
             },
+            headers=self._headers(),
             timeout=(10, self.timeout),
             stream=True,
         )
