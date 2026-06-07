@@ -1243,7 +1243,7 @@ class TenxHunterService:
 
         if market != "US":
             notes.append("财报事件看板当前仅支持 US 市场。")
-            freshness = self._build_freshness(market, settings)
+            freshness = self._freshness(self._format_date(datetime.now(timezone.utc)), market)
             return TenxEarningsDeskResponse(
                 market="US" if market == "US" else "CN",
                 snapshot_at=datetime.now(timezone.utc).isoformat(),
@@ -1256,7 +1256,7 @@ class TenxHunterService:
         today = date.today()
         horizon = today + timedelta(days=horizon_days)
         snapshot_at = datetime.now(timezone.utc).isoformat()
-        freshness = self._build_freshness(market, settings)
+        freshness = self._freshness(snapshot_at, market)
 
         with connect(settings) as conn:
             # 检查表是否存在
