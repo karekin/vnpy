@@ -1169,7 +1169,7 @@ function mapEarningsDeskEvent(payload: TenxEarningsDeskEventApi): TenxEarningsDe
   };
 }
 
-export async function loadTenxEarningsDesk(market: TenxMarket, horizon = 45): Promise<TenxEarningsDeskData> {
+export async function loadTenxEarningsDesk(market: TenxMarket, horizon = 90): Promise<TenxEarningsDeskData> {
   const payload = await requestJson<TenxEarningsDeskApi>(
     buildUrl(`/api/v1/tenx-hunter/earnings-desk?market=${encodeURIComponent(toMarketParam(market))}&horizon=${horizon}`),
   );
