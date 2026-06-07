@@ -2,13 +2,10 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import ScrollableDataTable from "@/components/cb-quant/ScrollableDataTable";
 import StatusTag from "@/components/cb-quant/StatusTag";
-import TablePaginationBar from "@/components/cb-quant/TablePaginationBar";
 import TenxPageShell from "@/components/tenx-hunter/TenxPageShell";
 import type { TenxEarningsDeskData } from "@/components/tenx-hunter/types";
-import { TableCell, TableRow } from "@/components/ui/table";
-import { CalendarClock, ShieldCheck, Target, TrendingUp } from "lucide-react";
+import { CalendarClock, ChevronRight, ShieldCheck, Target, TrendingUp } from "lucide-react";
 
 type Props = {
   data: TenxEarningsDeskData;
@@ -96,19 +93,111 @@ function MetricCard({ icon, label, value, tone = "blue" }: MetricCardProps) {
   );
 }
 
+/* ── 事件行卡片 ── */
+
+function EventRow({ ev, market }: { ev: TenxEarningsDeskData["events"][number]; market: string }) {
+  const isP1 = ev.priority === "P1";
+  const borderClass = isP1
+    ? "border-l-4 border-l-red-400 dark:border-l-red-500"
+    : "border-l-4 border-l-transparent";
+
+  return (
+    <Link
+      href={`/tenx-hunter/${market.toLowerCase()}/research/${ev.symbol}`}
+      className={`group block rounded-xl border border-gray-200 bg-white p-4 transition hover:border-brand-300 hover:shadow-sm dark:border-gray-800 dark:bg-gray-950/50 dark:hover:border-brand-500/40 ${borderClass}`}
+    >
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:gap-6">
+        {/* 左：Symbol + 公司信息 */}
+        <div className="min-w-[140px] shrink-0 lg:w-[180px]">
+          <div className="flex items-center gap-2">
+            <span className="text-base font-bold text-gray-900 group-hover:text-brand-600 dark:text-white dark:group-hover:text-brand-300">
+              {ev.symbol}
+            </span>
+            <StatusTag label={ev.priority} tone={priorityTone(ev.priority)} />
+          </div>
+          <div className="mt-1 text-sm text-gray-500 dark:text-gray-400">{ev.name || "—"}</div>
+          {ev.sector && (
+            <div className="mt-0.5 text-xs text-gray-400 dark:text-gray-500">{ev.sector}</div>
+          )}
+        </div>
+
+        {/* 中：财报日历 */}
+        <div className="flex flex-wrap items-center gap-3 lg:min-w-[220px]">
+          <div className="flex items-center gap-2">
+            <StatusTag label={dayLabel(ev.daysToEarnings)} tone={dayTone(ev.daysToEarnings)} />
+          </div>
+          <div className="text-sm">
+            <div className="text-gray-700 dark:text-gray-300">{ev.nextEarningsDate || "—"}</div>
+            {(ev.timeOfDay || ev.fiscalPeriod) && (
+              <div className="text-xs text-gray-400 dark:text-gray-500">
+                {[ev.timeOfDay, ev.fiscalPeriod].filter(Boolean).join(" · ")}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* EPS / Revenue */}
+        <div className="flex items-center gap-4 text-sm lg:min-w-[180px]">
+          <div>
+            <span className="text-xs text-gray-400 dark:text-gray-500">EPS</span>
+            <div className="font-semibold text-gray-700 dark:text-gray-300">
+              {ev.epsEstimate !== null && ev.epsEstimate !== undefined ? `$${ev.epsEstimate.toFixed(2)}` : "N/A"}
+            </div>
+          </div>
+          <div>
+            <span className="text-xs text-gray-400 dark:text-gray-500">Rev</span>
+            <div className="font-semibold text-gray-700 dark:text-gray-300">
+              {formatCompact(ev.revenueEstimate)}
+            </div>
+          </div>
+        </div>
+
+        {/* 期权信号 */}
+        <div className="flex flex-1 items-center gap-3">
+          {ev.optionSignal ? (
+            <>
+              <StatusTag
+                label={
+                  ev.flowSentiment === "bullish" ? "偏多" :
+                  ev.flowSentiment === "bearish" ? "偏空" :
+                  ev.flowSentiment === "neutral" ? "波动" : "无数据"
+                }
+                tone={flowTone(ev.flowSentiment)}
+              />
+              {ev.optionSelectionScore !== null && ev.optionSelectionScore !== undefined && (
+                <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
+                  分 {ev.optionSelectionScore.toFixed(1)}
+                </span>
+              )}
+              <span className="hidden text-sm text-gray-600 dark:text-gray-300 xl:inline">
+                {ev.optionSignal}
+              </span>
+            </>
+          ) : (
+            <span className="text-xs text-gray-400 dark:text-gray-500">期权待补</span>
+          )}
+        </div>
+
+        {/* 右：行动建议 + 箭头 */}
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-sm text-gray-500 dark:text-gray-400">{ev.actionLabel || "—"}</span>
+          <ChevronRight className="h-4 w-4 text-gray-300 transition group-hover:text-brand-500 dark:text-gray-600 dark:group-hover:text-brand-400" />
+        </div>
+      </div>
+    </Link>
+  );
+}
+
 /* ── 主组件 ── */
 
 export default function TenxEarningsDeskClient({ data, error }: Props) {
   const [bucket, setBucket] = useState<TimeBucket>("all");
-  const [page, setPage] = useState(1);
-  const pageSize = 15;
 
   const filtered = useMemo(
     () => data.events.filter((ev) => inBucket(ev.daysToEarnings, bucket)),
     [data.events, bucket],
   );
 
-  // 按 days_to_earnings 排序
   const sorted = useMemo(
     () =>
       [...filtered].sort((a, b) => {
@@ -118,10 +207,6 @@ export default function TenxEarningsDeskClient({ data, error }: Props) {
       }),
     [filtered],
   );
-
-  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
-  const currentPage = Math.min(page, totalPages);
-  const paged = sorted.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   const { metrics } = data;
 
@@ -173,7 +258,7 @@ export default function TenxEarningsDeskClient({ data, error }: Props) {
           <button
             key={opt.key}
             type="button"
-            onClick={() => { setBucket(opt.key); setPage(1); }}
+            onClick={() => setBucket(opt.key)}
             className={`rounded-md px-3 py-2 text-sm font-medium transition ${
               bucket === opt.key
                 ? "bg-white text-gray-900 shadow dark:bg-gray-800 dark:text-white"
@@ -197,100 +282,18 @@ export default function TenxEarningsDeskClient({ data, error }: Props) {
         </div>
       )}
 
-      {/* 事件表格 */}
-      <ScrollableDataTable
-        headers={["Symbol", "财报日", "T-N", "EPS", "Revenue", "期权信号", "期权分", "优先级", "行动建议"]}
-        minTableWidthClass="min-w-[1200px]"
-        colSpan={9}
-        isEmpty={paged.length === 0}
-        emptyText="当前时间窗口内没有即将到来的财报事件。"
-      >
-        {paged.map((ev) => (
-          <TableRow key={`${ev.symbol}-${ev.nextEarningsDate}`} className="border-b border-gray-100 last:border-b-0 dark:border-gray-800">
-            {/* Symbol */}
-            <TableCell className="px-4 py-3 align-top">
-              <Link
-                href={`/tenx-hunter/${data.market.toLowerCase()}/research/${ev.symbol}`}
-                className="font-semibold text-gray-900 hover:text-brand-600 dark:text-white dark:hover:text-brand-300"
-              >
-                {ev.symbol}
-              </Link>
-              <div className="mt-1 text-sm text-gray-500 dark:text-gray-400">{ev.name || ev.sector}</div>
-              {ev.sector && ev.name && (
-                <div className="mt-1 text-xs text-gray-400 dark:text-gray-500">{ev.sector}</div>
-              )}
-            </TableCell>
-
-            {/* 财报日 */}
-            <TableCell className="px-4 py-3 align-top">
-              <div className="text-sm text-gray-700 dark:text-gray-300">
-                {ev.nextEarningsDate || "—"}
-              </div>
-              {ev.timeOfDay && (
-                <div className="text-xs text-gray-400 dark:text-gray-500">{ev.timeOfDay}</div>
-              )}
-              {ev.fiscalPeriod && (
-                <div className="text-xs text-gray-400 dark:text-gray-500">{ev.fiscalPeriod}</div>
-              )}
-            </TableCell>
-
-            {/* T-N */}
-            <TableCell className="px-4 py-3 align-top">
-              <StatusTag label={dayLabel(ev.daysToEarnings)} tone={dayTone(ev.daysToEarnings)} />
-            </TableCell>
-
-            {/* EPS */}
-            <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">
-              {ev.epsEstimate !== null && ev.epsEstimate !== undefined
-                ? `$${ev.epsEstimate.toFixed(2)}`
-                : "N/A"}
-            </TableCell>
-
-            {/* Revenue */}
-            <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">
-              {formatCompact(ev.revenueEstimate)}
-            </TableCell>
-
-            {/* 期权信号 */}
-            <TableCell className="px-4 py-3 align-top">
-              {ev.optionSignal ? (
-                <>
-                  <StatusTag label={ev.flowSentiment === "bullish" ? "偏多" : ev.flowSentiment === "bearish" ? "偏空" : ev.flowSentiment === "neutral" ? "波动" : "无数据"} tone={flowTone(ev.flowSentiment)} />
-                  <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">{ev.optionSignal}</div>
-                </>
-              ) : (
-                <span className="text-xs text-gray-400 dark:text-gray-500">期权待补</span>
-              )}
-            </TableCell>
-
-            {/* 期权分 */}
-            <TableCell className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">
-              {ev.optionSelectionScore !== null && ev.optionSelectionScore !== undefined
-                ? ev.optionSelectionScore.toFixed(1)
-                : "N/A"}
-            </TableCell>
-
-            {/* 优先级 */}
-            <TableCell className="px-4 py-3 align-top">
-              <StatusTag label={ev.priority} tone={priorityTone(ev.priority)} />
-            </TableCell>
-
-            {/* 行动建议 */}
-            <TableCell className="px-4 py-3 text-sm leading-6 text-gray-600 dark:text-gray-300">
-              <div className="max-w-[200px]">{ev.actionLabel || "—"}</div>
-            </TableCell>
-          </TableRow>
-        ))}
-      </ScrollableDataTable>
-
-      {sorted.length > pageSize && (
-        <TablePaginationBar
-          totalItems={sorted.length}
-          currentPage={currentPage}
-          totalPages={totalPages}
-          onPageChange={setPage}
-        />
-      )}
+      {/* 事件列表：一行一个卡片 */}
+      <div className="space-y-2">
+        {sorted.length === 0 ? (
+          <div className="rounded-xl border border-gray-200 bg-white px-4 py-8 text-center text-sm text-gray-400 dark:border-gray-800 dark:bg-gray-950/50 dark:text-gray-500">
+            当前时间窗口内没有即将到来的财报事件。
+          </div>
+        ) : (
+          sorted.map((ev) => (
+            <EventRow key={`${ev.symbol}-${ev.nextEarningsDate}`} ev={ev} market={data.market} />
+          ))
+        )}
+      </div>
     </TenxPageShell>
   );
 }
